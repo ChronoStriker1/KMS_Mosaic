@@ -25,6 +25,7 @@
 #include <drm.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+#include <drm_fourcc.h>
 #include <gbm.h>
 
 #include <EGL/egl.h>
@@ -48,6 +49,16 @@ typedef struct {
     drmModeModeInfo mode;
     uint32_t crtc_id;
     uint32_t conn_id;
+    // Atomic modesetting context (optional)
+    struct {
+        int enabled; // 1 if client caps set and primary plane found
+        uint32_t plane_id; // primary plane for selected CRTC
+        int nonblock; // perform nonblocking atomic flips
+        // Property IDs
+        struct { uint32_t mode_id, active, out_fence_ptr; } crtc_props;
+        struct { uint32_t crtc_id; } conn_props;
+        struct { uint32_t fb_id, crtc_id, src_x, src_y, src_w, src_h, crtc_x, crtc_y, crtc_w, crtc_h, in_fence_fd; } plane_props;
+    } atomic;
 } drm_ctx;
 
 typedef struct {
@@ -55,6 +66,10 @@ typedef struct {
     struct gbm_surface *surface;
     struct gbm_bo *bo, *next_bo;
     uint32_t fb_id;
+    // Atomic async flip tracking
+    struct gbm_bo *pending_bo;
+    uint32_t pending_fb;
+    int in_flight;
     int w, h; // cached dimensions
 } gbm_ctx;
 
@@ -108,6 +123,9 @@ typedef struct {
     const char *panscan;      // passthrough to mpv panscan value
     bool no_config;           // skip loading default config file
     bool smooth;              // apply a sensible playback preset
+    bool atomic_nonblock;     // use nonblocking atomic flips
+    bool gl_finish;           // call glFinish() before flips (serialize GPU)
+    bool use_atomic;          // try DRM atomic modesetting
     // Unified layout mode: stack3, row3, 2x1, 1x2
     int layout_mode;          // 0=stack3,1=row3,2=2x1,3=1x2
     const char **mpv_opts; int n_mpv_opts; int cap_mpv_opts; // global mpv opts key=val
@@ -426,6 +444,108 @@ static bool mode_matches(const drmModeModeInfo *m, int w, int h, int hz) {
     return true;
 }
 
+static uint32_t get_prop_id(int fd, uint32_t obj_id, uint32_t obj_type, const char *name) {
+    drmModeObjectProperties *props = drmModeObjectGetProperties(fd, obj_id, obj_type);
+    if (!props) return 0;
+    uint32_t id = 0;
+    for (uint32_t i=0; i<props->count_props; ++i) {
+        drmModePropertyRes *pr = drmModeGetProperty(fd, props->props[i]);
+        if (pr) {
+            if (strcmp(pr->name, name) == 0) { id = pr->prop_id; drmModeFreeProperty(pr); break; }
+            drmModeFreeProperty(pr);
+        }
+    }
+    drmModeFreeObjectProperties(props);
+    return id;
+}
+
+static int plane_is_primary(int fd, uint32_t plane_id) {
+    drmModeObjectProperties *props = drmModeObjectGetProperties(fd, plane_id, DRM_MODE_OBJECT_PLANE);
+    if (!props) return 0;
+    int is_primary = 0;
+    for (uint32_t i=0; i<props->count_props; ++i) {
+        drmModePropertyRes *pr = drmModeGetProperty(fd, props->props[i]);
+        if (!pr) continue;
+        if (strcmp(pr->name, "type") == 0 && (pr->flags & DRM_MODE_PROP_ENUM)) {
+            for (int j=0; j<pr->count_enums; ++j) {
+                if (strcmp(pr->enums[j].name, "Primary") == 0) {
+                    uint64_t val = props->prop_values[i];
+                    if (val == pr->enums[j].value) is_primary = 1;
+                    break;
+                }
+            }
+        }
+        drmModeFreeProperty(pr);
+        if (is_primary) break;
+    }
+    drmModeFreeObjectProperties(props);
+    return is_primary;
+}
+
+static void try_init_atomic(drm_ctx *d) {
+    memset(&d->atomic, 0, sizeof d->atomic);
+    if (drmSetClientCap(d->fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) != 0) return;
+    if (drmSetClientCap(d->fd, DRM_CLIENT_CAP_ATOMIC, 1) != 0) return;
+
+    // Find CRTC index for possible_crtcs bitmask
+    int crtc_index = -1;
+    for (int i=0; i<d->res->count_crtcs; ++i) if (d->res->crtcs[i] == d->crtc_id) { crtc_index = i; break; }
+    if (crtc_index < 0) return;
+
+    drmModePlaneRes *pres = drmModeGetPlaneResources(d->fd);
+    if (!pres) return;
+    uint32_t chosen_plane = 0;
+    for (uint32_t i=0; i<pres->count_planes; ++i) {
+        drmModePlane *pl = drmModeGetPlane(d->fd, pres->planes[i]);
+        if (!pl) continue;
+        if (pl->possible_crtcs & (1u << crtc_index)) {
+            if (plane_is_primary(d->fd, pl->plane_id)) { chosen_plane = pl->plane_id; drmModeFreePlane(pl); break; }
+        }
+        drmModeFreePlane(pl);
+    }
+    drmModeFreePlaneResources(pres);
+    if (!chosen_plane) return;
+
+    // Fetch required property IDs
+    uint32_t mode_id = get_prop_id(d->fd, d->crtc_id, DRM_MODE_OBJECT_CRTC, "MODE_ID");
+    uint32_t active  = get_prop_id(d->fd, d->crtc_id, DRM_MODE_OBJECT_CRTC, "ACTIVE");
+    uint32_t out_fence_ptr = get_prop_id(d->fd, d->crtc_id, DRM_MODE_OBJECT_CRTC, "OUT_FENCE_PTR");
+    uint32_t conn_crtc = get_prop_id(d->fd, d->conn_id, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
+    uint32_t fb_id = get_prop_id(d->fd, chosen_plane, DRM_MODE_OBJECT_PLANE, "FB_ID");
+    uint32_t crtc_id = get_prop_id(d->fd, chosen_plane, DRM_MODE_OBJECT_PLANE, "CRTC_ID");
+    uint32_t src_x = get_prop_id(d->fd, chosen_plane, DRM_MODE_OBJECT_PLANE, "SRC_X");
+    uint32_t src_y = get_prop_id(d->fd, chosen_plane, DRM_MODE_OBJECT_PLANE, "SRC_Y");
+    uint32_t src_w = get_prop_id(d->fd, chosen_plane, DRM_MODE_OBJECT_PLANE, "SRC_W");
+    uint32_t src_h = get_prop_id(d->fd, chosen_plane, DRM_MODE_OBJECT_PLANE, "SRC_H");
+    uint32_t crtc_x = get_prop_id(d->fd, chosen_plane, DRM_MODE_OBJECT_PLANE, "CRTC_X");
+    uint32_t crtc_y = get_prop_id(d->fd, chosen_plane, DRM_MODE_OBJECT_PLANE, "CRTC_Y");
+    uint32_t crtc_w = get_prop_id(d->fd, chosen_plane, DRM_MODE_OBJECT_PLANE, "CRTC_W");
+    uint32_t crtc_h = get_prop_id(d->fd, chosen_plane, DRM_MODE_OBJECT_PLANE, "CRTC_H");
+    uint32_t in_fence_fd = get_prop_id(d->fd, chosen_plane, DRM_MODE_OBJECT_PLANE, "IN_FENCE_FD");
+
+    if (!mode_id || !active || !conn_crtc || !fb_id || !crtc_id || !src_x || !src_y || !src_w || !src_h || !crtc_x || !crtc_y || !crtc_w || !crtc_h) {
+        return;
+    }
+
+    d->atomic.enabled = 1;
+    d->atomic.plane_id = chosen_plane;
+    d->atomic.crtc_props.mode_id = mode_id;
+    d->atomic.crtc_props.active = active;
+    d->atomic.conn_props.crtc_id = conn_crtc;
+    d->atomic.plane_props.fb_id = fb_id;
+    d->atomic.plane_props.crtc_id = crtc_id;
+    d->atomic.crtc_props.out_fence_ptr = out_fence_ptr;
+    d->atomic.plane_props.src_x = src_x;
+    d->atomic.plane_props.src_y = src_y;
+    d->atomic.plane_props.src_w = src_w;
+    d->atomic.plane_props.src_h = src_h;
+    d->atomic.plane_props.crtc_x = crtc_x;
+    d->atomic.plane_props.crtc_y = crtc_y;
+    d->atomic.plane_props.crtc_w = crtc_w;
+    d->atomic.plane_props.crtc_h = crtc_h;
+    d->atomic.plane_props.in_fence_fd = in_fence_fd;
+}
+
 static bool str_is_digits(const char *s) {
     if (!s || !*s) return false;
     for (const char *p = s; *p; ++p) {
@@ -511,6 +631,26 @@ static void pick_connector_mode(drm_ctx *d, const options_t *opt) {
     d->crtc_id = crtc_id;
     d->orig_crtc = drmModeGetCrtc(d->fd, crtc_id);
     d->mode = best_mode;
+    // Initialize atomic plane/props if requested
+    d->atomic.enabled = 0;
+    if (opt->use_atomic) {
+        try_init_atomic(d);
+        if (!d->atomic.enabled) {
+            fprintf(stderr, "Note: DRM atomic not available; using legacy KMS.\n");
+        } else {
+            fprintf(stderr, "Using DRM atomic modesetting (plane %u).\n", d->atomic.plane_id);
+        }
+        d->atomic.nonblock = opt->atomic_nonblock ? 1 : 0;
+        if (g_debug && d->atomic.enabled) {
+            fprintf(stderr, "Atomic props: CRTC MODE_ID=%u ACTIVE=%u OUT_FENCE_PTR=%u\n",
+                    d->atomic.crtc_props.mode_id, d->atomic.crtc_props.active, d->atomic.crtc_props.out_fence_ptr);
+            fprintf(stderr, "Atomic props: PLANE FB_ID=%u CRTC_ID=%u SRC_(x,y,w,h)=(%u,%u,%u,%u) CRTC_(x,y,w,h)=(%u,%u,%u,%u) IN_FENCE_FD=%u\n",
+                    d->atomic.plane_props.fb_id, d->atomic.plane_props.crtc_id,
+                    d->atomic.plane_props.src_x, d->atomic.plane_props.src_y, d->atomic.plane_props.src_w, d->atomic.plane_props.src_h,
+                    d->atomic.plane_props.crtc_x, d->atomic.plane_props.crtc_y, d->atomic.plane_props.crtc_w, d->atomic.plane_props.crtc_h,
+                    d->atomic.plane_props.in_fence_fd);
+        }
+    }
 }
 
 static void gbm_init(gbm_ctx *g, int drm_fd, int w, int h) {
@@ -679,17 +819,101 @@ static void egl_init(egl_ctx *e, gbm_ctx *g) {
 }
 
 static uint32_t drm_fb_for_bo(int drm_fd, struct gbm_bo *bo) {
-    uint32_t fb_id;
+    uint32_t fb_id = 0;
     uint32_t width = gbm_bo_get_width(bo);
     uint32_t height = gbm_bo_get_height(bo);
     uint32_t stride = gbm_bo_get_stride(bo);
     uint32_t handle = gbm_bo_get_handle(bo).u32;
+    uint32_t format = gbm_bo_get_format(bo);
+    uint32_t handles[4] = {handle,0,0,0};
+    uint32_t strides[4] = {stride,0,0,0};
+    uint32_t offsets[4] = {0,0,0,0};
+    // Try AddFB2 with modifiers via raw ioctl if a modifier is present
+    uint64_t modifier = 0;
+    #ifdef DRM_FORMAT_MOD_INVALID
+    modifier = gbm_bo_get_modifier(bo);
+    if (modifier != DRM_FORMAT_MOD_INVALID) {
+        struct drm_mode_fb_cmd2 cmd = {0};
+        cmd.width = width; cmd.height = height; cmd.pixel_format = format ? format : DRM_FORMAT_XRGB8888;
+        cmd.handles[0] = handles[0];
+        cmd.pitches[0] = strides[0];
+        cmd.offsets[0] = offsets[0];
+        cmd.modifier[0] = modifier;
+        cmd.flags = DRM_MODE_FB_MODIFIERS;
+        if (drmIoctl(drm_fd, DRM_IOCTL_MODE_ADDFB2, &cmd) == 0) {
+            return cmd.fb_id;
+        }
+    }
+    #endif
+    // Try AddFB2 first without modifiers
+    if (drmModeAddFB2(drm_fd, width, height, format ? format : DRM_FORMAT_XRGB8888,
+                      handles, strides, offsets, &fb_id, 0) == 0) {
+        return fb_id;
+    }
+    // Fallback to legacy AddFB assuming XRGB8888
     int ret = drmModeAddFB(drm_fd, width, height, 24, 32, stride, handle, &fb_id);
     if (ret) die("drmModeAddFB");
     return fb_id;
 }
 
 static void drm_set_mode(drm_ctx *d, gbm_ctx *g) {
+    // If atomic is enabled and ready, perform an atomic modeset
+    if (d->atomic.enabled) {
+        g->bo = gbm_surface_lock_front_buffer(g->surface);
+        if (!g->bo) die("gbm_surface_lock_front_buffer");
+        g->fb_id = drm_fb_for_bo(d->fd, g->bo);
+
+        drmModeAtomicReq *req = drmModeAtomicAlloc();
+        if (!req) die("drmModeAtomicAlloc");
+
+        // MODE_ID blob
+        uint32_t blob_id = 0;
+        if (drmModeCreatePropertyBlob(d->fd, &d->mode, sizeof(d->mode), &blob_id) != 0) {
+            drmModeAtomicFree(req);
+            die("drmModeCreatePropertyBlob");
+        }
+
+        int r = 0;
+        int out_fence = -1;
+        r |= drmModeAtomicAddProperty(req, d->crtc_id, d->atomic.crtc_props.mode_id, blob_id) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->crtc_id, d->atomic.crtc_props.active, 1) <= 0;
+        if (d->atomic.crtc_props.out_fence_ptr) {
+            uint64_t ptr = (uint64_t)(uintptr_t)&out_fence;
+            r |= drmModeAtomicAddProperty(req, d->crtc_id, d->atomic.crtc_props.out_fence_ptr, ptr) <= 0;
+        }
+        r |= drmModeAtomicAddProperty(req, d->conn_id, d->atomic.conn_props.crtc_id, d->crtc_id) <= 0;
+
+        // Plane setup: full-screen
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.crtc_id, d->crtc_id) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.fb_id, g->fb_id) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.src_x, 0) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.src_y, 0) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.src_w, (uint64_t)d->mode.hdisplay << 16) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.src_h, (uint64_t)d->mode.vdisplay << 16) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.crtc_x, 0) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.crtc_y, 0) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.crtc_w, d->mode.hdisplay) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.crtc_h, d->mode.vdisplay) <= 0;
+
+        if (r) {
+            drmModeAtomicFree(req);
+            drmModeDestroyPropertyBlob(d->fd, blob_id);
+            die("drmModeAtomicAddProperty");
+        }
+        // For the initial modeset, use a blocking commit to simplify bootstrapping
+        if (drmModeAtomicCommit(d->fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, g) != 0) {
+            drmModeAtomicFree(req);
+            drmModeDestroyPropertyBlob(d->fd, blob_id);
+            die("drmModeAtomicCommit (modeset)");
+        }
+        drmModeAtomicFree(req);
+        drmModeDestroyPropertyBlob(d->fd, blob_id);
+        if (out_fence >= 0) close(out_fence);
+        g->in_flight = 0;
+        return;
+    }
+
+    // Legacy SetCrtc path
     g->bo = gbm_surface_lock_front_buffer(g->surface);
     if (!g->bo) die("gbm_surface_lock_front_buffer");
     g->fb_id = drm_fb_for_bo(d->fd, g->bo);
@@ -700,6 +924,56 @@ static void drm_set_mode(drm_ctx *d, gbm_ctx *g) {
 static void page_flip(drm_ctx *d, gbm_ctx *g) {
     g->next_bo = gbm_surface_lock_front_buffer(g->surface);
     uint32_t fb = drm_fb_for_bo(d->fd, g->next_bo);
+    if (d->atomic.enabled) {
+        drmModeAtomicReq *req = drmModeAtomicAlloc();
+        if (!req) die("drmModeAtomicAlloc");
+        int r = 0;
+        int out_fence = -1;
+        // Update plane fully for robustness across drivers
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.crtc_id, d->crtc_id) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.fb_id, fb) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.src_x, 0) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.src_y, 0) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.src_w, (uint64_t)d->mode.hdisplay << 16) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.src_h, (uint64_t)d->mode.vdisplay << 16) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.crtc_x, 0) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.crtc_y, 0) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.crtc_w, d->mode.hdisplay) <= 0;
+        r |= drmModeAtomicAddProperty(req, d->atomic.plane_id, d->atomic.plane_props.crtc_h, d->mode.vdisplay) <= 0;
+        if (d->atomic.crtc_props.out_fence_ptr) {
+            uint64_t ptr = (uint64_t)(uintptr_t)&out_fence;
+            r |= drmModeAtomicAddProperty(req, d->crtc_id, d->atomic.crtc_props.out_fence_ptr, ptr) <= 0;
+        }
+        if (r) { drmModeAtomicFree(req); die("drmModeAtomicAddProperty (flip)"); }
+        // Choose blocking or nonblocking commit based on configuration
+        unsigned int flags = d->atomic.nonblock ? DRM_MODE_ATOMIC_NONBLOCK : 0;
+        if (drmModeAtomicCommit(d->fd, req, flags, d->atomic.nonblock ? g : NULL) != 0) {
+            drmModeAtomicFree(req);
+            fprintf(stderr, "drmModeAtomicCommit (flip) failed; falling back to legacy\n");
+            d->atomic.enabled = 0; // disable atomic on failure
+        } else {
+            drmModeAtomicFree(req);
+            if (out_fence >= 0) close(out_fence);
+            if (d->atomic.nonblock) {
+                // Defer swap/release until DRM event
+                g->pending_bo = g->next_bo;
+                g->pending_fb = fb;
+                g->in_flight = 1;
+                return;
+            } else {
+                // Blocking: advance immediately
+                if (g->bo) {
+                    uint32_t old_fb = g->fb_id;
+                    gbm_surface_release_buffer(g->surface, g->bo);
+                    drmModeRmFB(d->fd, old_fb);
+                }
+                g->bo = g->next_bo;
+                g->fb_id = fb;
+                g->in_flight = 0;
+                return;
+            }
+        }
+    }
     // Legacy blocking flip via SetCrtc for simplicity
     int ret = drmModeSetCrtc(d->fd, d->crtc_id, fb, 0, 0, &d->conn_id, 1, &d->mode);
     if (ret) fprintf(stderr, "drmModeSetCrtc (page_flip) failed: %d\n", ret);
@@ -739,6 +1013,54 @@ static void gl_check(const char *stage){
     while ((err = glGetError()) != GL_NO_ERROR) {
         fprintf(stderr, "GL error at %s: 0x%x\n", stage, (unsigned)err);
         if (++cnt > 8) break;
+    }
+}
+
+// Draw a colored rectangular border into the currently bound framebuffer using scissor clears
+static void draw_border_rect(int x, int y, int w, int h, int thickness, int fb_w, int fb_h,
+                             float r, float g, float b, float a) {
+    if (w <= 0 || h <= 0 || thickness <= 0) return;
+    if (thickness > w/2) thickness = w/2;
+    if (thickness > h/2) thickness = h/2;
+    glEnable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor(r, g, b, a);
+    // Convert to scissor coords (origin bottom-left). Our layout y is bottom-left already.
+    int sx = x;
+    int sy = fb_h - (y + h);
+    if (sx < 0) sx = 0; if (sy < 0) sy = 0;
+    // Top edge
+    glScissor(sx, sy + h - thickness, w, thickness);
+    glClear(GL_COLOR_BUFFER_BIT);
+    // Bottom edge
+    glScissor(sx, sy, w, thickness);
+    glClear(GL_COLOR_BUFFER_BIT);
+    // Left edge
+    glScissor(sx, sy, thickness, h);
+    glClear(GL_COLOR_BUFFER_BIT);
+    // Right edge
+    glScissor(sx + w - thickness, sy, thickness, h);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
+}
+
+// DRM event handling (atomic page flip completion)
+static void on_page_flip(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, void *user_data) {
+    (void)fd; (void)sequence; (void)tv_sec; (void)tv_usec;
+    gbm_ctx *g = (gbm_ctx*)user_data;
+    if (!g) return;
+    if (g->in_flight) {
+        // Release the previous front buffer and adopt the pending as current
+        if (g->bo) {
+            // Remove FB and release the old BO
+            drmModeRmFB(fd, g->fb_id);
+            gbm_surface_release_buffer(g->surface, g->bo);
+        }
+        g->bo = g->pending_bo;
+        g->fb_id = g->pending_fb;
+        g->pending_bo = NULL;
+        g->pending_fb = 0;
+        g->in_flight = 0;
     }
 }
 
@@ -1010,6 +1332,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--loop-playlist")) opt.loop_playlist = true;
         else if (!strcmp(argv[i], "--shuffle") || !strcmp(argv[i], "--randomize")) opt.shuffle = true;
         else if (!strcmp(argv[i], "--no-osd")) opt.no_osd = true;
+        else if (!strcmp(argv[i], "--atomic")) opt.use_atomic = true;
+        else if (!strcmp(argv[i], "--atomic-nonblock")) { opt.use_atomic = true; opt.atomic_nonblock = true; }
+        else if (!strcmp(argv[i], "--gl-finish")) opt.gl_finish = true;
         else if (!strcmp(argv[i], "--mpv-opt") && i + 1 < argc) {
             if (opt.n_mpv_opts == opt.cap_mpv_opts){ int nc=opt.cap_mpv_opts?opt.cap_mpv_opts*2:8; opt.mpv_opts=realloc(opt.mpv_opts,(size_t)nc*sizeof(char*)); opt.cap_mpv_opts=nc; }
             opt.mpv_opts[opt.n_mpv_opts++] = argv[++i];
@@ -1035,6 +1360,10 @@ int main(int argc, char **argv) {
                 "  --pane-a \"CMD\"           Command for Pane A (default: btop).\n"
                 "  --pane-b \"CMD\"           Command for Pane B (default: tail -f /var/log/syslog).\n"
                 "  --layout M              stack | row | 2x1 | 1x2 (applies in any rotation).\n\n"
+                "Display/KMS:\n"
+                "  --atomic                Use DRM atomic modesetting (experimental; falls back on failure).\n\n"
+                "  --atomic-nonblock       Use nonblocking atomic flips (event-driven).\n"
+                "  --gl-finish             Call glFinish() before flips (serialize GPU).\n\n"
                 "Video/playlist:\n"
                 "  --video PATH            Add a video (repeatable). Bare args are treated as --video.\n"
                 "  --video-opt K=V         Per-video options (repeatable, applies to the last --video).\n"
@@ -1266,6 +1595,7 @@ int main(int argc, char **argv) {
     glViewport(0, 0, d.mode.hdisplay, d.mode.vdisplay);
     gl_clear_color(0.f, 0.f, 0.f, 1.f);
     eglSwapBuffers(e.dpy, e.surf);
+    if (opt.use_atomic && opt.gl_finish) glFinish();
     drm_set_mode(&d, &g);
 
     // Logical render target (rotated presentation later)
@@ -1288,6 +1618,7 @@ int main(int argc, char **argv) {
             gl_clear_color(0.f,0.f,0.f,1.f);
             blit_rt_to_screen(opt.rotation);
             eglSwapBuffers(e.dpy, e.surf);
+            if (opt.use_atomic && opt.gl_finish) glFinish();
             page_flip(&d, &g);
         }
         fprintf(stderr, "GL test: rendered %d frames successfully.\n", frames);
@@ -1304,6 +1635,8 @@ int main(int argc, char **argv) {
     static int last_font_px_a=-1, last_font_px_b=-1;
     static pane_layout prev_a={0}, prev_b={0};
     static int last_layout_mode=-1;
+    static int last_right_frac_pct=-1;
+    static int last_pane_split_pct=-1;
     static int layout_reinit_countdown = 0;
 
     {
@@ -1351,10 +1684,8 @@ int main(int argc, char **argv) {
         if (cols_fit >= 80 && rows_fit >= 24) { font_px_a = px; cell_w_a=cw; cell_h_a=ch; break; }
         if (px==10) { font_px_a = px; cell_w_a=cw; cell_h_a=ch; }
     }
-    int need_w_px = 80 * cell_w_a;
-    int need_h_px = 24 * cell_h_a;
-    if (lay_a.w < need_w_px) { int delta = need_w_px - lay_a.w; if (lay_a.x + lay_a.w + delta <= screen_w) lay_a.w += delta; else { lay_a.x = (lay_a.x - delta > 0)? lay_a.x - delta : 0; lay_a.w = need_w_px; } }
-    if (lay_a.h < need_h_px) { int delta = need_h_px - lay_a.h; if (lay_a.y + lay_a.h + delta <= screen_h) lay_a.h += delta; else { lay_a.y = (lay_a.h > need_h_px)? lay_a.y : 0; lay_a.h = need_h_px; } }
+    // Do not expand pane rects beyond computed layout slots; instead, adjust font size to fit.
+    // This avoids stealing space from neighboring panes after rotation/layout changes.
 
     // Pane B font relative to its pane: aim for at least 60x20 if possible
     int font_px_b = opt.font_px ? opt.font_px : font_px_a;
@@ -1383,7 +1714,7 @@ int main(int argc, char **argv) {
 
     // Set TTY to raw mode for key forwarding
     struct termios rawt; if (tcgetattr(0, &g_oldt)==0) { g_have_oldt = 1; rawt = g_oldt; cfmakeraw(&rawt); tcsetattr(0, TCSANOW, &rawt); atexit(restore_tty); }
-            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, l/L layouts, r/R rotate roles, t swap A/B, o OSD, ? help; Ctrl+Q quit.\n");
+            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, Arrows resize, l/L layouts, r/R rotate roles, t swap A/B, o OSD, ? help; Ctrl+Q quit.\n");
     int focus = use_mpv ? 0 : 1; // 0=video, 1=top pane, 2=bottom pane
     bool show_osd = false; // default OSD off
     if (getenv("KMS_MPV_NO_OSD")) show_osd = false;
@@ -1402,12 +1733,14 @@ int main(int argc, char **argv) {
     if (dtest_env && (*dtest_env=='1' || *dtest_env=='y' || *dtest_env=='Y')) direct_test_only = true;
     int frame = 0;
     int mpv_needs_render = 1; // request an initial render
-    struct pollfd pfds[2];
+    struct pollfd pfds[3];
     pfds[0].fd = 0; // stdin for keys
     pfds[0].events = POLLIN;
     pfds[1].fd = use_mpv ? m.wakeup_fd[0] : -1;
     pfds[1].events = POLLIN;
-    int nfds = use_mpv ? 2 : 1;
+    pfds[2].fd = d.fd; // DRM events (atomic)
+    pfds[2].events = POLLIN;
+    int nfds = use_mpv ? 3 : 2;
     fcntl(0, F_SETFL, O_NONBLOCK);
 
     while (running) {
@@ -1423,14 +1756,9 @@ int main(int argc, char **argv) {
             if (n > 0) {
                 // Toggle UI control mode (Ctrl+E)
                 for (ssize_t i=0;i<n;i++) { unsigned char ch=(unsigned char)buf[i]; if (ch==0x05) { ui_control=!ui_control; }}
-                // Ctrl+Q (DC1, 0x11) to quit is only active in Control Mode
-                if (ui_control) {
-                    for (ssize_t i=0;i<n;i++) {
-                        unsigned char ch = (unsigned char)buf[i];
-                        if (ch == 0x11) { running=false; break; }
-                    }
-                    if (!running) break;
-                }
+                // Ctrl+Q (DC1, 0x11) always quits
+                for (ssize_t i=0;i<n;i++) { unsigned char ch=(unsigned char)buf[i]; if (ch==0x11) { running=false; break; } }
+                if (!running) break;
                 bool consumed=false;
                 // Tab switches focus only in UI control mode
                 if (ui_control) {
@@ -1449,6 +1777,40 @@ int main(int argc, char **argv) {
                     else if (buf[i]=='R') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p2; perm[1]=p0; perm[2]=p1; consumed=true; }
                     else if (buf[i]=='f') { term_pane_force_rebuild(tp_a); term_pane_force_rebuild(tp_b); consumed=true; }
                     else if (buf[i]=='?') { show_help = !show_help; consumed=true; }
+                }
+                // While in UI control mode, handle arrow keys for resizing splits
+                if (ui_control) {
+                    for (ssize_t i=0; i+2<n; i++) {
+                        if ((unsigned char)buf[i] == 0x1b && buf[i+1] == '[') {
+                            unsigned char k = (unsigned char)buf[i+2];
+                            int step = 2; // percentage step per keypress
+                            if (k=='C') { // Right: increase right column width
+                                if (opt.layout_mode==2 || opt.layout_mode==3) {
+                                    int rf = opt.right_frac_pct ? opt.right_frac_pct : 33;
+                                    rf += step; if (rf > 80) rf = 80; if (rf < 20) rf = 20; opt.right_frac_pct = rf; consumed = true;
+                                }
+                                i += 2; continue;
+                            } else if (k=='D') { // Left: decrease right column width
+                                if (opt.layout_mode==2 || opt.layout_mode==3) {
+                                    int rf = opt.right_frac_pct ? opt.right_frac_pct : 33;
+                                    rf -= step; if (rf < 20) rf = 20; if (rf > 80) rf = 80; opt.right_frac_pct = rf; consumed = true;
+                                }
+                                i += 2; continue;
+                            } else if (k=='A') { // Up: increase top pane height in split column
+                                if (opt.layout_mode==2 || opt.layout_mode==3) {
+                                    int sp = opt.pane_split_pct ? opt.pane_split_pct : 50;
+                                    sp += step; if (sp > 90) sp = 90; if (sp < 10) sp = 10; opt.pane_split_pct = sp; consumed = true;
+                                }
+                                i += 2; continue;
+                            } else if (k=='B') { // Down: decrease top pane height in split column
+                                if (opt.layout_mode==2 || opt.layout_mode==3) {
+                                    int sp = opt.pane_split_pct ? opt.pane_split_pct : 50;
+                                    sp -= step; if (sp < 10) sp = 10; if (sp > 90) sp = 90; opt.pane_split_pct = sp; consumed = true;
+                                }
+                                i += 2; continue;
+                            }
+                        }
+                    }
                 }
                 // OSD toggle only in UI control mode
                 if (ui_control) { for (ssize_t i=0;i<n;i++) if (buf[i]=='o') { show_osd = !show_osd; consumed=true; } }
@@ -1493,10 +1855,21 @@ int main(int argc, char **argv) {
             }
         }
 
+        // Handle DRM events (atomic page flip completion)
+        if (pfds[2].revents & POLLIN) {
+            drmEventContext ev = {0};
+            // Use version 2 for broad compat; page_flip_handler signature matches
+            ev.version = 2;
+            ev.page_flip_handler = on_page_flip;
+            drmHandleEvent(d.fd, &ev);
+        }
+
         // Recompute layout based on current rotation/layout/perm
         {
             int layout_changed = 0;
             if (last_layout_mode != opt.layout_mode) { layout_changed = 1; last_layout_mode = opt.layout_mode; }
+            if (last_right_frac_pct != opt.right_frac_pct) { layout_changed = 1; last_right_frac_pct = opt.right_frac_pct; }
+            if (last_pane_split_pct != opt.pane_split_pct) { layout_changed = 1; last_pane_split_pct = opt.pane_split_pct; }
             if (last_perm[0]!=perm[0] || last_perm[1]!=perm[1] || last_perm[2]!=perm[2]) { layout_changed = 1; last_perm[0]=perm[0]; last_perm[1]=perm[1]; last_perm[2]=perm[2]; }
             {
                 int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2
@@ -1545,8 +1918,7 @@ int main(int argc, char **argv) {
         // Recompute font sizes for panes based on current rects
         int font_px_a = opt.font_px ? opt.font_px : 18; int cell_w_a=8, cell_h_a=16; term_measure_cell(font_px_a,&cell_w_a,&cell_h_a);
         for (int px=font_px_a; px>=10; --px){ int cw,ch; if(!term_measure_cell(px,&cw,&ch))break; int cols=lay_a.w/cw; int rows=lay_a.h/ch; if(cols>=80 && rows>=24){ font_px_a=px; cell_w_a=cw; cell_h_a=ch; break;} if(px==10){ font_px_a=px; cell_w_a=cw; cell_h_a=ch; }}
-        int need_w_px=80*cell_w_a, need_h_px=24*cell_h_a; if (lay_a.w<need_w_px){ int d=need_w_px-lay_a.w; lay_a.w+=d; if(lay_a.x+lay_a.w>screen_w) lay_a.x=screen_w-lay_a.w; }
-        if (lay_a.h<need_h_px){ int d=need_h_px-lay_a.h; lay_a.h+=d; if(lay_a.y+lay_a.h>screen_h) lay_a.y=screen_h-lay_a.h; }
+        // Do not expand pane rects beyond computed layout slots; adjust only font size to fit.
         int font_px_b = opt.font_px ? opt.font_px : font_px_a; int cell_w_b=8, cell_h_b=16; term_measure_cell(font_px_b,&cell_w_b,&cell_h_b);
         for (int px=font_px_b; px>=10; --px){ int cw,ch; if(!term_measure_cell(px,&cw,&ch))break; int cols=lay_b.w/cw; int rows=lay_b.h/ch; if(cols>=60 && rows>=20){ font_px_b=px; cell_w_b=cw; cell_h_b=ch; break;} if(px==10){ font_px_b=px; cell_w_b=cw; cell_h_b=ch; }}
 
@@ -1617,6 +1989,7 @@ int main(int argc, char **argv) {
                     };
                         if (g_debug) fprintf(stderr, "Render: calling mpv_render_context_render (direct)...\n");
                         mpv_render_context_render(m.mpv_gl, r_params2);
+                        if (opt.use_atomic && opt.gl_finish) glFinish();
                         gl_check("after mpv_render_context_render (direct)");
                         mpv_needs_render = 0;
                     } else if (g_debug) {
@@ -1646,6 +2019,7 @@ int main(int argc, char **argv) {
                         };
                         if (g_debug) fprintf(stderr, "Render: calling mpv_render_context_render (direct via FBO)...\n");
                         mpv_render_context_render(m.mpv_gl, r_params);
+                        if (opt.use_atomic && opt.gl_finish) glFinish();
                         gl_check("after mpv_render_context_render (direct via FBO)");
                         mpv_needs_render = 0;
                     } else if (g_debug) {
@@ -1747,8 +2121,9 @@ int main(int argc, char **argv) {
                     "  l/L: cycle layouts\n"
                     "  r/R: rotate roles C/A/B\n"
                     "  t: swap panes A/B\n"
+                    "  Arrows: resize splits (2x1/1x2)\n"
                     "  f: force pane rebuild\n"
-                    "  Ctrl+Q: quit\n";
+                    "Always: Ctrl+Q quit\n";
                 osd_set_text(osd, help);
             } else {
                 int64_t pos=0,count=0; int paused_flag=0; char *title=NULL;
@@ -1756,7 +2131,11 @@ int main(int argc, char **argv) {
                 mpv_get_property(m.mpv, "playlist-count", MPV_FORMAT_INT64, &count);
                 mpv_get_property(m.mpv, "pause", MPV_FORMAT_FLAG, &paused_flag);
                 title = mpv_get_property_string(m.mpv, "media-title");
-                char line[512]; snprintf(line,sizeof line, "%s %lld/%lld - %s", paused_flag?"Paused":"Playing", (long long)(pos+1), (long long)count, title?title:"(no title)");
+                const char *layout_name = (opt.layout_mode==0?"stack": opt.layout_mode==1?"row": opt.layout_mode==2?"2x1":"1x2");
+                char line[512]; snprintf(line,sizeof line, "%s %lld/%lld - %s  |  layout: %s",
+                                          paused_flag?"Paused":"Playing",
+                                          (long long)(pos+1), (long long)count,
+                                          title?title:"(no title)", layout_name);
                 if (title) mpv_free(title);
                 osd_set_text(osd, line);
             }
@@ -1769,11 +2148,18 @@ int main(int argc, char **argv) {
         // Control-mode indicator OSD (always visible when active)
         if (!direct_mode && ui_control) {
             static osd_ctx *osdcm = NULL; if (!osdcm) osdcm = osd_create(opt.font_px?opt.font_px:20);
-            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  l/L layouts  r/R rotate  t swap  o OSD  ? help");
+            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  Arrows resize  l/L layouts  r/R rotate  t swap  o OSD  ? help");
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             gl_reset_state_2d();
             glViewport(0,0, logical_w, logical_h);
             osd_draw(osdcm, 16, 48, logical_w, logical_h);
+            // Highlight focused pane with a border
+            int bx=0, by=0, bw=0, bh=0; int thickness = 4;
+            if (focus == 0) { bx = lay_video.x; by = lay_video.y; bw = lay_video.w; bh = lay_video.h; }
+            else if (focus == 1) { bx = lay_a.x; by = lay_a.y; bw = lay_a.w; bh = lay_a.h; }
+            else { bx = lay_b.x; by = lay_b.y; bw = lay_b.w; bh = lay_b.h; }
+            // Draw a bright cyan border
+            draw_border_rect(bx, by, bw, bh, thickness, logical_w, logical_h, 0.1f, 0.9f, 0.95f, 1.0f);
         }
 
         // Present
@@ -1785,6 +2171,7 @@ int main(int argc, char **argv) {
         }
 
         eglSwapBuffers(e.dpy, e.surf);
+        if (opt.use_atomic && opt.gl_finish) glFinish();
         gl_check("after eglSwapBuffers");
         page_flip(&d, &g);
         if (use_mpv && m.mpv_gl) {

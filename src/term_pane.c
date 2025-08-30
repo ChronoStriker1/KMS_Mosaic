@@ -51,6 +51,9 @@ typedef struct {
     GLuint tex;
     int tex_w, tex_h;
     bool dirty;
+    int dirty_y0, dirty_y1; // deprecated single range
+    struct { int y0, y1; } dirty_ranges[4];
+    int dirty_count;
     uint8_t *pixels; // RGBA8
 } pane_tex;
 
@@ -64,6 +67,9 @@ struct term_pane {
 
     font_ctx font;
     pane_tex surface;
+
+    // Row-level change detection
+    uint32_t *row_hash; // length = layout.rows
 
     int use_shell_cmd;
     char *shell_cmd;
@@ -143,6 +149,7 @@ static glyph_bitmap* get_glyph(font_ctx *f, uint32_t cp) {
 
 static void pane_tex_init(pane_tex *t, int w, int h) {
     t->tex_w = w; t->tex_h = h; t->dirty = true;
+    t->dirty_y0 = 0; t->dirty_y1 = h; t->dirty_count = 1; t->dirty_ranges[0].y0 = 0; t->dirty_ranges[0].y1 = h;
     glGenTextures(1, &t->tex);
     glBindTexture(GL_TEXTURE_2D, t->tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -157,6 +164,22 @@ static void pane_tex_destroy(pane_tex *t) {
     if (t->tex) glDeleteTextures(1, &t->tex);
     free(t->pixels);
     memset(t, 0, sizeof(*t));
+}
+
+static uint32_t mix_hash(uint32_t h, uint32_t x){ h ^= x + 0x9e3779b9u + (h<<6) + (h>>2); return h; }
+static uint32_t pane_row_hash(term_pane *tp, int y){
+    uint32_t h = 2166136261u; VTermScreenCell cell;
+    for (int x=0; x<tp->layout.cols; x++){
+        memset(&cell,0,sizeof cell);
+        vterm_screen_get_cell(tp->vts, (VTermPos){.row=y,.col=x}, &cell);
+        uint32_t cp = cell.chars[0]; uint32_t fg=0,bg=0;
+        if (cell.fg.type == VTERM_COLOR_INDEXED) fg = cell.fg.indexed.idx;
+        else if (cell.fg.type == VTERM_COLOR_RGB) fg = (cell.fg.rgb.red<<16)|(cell.fg.rgb.green<<8)|cell.fg.rgb.blue;
+        if (cell.bg.type == VTERM_COLOR_INDEXED) bg = cell.bg.indexed.idx;
+        else if (cell.bg.type == VTERM_COLOR_RGB) bg = (cell.bg.rgb.red<<16)|(cell.bg.rgb.green<<8)|cell.bg.rgb.blue;
+        h = mix_hash(h, cp); h = mix_hash(h, fg); h = mix_hash(h, bg);
+    }
+    return h;
 }
 
 // Very small shader to draw the pane texture
@@ -322,6 +345,47 @@ static int sattr_to_rgb_idx(const VTermScreenCell *cell, int is_fg) {
     return is_fg ? 7 : 0;
 }
 
+// Helpers to draw simple box-drawing lines into the pane texture
+static void draw_h_line(pane_tex *tex, int y, int xstart, int xend,
+                        int x0, int x1, int y0, int y1,
+                        int thickness, rgb8 fgc) {
+    if (xstart > xend) { int t = xstart; xstart = xend; xend = t; }
+    if (y < y0) y = y0;
+    if (y >= y1) y = y1 - 1;
+    for (int ty = y - thickness/2; ty <= y + thickness/2; ty++) {
+        if (ty < y0 || ty >= y1) continue;
+        int xs = xstart < x0 ? x0 : xstart;
+        int xe = xend   > x1 ? x1 : xend;
+        if (xs < 0) xs = 0;
+        if (xe > tex->tex_w) xe = tex->tex_w;
+        if (xs >= xe) continue;
+        uint8_t *row = tex->pixels + (size_t)ty * tex->tex_w * 4 + xs * 4;
+        for (int x = xs; x < xe && x < tex->tex_w; x++) {
+            row[0] = fgc.r; row[1] = fgc.g; row[2] = fgc.b; row[3] = 255; row += 4;
+        }
+    }
+}
+
+static void draw_v_line(pane_tex *tex, int x, int ystart, int yend,
+                        int x0, int x1, int y0, int y1,
+                        int thickness, rgb8 fgc) {
+    if (ystart > yend) { int t = ystart; ystart = yend; yend = t; }
+    if (x < x0) x = x0;
+    if (x >= x1) x = x1 - 1;
+    int ys = ystart < y0 ? y0 : ystart;
+    int ye = yend   > y1 ? y1 : yend;
+    if (ys < 0) ys = 0;
+    if (ye > tex->tex_h) ye = tex->tex_h;
+    for (int y = ys; y < ye && y < tex->tex_h; y++) {
+        for (int tx = x - thickness/2; tx <= x + thickness/2; tx++) {
+            if (tx < x0 || tx >= x1) continue;
+            if (tx < 0 || tx >= tex->tex_w) continue;
+            uint8_t *p = tex->pixels + (size_t)y * tex->tex_w * 4 + tx * 4;
+            p[0] = fgc.r; p[1] = fgc.g; p[2] = fgc.b; p[3] = 255;
+        }
+    }
+}
+
 static void composite_cell(font_ctx *font, pane_tex *tex, int cx, int cy, const VTermScreenCell *cell) {
     // Fill background
     int x0 = cx * font->cell_w;
@@ -338,13 +402,74 @@ static void composite_cell(font_ctx *font, pane_tex *tex, int cx, int cy, const 
     // Foreground glyphs (support wide=1 only; treat wide as '?')
     uint32_t cp = cell->chars[0];
     if (cp == 0) return;
-    // Replace box-drawing with ASCII approx
+    // Handle Unicode box-drawing with simple vector lines for clarity
     if (cp >= 0x2500 && cp <= 0x257F) {
-        // crude mapping
-        if (cp==0x2500||cp==0x2501) cp='-';
-        else if (cp==0x2502||cp==0x2503) cp='|';
-        else if (cp==0x2514||cp==0x2518||cp==0x250c||cp==0x2510) cp='+';
-        else cp='+';
+        rgb8 fgc = color_from_index(sattr_to_rgb_idx(cell, 1));
+        int thickness = font->cell_h / 8; if (thickness < 1) thickness = 1; if (thickness > 2) thickness = 2;
+        int cxm = (x0 + x1) / 2; // center x
+        int cym = (y0 + y1) / 2; // center y
+        switch (cp) {
+            case 0x2500: case 0x2501: // ─
+                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc); return;
+            case 0x2502: case 0x2503: // │
+                draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+            case 0x250C: // ┌
+                draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, thickness, fgc); return;
+            case 0x2510: // ┐
+                draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, thickness, fgc); return;
+            case 0x2514: // └
+                draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+            case 0x2518: // ┘
+                draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+            case 0x253C: // ┼
+                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+            case 0x252C: // ┬
+                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, thickness, fgc); return;
+            case 0x2534: // ┴
+                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+            case 0x251C: // ├
+                draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+            case 0x2524: // ┤
+                draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+            // Mixed single/double joins: approximate by drawing both segments slightly thicker
+            case 0x256B: // ╋ (thick cross)
+            case 0x256A: // ╊
+            case 0x256D: // ╭
+            case 0x256E: // ╮
+            case 0x256F: // ╯
+            case 0x2570: // ╰
+            case 0x2523: // ┣
+            case 0x252B: // ┫
+            case 0x2533: // ┳
+            case 0x253B: // ┻
+            case 0x254B: // ╋
+                { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            case 0x2550: // double ─
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc); return; }
+            case 0x2551: // double │
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            case 0x2554: // double ┌
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, t2, fgc); return; }
+            case 0x2557: // double ┐
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, t2, fgc); return; }
+            case 0x255A: // double └
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            case 0x255D: // double ┘
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            case 0x256C: // double ┼
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            case 0x2566: // double ┬
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, t2, fgc); return; }
+            case 0x2569: // double ┴
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            case 0x2560: // double ├
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            case 0x2563: // double ┤
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            default:
+                // Fallback to ASCII-like minimal rendering
+                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc); return;
+        }
     }
     glyph_bitmap *g = get_glyph(font, cp);
     if (!g) return;
@@ -381,12 +506,18 @@ static void rebuild_surface(term_pane *tp) {
     // Re-render entire screen to CPU buffer
     if (tp->vts) vterm_screen_flush_damage(tp->vts);
     tp->surface.dirty = true;
+    tp->surface.dirty_y0 = 0;
+    tp->surface.dirty_y1 = tp->surface.tex_h;
+    tp->surface.dirty_ranges[0].y0 = 0;
+    tp->surface.dirty_ranges[0].y1 = tp->surface.tex_h;
+    tp->surface.dirty_count = 1;
     for (int y=0; y<tp->layout.rows; y++) {
         for (int x=0; x<tp->layout.cols; x++) {
             VTermScreenCell cell; memset(&cell,0,sizeof cell);
             vterm_screen_get_cell(tp->vts, (VTermPos){.row=y,.col=x}, &cell);
             composite_cell(&tp->font, &tp->surface, x, y, &cell);
         }
+        if (tp->row_hash) tp->row_hash[y] = pane_row_hash(tp, y);
     }
 }
 
@@ -434,6 +565,7 @@ term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *
 
     // Prime screen empty
     rebuild_surface(tp);
+    tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
     return tp;
 }
 
@@ -463,6 +595,7 @@ term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const ch
     int tex_h = tp->layout.rows * tp->font.cell_h;
     pane_tex_init(&tp->surface, tex_w, tex_h);
     rebuild_surface(tp);
+    tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
     return tp;
 }
 
@@ -472,6 +605,7 @@ void term_pane_destroy(term_pane *tp) {
     if (tp->pty_master>=0) close(tp->pty_master);
     pane_tex_destroy(&tp->surface);
     font_destroy(&tp->font);
+    free(tp->row_hash);
     if (tp->vt) vterm_free(tp->vt);
     if (tp->shell_cmd) free(tp->shell_cmd);
     if (tp->argv_dup) free_argv(tp->argv_dup);
@@ -503,6 +637,55 @@ void term_pane_resize(term_pane *tp, const pane_layout *layout) {
     }
     if (old.tex) glDeleteTextures(1, &old.tex);
     free(old.pixels);
+    free(tp->row_hash);
+    tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
+}
+
+static void update_changed_rows(term_pane *tp) {
+    if (!tp || !tp->vts) return;
+    int run_start = -1, run_end = -1; // current contiguous changed run [start..end]
+    tp->surface.dirty_count = 0;
+    for (int y=0; y<tp->layout.rows; y++) {
+        uint32_t h = pane_row_hash(tp, y);
+        if (h != tp->row_hash[y]) {
+            // Rebuild only this row
+            for (int x=0; x<tp->layout.cols; x++) {
+                VTermScreenCell cell; memset(&cell,0,sizeof cell);
+                vterm_screen_get_cell(tp->vts, (VTermPos){.row=y,.col=x}, &cell);
+                composite_cell(&tp->font, &tp->surface, x, y, &cell);
+            }
+            tp->row_hash[y] = h;
+            if (run_start < 0) { run_start = y; run_end = y; }
+            else if (y == run_end + 1) { run_end = y; }
+            else {
+                // close previous run
+                if (tp->surface.dirty_count < 4) {
+                    int y0 = run_start * tp->font.cell_h;
+                    int y1 = (run_end + 1) * tp->font.cell_h;
+                    int idx = tp->surface.dirty_count++;
+                    tp->surface.dirty_ranges[idx].y0 = y0;
+                    tp->surface.dirty_ranges[idx].y1 = y1;
+                }
+                run_start = y; run_end = y;
+            }
+        }
+    }
+    if (run_start >= 0) {
+        if (tp->surface.dirty_count < 4) {
+            int y0 = run_start * tp->font.cell_h;
+            int y1 = (run_end + 1) * tp->font.cell_h;
+            int idx = tp->surface.dirty_count++;
+            tp->surface.dirty_ranges[idx].y0 = y0;
+            tp->surface.dirty_ranges[idx].y1 = y1;
+        }
+    }
+    tp->surface.dirty = tp->surface.dirty_count > 0;
+    if (tp->surface.dirty) {
+        // Populate legacy single range for compatibility (min/max over ranges)
+        int y0 = tp->surface.tex_h, y1 = 0;
+        for (int i=0;i<tp->surface.dirty_count;i++){ if (tp->surface.dirty_ranges[i].y0 < y0) y0 = tp->surface.dirty_ranges[i].y0; if (tp->surface.dirty_ranges[i].y1 > y1) y1 = tp->surface.dirty_ranges[i].y1; }
+        tp->surface.dirty_y0 = y0; tp->surface.dirty_y1 = y1;
+    }
 }
 
 bool term_pane_poll(term_pane *tp) {
@@ -524,9 +707,17 @@ bool term_pane_poll(term_pane *tp) {
         }
     }
     if (changed) {
-        // Mark dirty and rebuild without flushing callbacks (none registered)
+        // Flush vterm damage and update only the changed rows
         if (tp->vts) vterm_screen_flush_damage(tp->vts);
-        rebuild_surface(tp);
+        // Initialize dirty bounds to empty; expand in update_changed_rows
+        tp->surface.dirty_y0 = tp->surface.tex_h;
+        tp->surface.dirty_y1 = 0;
+        tp->surface.dirty_count = 0;
+        update_changed_rows(tp);
+        if (tp->surface.dirty_count == 0) {
+            // No row changes detected; nothing to upload
+            tp->surface.dirty = false;
+        }
     }
     return changed;
 }
@@ -570,9 +761,25 @@ void term_pane_render(term_pane *tp, int fb_w, int fb_h) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tp->surface.tex_w, tp->surface.tex_h,
-                    GL_RGBA, GL_UNSIGNED_BYTE, tp->surface.pixels);
+    if (tp->surface.dirty) {
+        int n = tp->surface.dirty_count;
+        if (n <= 0) n = 1;
+        for (int i=0; i<n; i++) {
+            int y0 = (i < tp->surface.dirty_count) ? tp->surface.dirty_ranges[i].y0 : 0;
+            int y1 = (i < tp->surface.dirty_count) ? tp->surface.dirty_ranges[i].y1 : tp->surface.tex_h;
+            if (y0 < 0) y0 = 0;
+            if (y1 > tp->surface.tex_h) y1 = tp->surface.tex_h;
+            if (y1 <= y0) continue;
+            int h = y1 - y0;
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, y0, tp->surface.tex_w, h,
+                           GL_RGBA, GL_UNSIGNED_BYTE,
+                           tp->surface.pixels + (size_t)y0 * tp->surface.tex_w * 4);
+        }
+    }
     tp->surface.dirty = false;
+    tp->surface.dirty_y0 = tp->surface.tex_h;
+    tp->surface.dirty_y1 = 0;
+    tp->surface.dirty_count = 0;
     draw_textured_quad(tp->surface.tex, tp->layout.x, tp->layout.y,
                        tp->surface.tex_w, tp->surface.tex_h, fb_w, fb_h);
 }
@@ -632,4 +839,6 @@ void term_pane_set_font_px(term_pane *tp, int font_px) {
     }
     if (old.tex) glDeleteTextures(1, &old.tex);
     free(old.pixels);
+    free(tp->row_hash);
+    tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
 }

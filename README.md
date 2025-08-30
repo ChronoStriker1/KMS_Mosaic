@@ -39,15 +39,18 @@ Run
 - `./kms_mosaic --save-config /path/profile.conf`
 - `./kms_mosaic --save-config-default`
 
-Controls
+-Controls
+- Ctrl+Q: quit compositor (always active)
 - Ctrl+E: toggle Control Mode. While active, compositor consumes layout/role keys.
 - Tab (in Control Mode): cycle focus among C/A/B (video, pane A, pane B)
-- l / L (in Control Mode): cycle layouts forward/back (portrait: 3 modes; landscape: 4 modes)
+- l / L (in Control Mode): cycle layouts forward/back
 - t (in Control Mode): swap terminal panes A and B
 - r / R (in Control Mode): rotate roles among (C video, A, B) / reverse
 - o (in Control Mode): toggle OSD on/off (default off)
 - ? (in Control Mode): help overlay
-- Ctrl+Q (in Control Mode): quit compositor
+- f (in Control Mode): force pane surface rebuild (refresh from vterm screen)
+- Arrows (in Control Mode): resize column/row splits (layouts 2x1/1x2)
+  - The focused pane is outlined with a cyan border while in Control Mode.
 - Outside Control Mode: all keys go to the focused pane; when focus is video, keys are forwarded to mpv (space/pause, n/p next/prev, arrows, ASCII)
   - Video focus key support: ASCII, Space/Enter/Tab, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12, Esc, Backspace; plus fallbacks for space (pause), n/p (next/prev)
 
@@ -65,9 +68,14 @@ Layouts
 - Pane role assignment (C=video, A, B) is a permutation over the 3 slots and can be rotated/swapped at runtime via r/R/t.
 
 Planned TODOs
-- Improve Unicode/box drawing coverage and performance.
+- Improve Unicode/box drawing coverage and performance. [in-progress]
 - Make connector/mode selection configurable.
-- Implement atomic modesetting + nonblocking pageflips.
+- Implement atomic modesetting + nonblocking pageflips. [in-progress]
+
+Atomic modesetting (experimental)
+- Enable with `--atomic`. If supported by the GPU/driver, the compositor uses DRM atomic to set the initial mode and flip via the primary plane. Falls back to legacy KMS if unavailable.
+- Optional: `--atomic-nonblock` enables event-driven nonblocking atomic flips (default is blocking for maximum robustness).
+- Optional: `--gl-finish` forces `glFinish()` before flips to serialize GPU work on stacks requiring explicit sync.
 
 Notes
 - This program becomes DRM master and will blank fbcon while active.
@@ -97,6 +105,9 @@ Flags
 - --config FILE: load flags from a config file (supports quotes, comments with #).
 - --save-config FILE: write the current configuration as flags to a file.
 - --save-config-default: write the configuration to the default config path.
+ - --atomic: use DRM atomic modesetting (falls back to legacy automatically).
+ - --atomic-nonblock: use nonblocking atomic flips (event-driven).
+ - --gl-finish: call `glFinish()` before flips (serialize GPU if needed).
 
 - --no-config: do not auto-load the default config
 - --smooth: balanced playback preset (display-resample, no interp, linear tscale, early-flush, no shader cache)
@@ -108,6 +119,8 @@ Runtime focus and input
 
 OSD
 - Default off for a clean display. Toggle in Control Mode with 'o' or show the help overlay with '?'.
+- Long OSD lines wrap automatically to the viewport width.
+- Status line shows the current layout (stack, row, 2x1, 1x2).
 
 Behavioral defaults
 - Single-video auto-loop: if only one file is given and no playlist, looping is enabled automatically.
