@@ -24,11 +24,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
-// Safe libvterm state callbacks (no-ops) to avoid null deref in some builds
-static int tp_settermprop(VTermProp prop, VTermValue *val, void *user) {
-    (void)prop; (void)val; (void)user; return 1;
-}
-static int tp_state_resize(int rows, int cols, VTermPos *delta, void *user) { (void)rows; (void)cols; (void)delta; (void)user; return 1; }
+// No libvterm callbacks are registered to avoid ABI mismatches.
 
 typedef struct {
     uint32_t codepoint;
@@ -41,6 +37,14 @@ typedef struct {
     FT_Face face;
     int px_size;
     int cell_w, cell_h, baseline;
+    // Simple glyph cache
+    struct {
+        uint32_t cp;
+        glyph_bitmap gb;
+        int used;
+    } *cache;
+    int cache_cap;
+    int cache_count;
 } font_ctx;
 
 typedef struct {
@@ -103,31 +107,38 @@ static void font_init(font_ctx *f, int px_size) {
     f->cell_w = (f->face->glyph->advance.x + 31) / 64; // 26.6 to int
     f->cell_h = px_size + 2; // add small leading
     f->baseline = (f->face->size->metrics.ascender + 31) / 64;
+    f->cache = NULL; f->cache_cap = 0; f->cache_count = 0;
 }
 
 static void font_destroy(font_ctx *f) {
+    if (f->cache) {
+        for (int i=0;i<f->cache_count;i++) free(f->cache[i].gb.bitmap);
+        free(f->cache);
+    }
     if (f->face) FT_Done_Face(f->face);
     if (f->ftlib) FT_Done_FreeType(f->ftlib);
 }
 
-static glyph_bitmap render_glyph(font_ctx *f, uint32_t cp) {
-    glyph_bitmap g = { .codepoint = cp };
-    if (FT_Load_Char(f->face, cp, FT_LOAD_RENDER)) return g;
+static glyph_bitmap* get_glyph(font_ctx *f, uint32_t cp) {
+    for (int i=0;i<f->cache_count;i++) if (f->cache[i].used && f->cache[i].cp==cp) return &f->cache[i].gb;
+    if (FT_Load_Char(f->face, cp, FT_LOAD_RENDER)) return NULL;
     FT_GlyphSlot slot = f->face->glyph;
-    g.w = slot->bitmap.width;
-    g.h = slot->bitmap.rows;
-    g.bearing_x = slot->bitmap_left;
-    g.bearing_y = slot->bitmap_top;
-    g.advance = (slot->advance.x + 31)/64;
-    size_t sz = g.w * g.h;
-    g.bitmap = malloc(sz);
-    memcpy(g.bitmap, slot->bitmap.buffer, sz);
+    if (f->cache_count == f->cache_cap) {
+        int nc = f->cache_cap ? f->cache_cap*2 : 256;
+        f->cache = realloc(f->cache, (size_t)nc * sizeof(*f->cache));
+        for (int i=f->cache_cap;i<nc;i++) f->cache[i].used = 0;
+        f->cache_cap = nc;
+    }
+    int idx = f->cache_count++;
+    f->cache[idx].cp = cp; f->cache[idx].used = 1;
+    glyph_bitmap *g = &f->cache[idx].gb;
+    g->codepoint = cp;
+    g->w = slot->bitmap.width; g->h = slot->bitmap.rows;
+    g->bearing_x = slot->bitmap_left; g->bearing_y = slot->bitmap_top;
+    g->advance = (slot->advance.x + 31)/64;
+    size_t sz = (size_t)g->w * g->h; g->bitmap = malloc(sz);
+    memcpy(g->bitmap, slot->bitmap.buffer, sz);
     return g;
-}
-
-static void free_glyph(glyph_bitmap *g) {
-    free(g->bitmap);
-    memset(g, 0, sizeof(*g));
 }
 
 static void pane_tex_init(pane_tex *t, int w, int h) {
@@ -136,6 +147,8 @@ static void pane_tex_init(pane_tex *t, int w, int h) {
     glBindTexture(GL_TEXTURE_2D, t->tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     t->pixels = calloc((size_t)w * h * 4, 1);
 }
@@ -333,21 +346,22 @@ static void composite_cell(font_ctx *font, pane_tex *tex, int cx, int cy, const 
         else if (cp==0x2514||cp==0x2518||cp==0x250c||cp==0x2510) cp='+';
         else cp='+';
     }
-    glyph_bitmap g = render_glyph(font, cp);
+    glyph_bitmap *g = get_glyph(font, cp);
+    if (!g) return;
     rgb8 fgc = color_from_index(sattr_to_rgb_idx(cell, 1));
-    int gx = x0 + (font->cell_w - g.w)/2 + g.bearing_x;
-    int gy = y0 + font->baseline - g.bearing_y;
+    int gx = x0 + (font->cell_w - g->w)/2 + g->bearing_x;
+    int gy = y0 + font->baseline - g->bearing_y;
     // Clip horizontally to avoid negative pointer math when bearing_x shifts left
     int clip_x0 = gx < x0 ? x0 : gx;
-    int clip_x1 = (gx + g.w) > x1 ? x1 : (gx + g.w);
+    int clip_x1 = (gx + g->w) > x1 ? x1 : (gx + g->w);
     if (clip_x0 < clip_x1) {
-        for (int yy=0; yy<g.h; yy++) {
+        for (int yy=0; yy<g->h; yy++) {
             int py = gy + yy; if (py<y0||py>=y1) continue;
             int xx0 = clip_x0 - gx; // start within glyph bitmap
             int xx1 = clip_x1 - gx; // end within glyph bitmap
             uint8_t *row = tex->pixels + (size_t)py * tex->tex_w * 4 + clip_x0 * 4;
             for (int xx=xx0; xx<xx1; xx++) {
-                uint8_t a = g.bitmap[yy*g.w + xx];
+                uint8_t a = g->bitmap[yy*g->w + xx];
                 if (a) {
                     uint8_t *p = row + (xx - xx0)*4;
                     p[0] = (uint8_t)((fgc.r * a + p[0]*(255-a))/255);
@@ -358,16 +372,14 @@ static void composite_cell(font_ctx *font, pane_tex *tex, int cx, int cy, const 
             }
         }
     }
-    free_glyph(&g);
+    // cached glyph owned by font, no free
 }
 
-static int screen_damage(VTermRect rect, void *user) {
-    term_pane *tp = (term_pane*)user;
-    (void)rect; tp->dirty = true; return 1;
-}
+// No screen damage callbacks are used; we rebuild surfaces on demand.
 
 static void rebuild_surface(term_pane *tp) {
     // Re-render entire screen to CPU buffer
+    if (tp->vts) vterm_screen_flush_damage(tp->vts);
     tp->surface.dirty = true;
     for (int y=0; y<tp->layout.rows; y++) {
         for (int x=0; x<tp->layout.cols; x++) {
@@ -376,6 +388,11 @@ static void rebuild_surface(term_pane *tp) {
             composite_cell(&tp->font, &tp->surface, x, y, &cell);
         }
     }
+}
+
+void term_pane_reset_screen(term_pane *tp, int hard) {
+    if (!tp || !tp->vts) return;
+    vterm_screen_reset(tp->vts, hard ? 1 : 0);
 }
 
 term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *cmd, char *const argv[]) {
@@ -462,6 +479,7 @@ void term_pane_destroy(term_pane *tp) {
 }
 
 void term_pane_resize(term_pane *tp, const pane_layout *layout) {
+    pane_tex old = tp->surface; tp->surface = (pane_tex){0};
     tp->layout = *layout;
     int cols = tp->layout.w / tp->font.cell_w;
     int rows = tp->layout.h / tp->font.cell_h;
@@ -469,9 +487,22 @@ void term_pane_resize(term_pane *tp, const pane_layout *layout) {
     if (rows < 5) rows = 5;
     vterm_set_size(tp->vt, rows, cols);
     set_pty_winsize(tp->pty_master, cols, rows);
-    pane_tex_destroy(&tp->surface);
-    pane_tex_init(&tp->surface, cols*tp->font.cell_w, rows*tp->font.cell_h);
-    rebuild_surface(tp);
+    if (tp->child_pid > 0) kill(tp->child_pid, SIGWINCH);
+    int new_w = cols*tp->font.cell_w, new_h = rows*tp->font.cell_h;
+    pane_tex_init(&tp->surface, new_w, new_h);
+    if (old.pixels) {
+        int copy_w = old.tex_w < tp->surface.tex_w ? old.tex_w : tp->surface.tex_w;
+        int copy_h = old.tex_h < tp->surface.tex_h ? old.tex_h : tp->surface.tex_h;
+        for (int y=0; y<copy_h; y++)
+            memcpy(tp->surface.pixels + (size_t)y * tp->surface.tex_w * 4,
+                   old.pixels + (size_t)y * old.tex_w * 4,
+                   (size_t)copy_w * 4);
+        glBindTexture(GL_TEXTURE_2D, tp->surface.tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tp->surface.tex_w, tp->surface.tex_h, GL_RGBA, GL_UNSIGNED_BYTE, tp->surface.pixels);
+    }
+    if (old.tex) glDeleteTextures(1, &old.tex);
+    free(old.pixels);
 }
 
 bool term_pane_poll(term_pane *tp) {
@@ -480,6 +511,7 @@ bool term_pane_poll(term_pane *tp) {
     for(;;){
         ssize_t n = read(tp->pty_master, buf, sizeof buf);
         if (n <= 0) break;
+        // Feed program output into the terminal emulator
         vterm_input_write(tp->vt, buf, (size_t)n);
         changed = true;
     }
@@ -493,9 +525,16 @@ bool term_pane_poll(term_pane *tp) {
     }
     if (changed) {
         // Mark dirty and rebuild without flushing callbacks (none registered)
+        if (tp->vts) vterm_screen_flush_damage(tp->vts);
         rebuild_surface(tp);
     }
     return changed;
+}
+
+void term_pane_force_rebuild(term_pane *tp) {
+    if (!tp) return;
+    if (tp->vts) vterm_screen_flush_damage(tp->vts);
+    rebuild_surface(tp);
 }
 
 void term_pane_respawn(term_pane *tp) {
@@ -512,18 +551,28 @@ void term_pane_respawn(term_pane *tp) {
     // Reapply size to PTY
     int cols = tp->layout.w / tp->font.cell_w;
     int rows = tp->layout.h / tp->font.cell_h;
-    if (cols < 10) cols = 10; if (rows < 5) rows = 5;
+    if (cols < 10) cols = 10;
+    if (rows < 5) rows = 5;
     vterm_set_size(tp->vt, rows, cols);
     set_pty_winsize(tp->pty_master, cols, rows);
+    if (tp->child_pid > 0) kill(tp->child_pid, SIGWINCH);
 }
 
 void term_pane_render(term_pane *tp, int fb_w, int fb_h) {
-    if (tp->surface.dirty) {
-        glBindTexture(GL_TEXTURE_2D, tp->surface.tex);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tp->surface.tex_w, tp->surface.tex_h,
-                        GL_RGBA, GL_UNSIGNED_BYTE, tp->surface.pixels);
-        tp->surface.dirty = false;
-    }
+    // Upload pane pixels; keep simple and robust across layout changes
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DITHER);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glViewport(0, 0, fb_w, fb_h);
+    glBindTexture(GL_TEXTURE_2D, tp->surface.tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tp->surface.tex_w, tp->surface.tex_h,
+                    GL_RGBA, GL_UNSIGNED_BYTE, tp->surface.pixels);
+    tp->surface.dirty = false;
     draw_textured_quad(tp->surface.tex, tp->layout.x, tp->layout.y,
                        tp->surface.tex_w, tp->surface.tex_h, fb_w, fb_h);
 }
@@ -568,7 +617,19 @@ void term_pane_set_font_px(term_pane *tp, int font_px) {
     vterm_set_size(tp->vt, rows, cols);
     set_pty_winsize(tp->pty_master, cols, rows);
     // Recreate texture surface
-    pane_tex_destroy(&tp->surface);
+    pane_tex old = tp->surface; tp->surface = (pane_tex){0};
     pane_tex_init(&tp->surface, cols*tp->font.cell_w, rows*tp->font.cell_h);
-    rebuild_surface(tp);
+    if (old.pixels) {
+        int copy_w = old.tex_w < tp->surface.tex_w ? old.tex_w : tp->surface.tex_w;
+        int copy_h = old.tex_h < tp->surface.tex_h ? old.tex_h : tp->surface.tex_h;
+        for (int y=0; y<copy_h; y++)
+            memcpy(tp->surface.pixels + (size_t)y * tp->surface.tex_w * 4,
+                   old.pixels + (size_t)y * old.tex_w * 4,
+                   (size_t)copy_w * 4);
+        glBindTexture(GL_TEXTURE_2D, tp->surface.tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tp->surface.tex_w, tp->surface.tex_h, GL_RGBA, GL_UNSIGNED_BYTE, tp->surface.pixels);
+    }
+    if (old.tex) glDeleteTextures(1, &old.tex);
+    free(old.pixels);
 }

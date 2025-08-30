@@ -9,8 +9,8 @@ PKG_CFLAGS := $(shell pkg-config --cflags $(PKGS))
 PKG_LIBS   := $(shell pkg-config --libs   $(PKGS))
 
 SRC = src/kms_mpv_compositor.c src/term_pane.c src/osd.c
-BIN = kms_mpv_compositor
-ALIAS = kms_mosaic
+BIN = kms_mosaic
+ALIAS = kms_mpv_compositor
 
 all: $(BIN) $(ALIAS)
 
@@ -18,7 +18,7 @@ $(BIN): $(SRC)
 	$(CC) $(CFLAGS) $(PKG_CFLAGS) -o $@ $(SRC) $(PKG_LIBS) $(LDFLAGS)
 
 $(ALIAS): $(BIN)
-	@# Provide a friendlier alias; keep original for compatibility
+	@# Compatibility alias for old name
 	@[ -e $(ALIAS) ] || cp -f $(BIN) $(ALIAS)
 
 clean:
