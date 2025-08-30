@@ -95,6 +95,33 @@ static void render_text_to_rgba(font_ctx *f, const char *text, unsigned char **o
     *out = buf;
 }
 
+static int glyph_advance_px(font_ctx *f, unsigned char ch){ if (FT_Load_Char(f->face, ch, FT_LOAD_RENDER)) return f->px_size/2; return (f->face->glyph->advance.x + 31)/64; }
+
+static char* wrap_text_to_width(font_ctx *f, const char *text, int max_width_px){
+    if (!text || max_width_px <= 0) return strdup(text?text:"");
+    size_t cap = strlen(text) * 2 + 64; char *out = malloc(cap); size_t oi=0;
+    int line_w = 0;
+    for (size_t i=0; text[i]; ){
+        if (text[i]=='\n'){ if (oi+1>=cap){cap*=2; out=realloc(out,cap);} out[oi++]='\n'; i++; line_w=0; continue; }
+        // measure next word (including following space if present)
+        int word_w = 0; size_t j=i; while (text[j] && text[j]!=' ' && text[j]!='\n'){ word_w += glyph_advance_px(f, (unsigned char)text[j]); j++; }
+        int space_w = 0; int has_space = 0; if (text[j]==' '){ space_w = glyph_advance_px(f, ' '); has_space = 1; }
+        int add_w = word_w + (has_space?space_w:0);
+        if (line_w>0 && line_w + word_w > max_width_px){
+            // wrap before word
+            if (oi+1>=cap){cap*=2; out=realloc(out,cap);} out[oi++]='\n'; line_w = 0;
+        }
+        // copy word
+        while (i<j){ if (oi+1>=cap){cap*=2; out=realloc(out,cap);} out[oi++] = text[i++]; }
+        line_w += word_w;
+        // copy single space if any and doesn't overflow too badly
+        if (has_space){ if (line_w + space_w > max_width_px){ if (oi+1>=cap){cap*=2; out=realloc(out,cap);} out[oi++]='\n'; line_w=0; }
+            else { if (oi+1>=cap){cap*=2; out=realloc(out,cap);} out[oi++]=' '; line_w += space_w; j++; i=j; }
+        }
+    }
+    if (oi+1>=cap){cap*=2; out=realloc(out,cap);} out[oi]='\0'; return out;
+}
+
 osd_ctx* osd_create(int font_px){ osd_ctx* o = calloc(1,sizeof *o); font_init(&o->font, font_px>0?font_px:20); glGenTextures(1,&o->tex); return o; }
 void osd_destroy(osd_ctx* o){ if(!o) return; if(o->tex) glDeleteTextures(1,&o->tex); free(o->text); font_destroy(&o->font); free(o);} 
 
@@ -108,7 +135,10 @@ void osd_draw(osd_ctx* o, int x, int y, int fb_w, int fb_h){
     if(!o||!o->text) return;
     ensure_prog();
     unsigned char *rgba=NULL; int w=0,h=0;
-    render_text_to_rgba(&o->font, o->text, &rgba, &w, &h);
+    int max_w = fb_w - x - 16; if (max_w < o->font.px_size*8) max_w = o->font.px_size*8;
+    char *wrapped = wrap_text_to_width(&o->font, o->text, max_w);
+    render_text_to_rgba(&o->font, wrapped, &rgba, &w, &h);
+    free(wrapped);
     if(w<=0||h<=0){ free(rgba); return; }
     glBindTexture(GL_TEXTURE_2D, o->tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
