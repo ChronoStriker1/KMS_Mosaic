@@ -1153,10 +1153,10 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
-    // Create terminal panes in logical space
+    // Create terminal panes in logical space (initialized; will recompute each frame)
     int screen_w = logical_w, screen_h = logical_h;
-    pane_layout lay_a = {0}, lay_b = {0};
-    pane_layout lay_video = { .x = 0, .y = 0, .w = logical_w, .h = logical_h };
+    pane_layout lay_a = (pane_layout){0}, lay_b = (pane_layout){0};
+    pane_layout lay_video = (pane_layout){ .x = 0, .y = 0, .w = logical_w, .h = logical_h };
     // Slot-based layout and permutation control: 0=video,1=paneA,2=paneB
     static int perm[3] = {0,1,2};
     static int last_font_px_a=-1, last_font_px_b=-1;
@@ -1285,8 +1285,10 @@ int main(int argc, char **argv) {
     struct termios rawt; if (tcgetattr(0, &g_oldt)==0) { g_have_oldt = 1; rawt = g_oldt; cfmakeraw(&rawt); tcsetattr(0, TCSANOW, &rawt); atexit(restore_tty); }
     fprintf(stderr, "Controls: Tab focus A/B, Ctrl+Q quit, n/p next/prev, space pause, o OSD toggle.\n");
     int focus = 1; // 1=top pane, 2=bottom pane
-    bool show_osd = true;
+    bool show_osd = false; // default OSD off
     if (getenv("KMS_MPV_NO_OSD")) show_osd = false;
+    bool show_help = false; // OSD help overlay
+    bool ui_control = false; // when true, keystrokes control mosaic instead of panes
 
     bool running = true;
     const char *direct_env_once = getenv("KMS_MPV_DIRECT");
@@ -1325,22 +1327,25 @@ int main(int argc, char **argv) {
                     if (ch == 0x11) { running=false; break; }
                 }
                 if (!running) break;
+                // Toggle UI control mode (Ctrl+E)
+                for (ssize_t i=0;i<n;i++) { unsigned char ch=(unsigned char)buf[i]; if (ch==0x05) { ui_control=!ui_control; }}
                 // Tab switches focus
                 bool consumed=false;
                 for (ssize_t i=0;i<n;i++) if (buf[i]=='\t') { focus = (focus==1?2:1); consumed=true; }
-                // Layout/pane controls
-                for (ssize_t i=0;i<n;i++) {
+                // Layout/pane controls (only when in UI control mode)
+                for (ssize_t i=0;i<n;i++) if (ui_control) {
                     if (buf[i]=='l') {
                         if (opt.rotation==ROT_90 || opt.rotation==ROT_270) opt.portrait_layout = (opt.portrait_layout+1)%3;
                         else opt.landscape_layout = (opt.landscape_layout+1)%4;
-                    }
-                    else if (buf[i]=='L') {
+                        consumed=true;
+                    } else if (buf[i]=='L') {
                         if (opt.rotation==ROT_90 || opt.rotation==ROT_270) opt.portrait_layout = (opt.portrait_layout+2)%3;
                         else opt.landscape_layout = (opt.landscape_layout+3)%4;
-                    }
-                    else if (buf[i]=='t') { int tmp = perm[1]; perm[1]=perm[2]; perm[2]=tmp; }
-                    else if (buf[i]=='r') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p1; perm[1]=p2; perm[2]=p0; }
-                    else if (buf[i]=='R') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p2; perm[1]=p0; perm[2]=p1; }
+                        consumed=true;
+                    } else if (buf[i]=='t') { int tmp = perm[1]; perm[1]=perm[2]; perm[2]=tmp; consumed=true; }
+                    else if (buf[i]=='r') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p1; perm[1]=p2; perm[2]=p0; consumed=true; }
+                    else if (buf[i]=='R') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p2; perm[1]=p0; perm[2]=p1; consumed=true; }
+                    else if (buf[i]=='?') { show_help = !show_help; consumed=true; }
                 }
                 // Playback keys sent to mpv if present
                 if (use_mpv) {
@@ -1351,7 +1356,7 @@ int main(int argc, char **argv) {
                     }
                 }
                 for (ssize_t i=0;i<n;i++) if (buf[i]=='o') { show_osd = !show_osd; consumed=true; }
-                if (!consumed) {
+                if (!consumed && !ui_control) {
                     if (focus==1) term_pane_send_input(tp_a, buf, (size_t)n);
                     else if (focus==2) term_pane_send_input(tp_b, buf, (size_t)n);
                 }
@@ -1385,6 +1390,69 @@ int main(int argc, char **argv) {
                 if (g_debug) fprintf(stderr, "mpv: UPDATE_FRAME\n");
             }
         }
+
+        // Recompute layout based on current rotation/layout/perm
+        {
+            if (opt.rotation==ROT_90 || opt.rotation==ROT_270) {
+                int mode = opt.portrait_layout; // 0=stack3,1=2x1,2=1x2
+                int top_pct = opt.pane_split_pct ? opt.pane_split_pct : 60; if (top_pct<20) top_pct=20; if (top_pct>80) top_pct=80;
+                pane_layout s0={0}, s1={0}, s2={0};
+                if (mode == 0) {
+                    int h1 = screen_h * top_pct / 100; int remain = screen_h - h1; int h2 = remain/2; int h3 = remain - h2;
+                    s0 = (pane_layout){ .x=0, .y=screen_h - h1, .w=screen_w, .h=h1 };
+                    s1 = (pane_layout){ .x=0, .y=screen_h - h1 - h2, .w=screen_w, .h=h2 };
+                    s2 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=h3 };
+                } else if (mode == 1) {
+                    int htop = screen_h * top_pct / 100; int hbot = screen_h - htop; int wleft = screen_w/2; int wright = screen_w - wleft;
+                    s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=wleft, .h=htop };
+                    s1 = (pane_layout){ .x=wleft, .y=screen_h - htop, .w=wright, .h=htop };
+                    s2 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=hbot };
+                } else {
+                    int htop = screen_h * top_pct / 100; int hbot = screen_h - htop; int wleft = screen_w/2; int wright = screen_w - wleft;
+                    s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=screen_w, .h=htop };
+                    s1 = (pane_layout){ .x=0, .y=0, .w=wleft, .h=hbot };
+                    s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=hbot };
+                }
+                pane_layout slots[3] = { s0, s1, s2 };
+                lay_video = slots[perm[0]]; lay_a = slots[perm[1]]; lay_b = slots[perm[2]];
+            } else {
+                int mode = opt.landscape_layout; // 0=stack3,1=row3,2=2x1,3=1x2
+                int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
+                int col_pct = opt.right_frac_pct ? (100 - opt.right_frac_pct) : 50; if (col_pct<20) col_pct=20; if (col_pct>80) col_pct=80;
+                pane_layout s0={0}, s1={0}, s2={0};
+                if (mode == 0) {
+                    int h = screen_h/3; int h2=h; int h3=screen_h-h-h2;
+                    s0=(pane_layout){.x=0,.y=screen_h-h,.w=screen_w,.h=h};
+                    s1=(pane_layout){.x=0,.y=screen_h-h-h2,.w=screen_w,.h=h2};
+                    s2=(pane_layout){.x=0,.y=0,.w=screen_w,.h=h3};
+                } else if (mode == 1) {
+                    int w=screen_w/3; int w2=w; int w3=screen_w-w-w2;
+                    s0=(pane_layout){.x=0,.y=0,.w=w,.h=screen_h};
+                    s1=(pane_layout){.x=w,.y=0,.w=w2,.h=screen_h};
+                    s2=(pane_layout){.x=w+w2,.y=0,.w=w3,.h=screen_h};
+                } else if (mode == 2) {
+                    int wleft=screen_w*col_pct/100; int wright=screen_w-wleft; int htop=screen_h*split_pct/100; int hbot=screen_h-htop;
+                    s0=(pane_layout){.x=0,.y=screen_h-htop,.w=wleft,.h=htop};
+                    s1=(pane_layout){.x=0,.y=0,.w=wleft,.h=hbot};
+                    s2=(pane_layout){.x=wleft,.y=0,.w=wright,.h=screen_h};
+                } else {
+                    int wleft=screen_w*col_pct/100; int wright=screen_w-wleft; int htop=screen_h*split_pct/100; int hbot=screen_h-htop;
+                    s0=(pane_layout){.x=0,.y=0,.w=wleft,.h=screen_h};
+                    s1=(pane_layout){.x=wleft,.y=screen_h-htop,.w=wright,.h=htop};
+                    s2=(pane_layout){.x=wleft,.y=0,.w=wright,.h=hbot};
+                }
+                pane_layout slots[3] = { s0, s1, s2 };
+                lay_video = slots[perm[0]]; lay_a = slots[perm[1]]; lay_b = slots[perm[2]];
+            }
+        }
+
+        // Recompute font sizes for panes based on current rects
+        int font_px_a = opt.font_px ? opt.font_px : 18; int cell_w_a=8, cell_h_a=16; term_measure_cell(font_px_a,&cell_w_a,&cell_h_a);
+        for (int px=font_px_a; px>=10; --px){ int cw,ch; if(!term_measure_cell(px,&cw,&ch))break; int cols=lay_a.w/cw; int rows=lay_a.h/ch; if(cols>=80 && rows>=24){ font_px_a=px; cell_w_a=cw; cell_h_a=ch; break;} if(px==10){ font_px_a=px; cell_w_a=cw; cell_h_a=ch; }}
+        int need_w_px=80*cell_w_a, need_h_px=24*cell_h_a; if (lay_a.w<need_w_px){ int d=need_w_px-lay_a.w; lay_a.w+=d; if(lay_a.x+lay_a.w>screen_w) lay_a.x=screen_w-lay_a.w; }
+        if (lay_a.h<need_h_px){ int d=need_h_px-lay_a.h; lay_a.h+=d; if(lay_a.y+lay_a.h>screen_h) lay_a.y=screen_h-lay_a.h; }
+        int font_px_b = opt.font_px ? opt.font_px : font_px_a; int cell_w_b=8, cell_h_b=16; term_measure_cell(font_px_b,&cell_w_b,&cell_h_b);
+        for (int px=font_px_b; px>=10; --px){ int cw,ch; if(!term_measure_cell(px,&cw,&ch))break; int cols=lay_b.w/cw; int rows=lay_b.h/ch; if(cols>=60 && rows>=20){ font_px_b=px; cell_w_b=cw; cell_h_b=ch; break;} if(px==10){ font_px_b=px; cell_w_b=cw; cell_h_b=ch; }}
 
         // Render frame into offscreen logical FBO (unless in direct debug mode)
         if (!eglMakeCurrent(e.dpy, e.surf, e.surf, e.ctx)) die("eglMakeCurrent loop");
@@ -1507,7 +1575,7 @@ int main(int argc, char **argv) {
                 glDisable(GL_DEPTH_TEST);
                 glViewport(0, 0, vw, vh);
                 gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
-                int flip_y = (opt.rotation==ROT_90 || opt.rotation==ROT_270) ? 0 : 1;
+                int flip_y = 0;
                 mpv_opengl_fbo fbo = {.fbo = (int)vid_fbo, .w = vw, .h = vh, .internal_format = 0};
                 mpv_render_param r_params[] = {
                     {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
@@ -1546,16 +1614,30 @@ int main(int argc, char **argv) {
         }
 
         // OSD overlay (title, index/total, paused)
-        if (!direct_mode && use_mpv && show_osd && !opt.no_osd) {
+        if (!direct_mode && use_mpv && !opt.no_osd && (show_osd || show_help)) {
             static osd_ctx *osd = NULL; if (!osd) osd = osd_create(opt.font_px?opt.font_px:20);
-            int64_t pos=0,count=0; int paused_flag=0; char *title=NULL;
-            mpv_get_property(m.mpv, "playlist-pos", MPV_FORMAT_INT64, &pos);
-            mpv_get_property(m.mpv, "playlist-count", MPV_FORMAT_INT64, &count);
-            mpv_get_property(m.mpv, "pause", MPV_FORMAT_FLAG, &paused_flag);
-            title = mpv_get_property_string(m.mpv, "media-title");
-            char line[512]; snprintf(line,sizeof line, "%s %lld/%lld - %s", paused_flag?"Paused":"Playing", (long long)(pos+1), (long long)count, title?title:"(no title)");
-            if (title) mpv_free(title);
-            osd_set_text(osd, line);
+            if (show_help) {
+                const char *help =
+                    "Controls\n"
+                    "  Tab: focus A/B\n"
+                    "  n/p/space: next/prev/pause\n"
+                    "  o: toggle OSD\n"
+                    "  Ctrl+E: toggle pane/layout control mode\n"
+                    "  l/L: cycle layouts\n"
+                    "  r/R: rotate roles C/A/B\n"
+                    "  t: swap panes A/B\n"
+                    "  Ctrl+Q: quit\n";
+                osd_set_text(osd, help);
+            } else {
+                int64_t pos=0,count=0; int paused_flag=0; char *title=NULL;
+                mpv_get_property(m.mpv, "playlist-pos", MPV_FORMAT_INT64, &pos);
+                mpv_get_property(m.mpv, "playlist-count", MPV_FORMAT_INT64, &count);
+                mpv_get_property(m.mpv, "pause", MPV_FORMAT_FLAG, &paused_flag);
+                title = mpv_get_property_string(m.mpv, "media-title");
+                char line[512]; snprintf(line,sizeof line, "%s %lld/%lld - %s", paused_flag?"Paused":"Playing", (long long)(pos+1), (long long)count, title?title:"(no title)");
+                if (title) mpv_free(title);
+                osd_set_text(osd, line);
+            }
             // Draw into logical RT at 16px margin
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             glViewport(0,0, logical_w, logical_h);
@@ -1576,6 +1658,15 @@ int main(int argc, char **argv) {
         if (use_mpv && m.mpv_gl) {
             // Inform mpv that we swapped (advanced control)
             mpv_render_context_report_swap(m.mpv_gl);
+        }
+        // Control-mode indicator OSD (always show when active)
+        if (ui_control && !direct_mode) {
+            static osd_ctx *osdcm = NULL; if (!osdcm) osdcm = osd_create(opt.font_px?opt.font_px:20);
+            osd_set_text(osdcm, "Control Mode (Ctrl+E toggles)\n l/L layouts  r/R rotate  t swap  ? help");
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, fb_w, fb_h);
+            // Draw small overlay in top-left corner
+            osd_draw(osdcm, 16, 48, fb_w, fb_h);
         }
         // Ask for next render; mpv will block to target time internally
         if (use_mpv) mpv_needs_render = 1;

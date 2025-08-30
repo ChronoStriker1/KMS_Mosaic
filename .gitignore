@@ -1,0 +1,32 @@
+# Build artifacts and binaries
+/kms_mpv_compositor
+/kms_mosaic
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+*.exe
+*.out
+
+# Packaging/dist outputs
+/dist/
+*.txz
+*.tgz
+*.tar.gz
+
+# Logs and temporary files
+*.log
+*.swp
+*~
+
+# OS-specific
+.DS_Store
+
+# IDE/editor settings
+.vscode/
+.idea/
+
+# Local packaging/runtime artifacts (if created)
+/usr/local/lib/kms_mpv_compositor/
+/usr/local/bin/kms_mpv_compositor.bin

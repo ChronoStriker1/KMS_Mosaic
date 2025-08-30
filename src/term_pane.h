@@ -15,6 +15,7 @@ typedef struct {
 term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *cmd, char *const argv[]);
 term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const char *shell_cmd);
 void term_pane_destroy(term_pane *tp);
+void term_pane_respawn(term_pane *tp);
 
 // Resize pane (recreate buffers and send TIOCSWINSZ)
 void term_pane_resize(term_pane *tp, const pane_layout *layout);

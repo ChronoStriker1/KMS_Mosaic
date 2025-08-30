@@ -60,6 +60,10 @@ struct term_pane {
 
     font_ctx font;
     pane_tex surface;
+
+    int use_shell_cmd;
+    char *shell_cmd;
+    char **argv_dup;
 };
 
 static void die(const char *msg) {
@@ -274,6 +278,15 @@ static int spawn_pty_shell(const char *cmd, int *master_out) {
     return pid;
 }
 
+static char **dup_argv(char *const argv[]){
+    size_t n=0; while (argv && argv[n]) n++;
+    char **copy = calloc(n+1, sizeof(char*));
+    for (size_t i=0;i<n;i++) copy[i] = strdup(argv[i]);
+    copy[n]=NULL; return copy;
+}
+
+static void free_argv(char **argv){ if(!argv) return; for (size_t i=0; argv[i]; i++) free(argv[i]); free(argv); }
+
 static int sattr_to_rgb_idx(const VTermScreenCell *cell, int is_fg) {
     VTermColor c = is_fg ? cell->fg : cell->bg;
     // libvterm represents default fg/bg as distinct enum values
@@ -369,6 +382,9 @@ term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *
     term_pane *tp = calloc(1, sizeof *tp);
     tp->layout = *layout;
     (void)cmd; // cmd is informational; argv drives exec
+    tp->use_shell_cmd = 0;
+    tp->shell_cmd = NULL;
+    tp->argv_dup = dup_argv(argv);
     // Font
     font_init(&tp->font, font_px > 0 ? font_px : 18);
     // Adjust cols/rows to pane size
@@ -408,6 +424,9 @@ term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const ch
     term_pane *tp = calloc(1, sizeof *tp);
     tp->layout = *layout;
     font_init(&tp->font, font_px > 0 ? font_px : 18);
+    tp->use_shell_cmd = 1;
+    tp->shell_cmd = strdup(shell_cmd);
+    tp->argv_dup = NULL;
     tp->layout.cols = tp->layout.w / tp->font.cell_w;
     tp->layout.rows = tp->layout.h / tp->font.cell_h;
     if (tp->layout.cols < 10) tp->layout.cols = 10;
@@ -437,6 +456,8 @@ void term_pane_destroy(term_pane *tp) {
     pane_tex_destroy(&tp->surface);
     font_destroy(&tp->font);
     if (tp->vt) vterm_free(tp->vt);
+    if (tp->shell_cmd) free(tp->shell_cmd);
+    if (tp->argv_dup) free_argv(tp->argv_dup);
     free(tp);
 }
 
@@ -462,11 +483,38 @@ bool term_pane_poll(term_pane *tp) {
         vterm_input_write(tp->vt, buf, (size_t)n);
         changed = true;
     }
+    // Check if child exited and respawn if needed
+    if (tp->child_pid > 0) {
+        int status=0; pid_t r = waitpid(tp->child_pid, &status, WNOHANG);
+        if (r == tp->child_pid) {
+            term_pane_respawn(tp);
+            changed = true;
+        }
+    }
     if (changed) {
         // Mark dirty and rebuild without flushing callbacks (none registered)
         rebuild_surface(tp);
     }
     return changed;
+}
+
+void term_pane_respawn(term_pane *tp) {
+    if (!tp) return;
+    if (tp->pty_master>=0) { close(tp->pty_master); tp->pty_master = -1; }
+    if (tp->use_shell_cmd) {
+        tp->child_pid = spawn_pty_shell(tp->shell_cmd ? tp->shell_cmd : "/bin/sh", &tp->pty_master);
+    } else {
+        char *fallback_argv[] = { "/bin/sh", "-l", NULL };
+        char **argv = tp->argv_dup ? tp->argv_dup : fallback_argv;
+        tp->child_pid = spawn_pty_argv(argv, &tp->pty_master);
+    }
+    fcntl(tp->pty_master, F_SETFL, O_NONBLOCK);
+    // Reapply size to PTY
+    int cols = tp->layout.w / tp->font.cell_w;
+    int rows = tp->layout.h / tp->font.cell_h;
+    if (cols < 10) cols = 10; if (rows < 5) rows = 5;
+    vterm_set_size(tp->vt, rows, cols);
+    set_pty_winsize(tp->pty_master, cols, rows);
 }
 
 void term_pane_render(term_pane *tp, int fb_w, int fb_h) {
