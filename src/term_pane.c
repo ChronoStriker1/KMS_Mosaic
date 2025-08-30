@@ -24,6 +24,12 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
+// Safe libvterm state callbacks (no-ops) to avoid null deref in some builds
+static int tp_settermprop(VTermProp prop, VTermValue *val, void *user) {
+    (void)prop; (void)val; (void)user; return 1;
+}
+static int tp_state_resize(int rows, int cols, VTermPos *delta, void *user) { (void)rows; (void)cols; (void)delta; (void)user; return 1; }
+
 typedef struct {
     uint32_t codepoint;
     int w, h, bearing_x, bearing_y, advance;
@@ -137,7 +143,7 @@ static void pane_tex_destroy(pane_tex *t) {
 }
 
 // Very small shader to draw the pane texture
-static GLuint pane_program = 0, pane_vao = 0, pane_vbo = 0;
+static GLuint pane_program = 0, pane_vbo = 0;
 static GLint u_tex = -1, a_pos = -1, a_uv = -1;
 
 static GLuint compile_shader(GLenum type, const char *src) {
@@ -146,8 +152,11 @@ static GLuint compile_shader(GLenum type, const char *src) {
     glCompileShader(s);
     GLint ok = 0; glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
     if (!ok) {
-        char log[512]; glGetShaderInfoLog(s, sizeof log, NULL, log);
-        fprintf(stderr, "shader error: %s\n", log);
+        char log[1024]; GLsizei ln=0; log[0]='\0';
+        glGetShaderInfoLog(s, sizeof log, &ln, log);
+        fprintf(stderr, "pane shader compile failed (%s): %.*s\nSource:\n%.*s\n",
+                type==GL_VERTEX_SHADER?"vertex":"fragment",
+                ln, log, 200, src);
         exit(1);
     }
     return s;
@@ -156,11 +165,17 @@ static GLuint compile_shader(GLenum type, const char *src) {
 static void ensure_pane_program(void) {
     if (pane_program) return;
     const char *vs =
+        "#version 100\n"
+        "#ifdef GL_ES\n"
+        "precision mediump float;\n"
+        "precision mediump int;\n"
+        "#endif\n"
         "attribute vec2 a_pos;\n"
         "attribute vec2 a_uv;\n"
         "varying vec2 v_uv;\n"
         "void main(){ v_uv=a_uv; gl_Position=vec4(a_pos,0.0,1.0);}";
     const char *fs =
+        "#version 100\n"
         "precision mediump float;\n"
         "varying vec2 v_uv;\n"
         "uniform sampler2D u_tex;\n"
@@ -204,7 +219,10 @@ static void draw_textured_quad(GLuint tex, int x, int y, int w, int h, int fb_w,
     glVertexAttribPointer(a_pos, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
     glEnableVertexAttribArray(a_uv);
     glVertexAttribPointer(a_uv, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)(2*sizeof(float)));
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDisable(GL_BLEND);
 }
 
 static void set_pty_winsize(int pty_fd, int cols, int rows) {
@@ -258,7 +276,9 @@ static int spawn_pty_shell(const char *cmd, int *master_out) {
 
 static int sattr_to_rgb_idx(const VTermScreenCell *cell, int is_fg) {
     VTermColor c = is_fg ? cell->fg : cell->bg;
-    if (c.type == VTERM_COLOR_DEFAULT) return is_fg ? 7 : 0;
+    // libvterm represents default fg/bg as distinct enum values
+    if (c.type == VTERM_COLOR_DEFAULT_FG || c.type == VTERM_COLOR_DEFAULT_BG)
+        return is_fg ? 7 : 0; // white fg / black bg defaults
     if (c.type == VTERM_COLOR_INDEXED) return c.indexed.idx;
     if (c.type == VTERM_COLOR_RGB) {
         // Find closest in 256 palette
@@ -304,19 +324,24 @@ static void composite_cell(font_ctx *font, pane_tex *tex, int cx, int cy, const 
     rgb8 fgc = color_from_index(sattr_to_rgb_idx(cell, 1));
     int gx = x0 + (font->cell_w - g.w)/2 + g.bearing_x;
     int gy = y0 + font->baseline - g.bearing_y;
-    for (int yy=0; yy<g.h; yy++) {
-        int py = gy + yy; if (py<y0||py>=y1) continue;
-        uint8_t *row = tex->pixels + (size_t)py * tex->tex_w * 4 + gx * 4;
-        for (int xx=0; xx<g.w; xx++) {
-            int px = gx + xx; if (px<x0||px>=x1) continue;
-            uint8_t a = g.bitmap[yy*g.w + xx];
-            if (a) {
-                // alpha blend over background
-                uint8_t *p = row + xx*4;
-                p[0] = (uint8_t)((fgc.r * a + p[0]*(255-a))/255);
-                p[1] = (uint8_t)((fgc.g * a + p[1]*(255-a))/255);
-                p[2] = (uint8_t)((fgc.b * a + p[2]*(255-a))/255);
-                p[3] = 255;
+    // Clip horizontally to avoid negative pointer math when bearing_x shifts left
+    int clip_x0 = gx < x0 ? x0 : gx;
+    int clip_x1 = (gx + g.w) > x1 ? x1 : (gx + g.w);
+    if (clip_x0 < clip_x1) {
+        for (int yy=0; yy<g.h; yy++) {
+            int py = gy + yy; if (py<y0||py>=y1) continue;
+            int xx0 = clip_x0 - gx; // start within glyph bitmap
+            int xx1 = clip_x1 - gx; // end within glyph bitmap
+            uint8_t *row = tex->pixels + (size_t)py * tex->tex_w * 4 + clip_x0 * 4;
+            for (int xx=xx0; xx<xx1; xx++) {
+                uint8_t a = g.bitmap[yy*g.w + xx];
+                if (a) {
+                    uint8_t *p = row + (xx - xx0)*4;
+                    p[0] = (uint8_t)((fgc.r * a + p[0]*(255-a))/255);
+                    p[1] = (uint8_t)((fgc.g * a + p[1]*(255-a))/255);
+                    p[2] = (uint8_t)((fgc.b * a + p[2]*(255-a))/255);
+                    p[3] = 255;
+                }
             }
         }
     }
@@ -343,6 +368,7 @@ static void rebuild_surface(term_pane *tp) {
 term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *cmd, char *const argv[]) {
     term_pane *tp = calloc(1, sizeof *tp);
     tp->layout = *layout;
+    (void)cmd; // cmd is informational; argv drives exec
     // Font
     font_init(&tp->font, font_px > 0 ? font_px : 18);
     // Adjust cols/rows to pane size
@@ -354,11 +380,14 @@ term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *
     // VTerm
     tp->vt = vterm_new(tp->layout.rows, tp->layout.cols);
     vterm_set_utf8(tp->vt, 1);
+    // Do not install VTermState callbacks to avoid ABI mismatches between
+    // headers and shared library across distros. Use default state behavior.
+    VTermState *st = vterm_obtain_state(tp->vt); (void)st;
     tp->vts = vterm_obtain_screen(tp->vt);
     vterm_screen_enable_altscreen(tp->vts, 1);
     vterm_screen_reset(tp->vts, 1);
     vterm_screen_set_damage_merge(tp->vts, VTERM_DAMAGE_SCROLL);
-    vterm_screen_set_callbacks(tp->vts, &(VTermScreenCallbacks){ .damage=screen_damage }, tp);
+    // Avoid setting screen callbacks to prevent ABI mismatches; mark dirty on input instead.
 
     // PTY child
     tp->child_pid = spawn_pty_argv(argv, &tp->pty_master);
@@ -385,11 +414,12 @@ term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const ch
     if (tp->layout.rows < 5) tp->layout.rows = 5;
     tp->vt = vterm_new(tp->layout.rows, tp->layout.cols);
     vterm_set_utf8(tp->vt, 1);
+    VTermState *st2 = vterm_obtain_state(tp->vt); (void)st2;
     tp->vts = vterm_obtain_screen(tp->vt);
     vterm_screen_enable_altscreen(tp->vts, 1);
     vterm_screen_reset(tp->vts, 1);
     vterm_screen_set_damage_merge(tp->vts, VTERM_DAMAGE_SCROLL);
-    vterm_screen_set_callbacks(tp->vts, &(VTermScreenCallbacks){ .damage=screen_damage }, tp);
+    // Avoid setting screen callbacks to prevent ABI mismatches; mark dirty on input instead.
     tp->child_pid = spawn_pty_shell(shell_cmd, &tp->pty_master);
     fcntl(tp->pty_master, F_SETFL, O_NONBLOCK);
     set_pty_winsize(tp->pty_master, tp->layout.cols, tp->layout.rows);
@@ -414,7 +444,8 @@ void term_pane_resize(term_pane *tp, const pane_layout *layout) {
     tp->layout = *layout;
     int cols = tp->layout.w / tp->font.cell_w;
     int rows = tp->layout.h / tp->font.cell_h;
-    if (cols<10) cols=10; if (rows<5) rows=5;
+    if (cols < 10) cols = 10;
+    if (rows < 5) rows = 5;
     vterm_set_size(tp->vt, rows, cols);
     set_pty_winsize(tp->pty_master, cols, rows);
     pane_tex_destroy(&tp->surface);
@@ -432,8 +463,7 @@ bool term_pane_poll(term_pane *tp) {
         changed = true;
     }
     if (changed) {
-        // Drain screen damage callbacks
-        vterm_screen_flush_damage(tp->vts);
+        // Mark dirty and rebuild without flushing callbacks (none registered)
         rebuild_surface(tp);
     }
     return changed;
@@ -452,5 +482,45 @@ void term_pane_render(term_pane *tp, int fb_w, int fb_h) {
 
 void term_pane_send_input(term_pane *tp, const char *buf, size_t len) {
     if (!tp) return;
-    (void)write(tp->pty_master, buf, len);
+    ssize_t n = write(tp->pty_master, buf, len);
+    (void)n;
+}
+
+bool term_measure_cell(int font_px, int *cell_w, int *cell_h) {
+    font_ctx f = {0};
+    if (font_px <= 0) font_px = 18;
+    // Initialize a temporary freetype face via fontconfig monospace
+    if (FT_Init_FreeType(&f.ftlib)) return false;
+    char *path = find_monospace_font();
+    if (!path) { FT_Done_FreeType(f.ftlib); return false; }
+    if (FT_New_Face(f.ftlib, path, 0, &f.face)) { free(path); FT_Done_FreeType(f.ftlib); return false; }
+    free(path);
+    FT_Set_Pixel_Sizes(f.face, 0, font_px);
+    FT_Load_Char(f.face, 'M', FT_LOAD_RENDER);
+    int cw = (f.face->glyph->advance.x + 31) / 64;
+    int ch = font_px + 2;
+    FT_Done_Face(f.face);
+    FT_Done_FreeType(f.ftlib);
+    if (cell_w) *cell_w = cw;
+    if (cell_h) *cell_h = ch;
+    return true;
+}
+
+void term_pane_set_font_px(term_pane *tp, int font_px) {
+    if (!tp) return;
+    if (font_px <= 0) font_px = 18;
+    // Recreate font
+    font_destroy(&tp->font);
+    font_init(&tp->font, font_px);
+    // Update grid based on new cell size
+    int cols = tp->layout.w / tp->font.cell_w;
+    int rows = tp->layout.h / tp->font.cell_h;
+    if (cols < 10) cols = 10;
+    if (rows < 5) rows = 5;
+    vterm_set_size(tp->vt, rows, cols);
+    set_pty_winsize(tp->pty_master, cols, rows);
+    // Recreate texture surface
+    pane_tex_destroy(&tp->surface);
+    pane_tex_init(&tp->surface, cols*tp->font.cell_w, rows*tp->font.cell_h);
+    rebuild_surface(tp);
 }

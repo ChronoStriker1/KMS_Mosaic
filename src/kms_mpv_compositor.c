@@ -12,9 +12,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <termios.h>
 #include <ctype.h>
+#include <signal.h>
+#ifdef __linux__
+#include <execinfo.h>
+#endif
+#include <dirent.h>
 
 #include <drm.h>
 #include <xf86drm.h>
@@ -31,6 +37,9 @@
 #include "term_pane.h"
 #include "osd.h"
 
+// Forward declaration for GL error checker used before its definition
+static void gl_check(const char *stage);
+
 typedef struct {
     int fd;
     drmModeRes *res;
@@ -46,6 +55,7 @@ typedef struct {
     struct gbm_surface *surface;
     struct gbm_bo *bo, *next_bo;
     uint32_t fb_id;
+    int w, h; // cached dimensions
 } gbm_ctx;
 
 typedef struct {
@@ -86,9 +96,22 @@ typedef struct {
     const char *pane_b_cmd;    // shell command for bottom-right
     bool list_connectors;
     bool no_video;
+    bool no_panes;
+    bool gl_test;
+    bool diag;
     bool loop_file;
     bool loop_playlist;
     bool shuffle;
+    bool no_osd;
+    bool loop_flag;           // --loop shorthand for loop-file=inf
+    int video_rotate;         // passthrough to mpv video-rotate (-1 unset)
+    const char *panscan;      // passthrough to mpv panscan value
+    bool no_config;           // skip loading default config file
+    bool smooth;              // apply a sensible playback preset
+    // Portrait layout: stack3, 2x1 (two top columns, one bottom), 1x2 (one top, two bottom)
+    int portrait_layout;      // 0=stack3,1=2x1,2=1x2
+    // Landscape layout: stack3 (3 rows), row3 (3 columns), 2x1 (left split rows, right full), 1x2 (left full, right split rows)
+    int landscape_layout;     // 0=stack3,1=row3,2=2x1,3=1x2
     const char **mpv_opts; int n_mpv_opts; int cap_mpv_opts; // global mpv opts key=val
     const char *config_file; const char *save_config_file; bool save_config_default;
 } options_t;
@@ -98,9 +121,52 @@ static struct termios g_oldt;
 static int g_have_oldt = 0;
 static void restore_tty(void){ if (g_have_oldt) tcsetattr(0, TCSANOW, &g_oldt); }
 
+static int g_debug = 0;
+static void dbg(const char *fmt, ...){
+    if(!g_debug) return;
+    va_list ap; va_start(ap, fmt); vfprintf(stderr, fmt, ap); va_end(ap);
+}
+
+static volatile sig_atomic_t g_stop = 0;
+static void handle_stop(int sig){ (void)sig; g_stop = 1; }
+
+static void dump_bt_and_exit(int sig){
+    fprintf(stderr, "\nCaught signal %d. Dumping backtrace...\n", sig);
+#ifdef __linux__
+    void *buf[64]; int n = backtrace(buf, 64);
+    backtrace_symbols_fd(buf, n, 2);
+#endif
+    _exit(128+sig);
+}
+
+static void install_signal_handlers(void){
+    struct sigaction sa; memset(&sa, 0, sizeof sa);
+    sa.sa_handler = dump_bt_and_exit; sa.sa_flags = SA_RESETHAND;
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
+    sigaction(SIGFPE,  &sa, NULL);
+    sigaction(SIGILL,  &sa, NULL);
+
+    // Graceful termination on SIGTERM (Ctrl+C not used to quit)
+    struct sigaction sb; memset(&sb, 0, sizeof sb);
+    sb.sa_handler = handle_stop; sb.sa_flags = 0;
+    sigaction(SIGTERM, &sb, NULL);
+}
+
 static void die(const char *msg) {
     perror(msg);
     exit(1);
+}
+
+static void advise_no_drm(void) {
+    fprintf(stderr,
+        "No DRM device found (expected /dev/dri/card[0-2]).\n"
+        "This program must run on a Linux console with KMS/DRM available.\n"
+        "Tips:\n"
+        "  - Ensure GPU drivers are loaded (e.g., i915/amdgpu/nouveau).\n"
+        "  - On Unraid, enable the iGPU or pass the GPU through, and expose /dev/dri.\n"
+        "  - If running in a container, pass --device=/dev/dri and required privileges.\n"
+        "  - Run from a real TTY; mode setting requires DRM master (often root).\n");
 }
 
 static int open_drm_card(void) {
@@ -111,8 +177,143 @@ static int open_drm_card(void) {
         int fd = open(candidates[i], O_RDWR | O_CLOEXEC);
         if (fd >= 0) return fd;
     }
+    advise_no_drm();
+    errno = ENODEV;
     die("open_drm_card");
     return -1;
+}
+
+static void advise_dri_drivers(void) {
+    fprintf(stderr,
+        "DRM device opened, but GBM/EGL failed to create a window surface.\n"
+        "Likely missing Mesa GBM/EGL or DRI driver files for your GPU.\n"
+        "Check these locations for DRI drivers (should contain e.g. iris_dri.so/radeonsi_dri.so):\n"
+        "  - /usr/lib64/dri\n"
+        "  - /usr/lib/x86_64-linux-gnu/dri\n"
+        "On Unraid, install the GPU plugin or Mesa packages providing DRI.\n");
+}
+
+static void warn_if_missing_dri(void) {
+    const char *paths[] = {
+        "/usr/lib64/dri",
+        "/usr/lib/x86_64-linux-gnu/dri",
+        "/usr/lib/aarch64-linux-gnu/dri",
+        NULL
+    };
+    int found = 0;
+    for (int i=0; paths[i]; ++i) {
+        if (access(paths[i], R_OK) == 0) { found = 1; break; }
+    }
+    if (!found) {
+        fprintf(stderr,
+            "Warning: No standard DRI driver directories found.\n"
+            "EGL/GBM may fail to create a surface. Ensure Mesa DRI drivers are installed.\n");
+    }
+}
+
+static void preflight_expect_dri_driver(void) {
+    // Probe vendor id via sysfs
+    unsigned vendor = 0;
+    FILE *vf = fopen("/sys/class/drm/card0/device/vendor", "r");
+    if (vf) { if (fscanf(vf, "%x", &vendor) != 1) vendor = 0; fclose(vf); }
+    const char *vendor_name = "unknown";
+    const char *expect_primary = NULL;
+    const char *expect_alt = NULL;
+    switch (vendor) {
+        case 0x8086: vendor_name = "Intel"; expect_primary = "iris_dri.so"; expect_alt = "i965_dri.so"; break;
+        case 0x1002: vendor_name = "AMD"; expect_primary = "radeonsi_dri.so"; expect_alt = "r600_dri.so"; break;
+        case 0x10de: vendor_name = "NVIDIA"; expect_primary = "nouveau_dri.so"; expect_alt = NULL; break;
+        default: vendor_name = "Unknown"; expect_primary = ""; expect_alt = NULL; break;
+    }
+    const char *paths[] = {
+        "/usr/lib64/dri",
+        "/usr/lib/x86_64-linux-gnu/dri",
+        "/usr/lib/aarch64-linux-gnu/dri",
+        NULL
+    };
+    int found = 0;
+    for (int i=0; paths[i]; ++i) {
+        if (!paths[i]) break;
+        char buf1[512], buf2[512];
+        if (expect_primary && *expect_primary) {
+            snprintf(buf1, sizeof buf1, "%s/%s", paths[i], expect_primary);
+            if (access(buf1, R_OK) == 0) { found = 1; break; }
+        }
+        if (expect_alt && *expect_alt) {
+            snprintf(buf2, sizeof buf2, "%s/%s", paths[i], expect_alt);
+            if (access(buf2, R_OK) == 0) { found = 1; break; }
+        }
+    }
+    if (!found) {
+        fprintf(stderr,
+                "Preflight: Detected GPU vendor: %s (0x%04x).\n",
+                vendor_name, vendor);
+        if (expect_primary && *expect_primary) {
+            fprintf(stderr,
+                "Expected DRI driver file: %s%s%s\n",
+                expect_primary,
+                expect_alt?" (or ":"",
+                expect_alt?expect_alt:"");
+            if (expect_alt) fprintf(stderr, ")\n"); else fprintf(stderr, "\n");
+        } else {
+            fprintf(stderr,
+                "Could not determine a specific DRI driver. Ensure Mesa DRI drivers are installed.\n");
+        }
+        fprintf(stderr,
+            "Check directories: /usr/lib64/dri, /usr/lib/x86_64-linux-gnu/dri.\n"
+            "On Unraid, install the GPU plugin or Mesa packages that provide these files.\n"
+            "Note: NVIDIA proprietary driver is not supported by Mesa GBM; nouveau is required for GBM.\n");
+
+        // Try software rasterizer fallback if no driver present
+        // kms_swrast provides a GBM-compatible software path
+        setenv("MESA_LOADER_DRIVER_OVERRIDE", "kms_swrast", 1);
+        setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+        fprintf(stderr,
+            "Attempting software rasterizer fallback (MESA_LOADER_DRIVER_OVERRIDE=kms_swrast).\n");
+    }
+}
+
+static void preflight_expect_dri_driver_diag(void) {
+    unsigned vendor = 0;
+    FILE *vf = fopen("/sys/class/drm/card0/device/vendor", "r");
+    if (vf) { if (fscanf(vf, "%x", &vendor) != 1) vendor = 0; fclose(vf); }
+    const char *vendor_name = "unknown";
+    const char *expect_primary = NULL;
+    const char *expect_alt = NULL;
+    switch (vendor) {
+        case 0x8086: vendor_name = "Intel"; expect_primary = "iris_dri.so"; expect_alt = "i965_dri.so"; break;
+        case 0x1002: vendor_name = "AMD"; expect_primary = "radeonsi_dri.so"; expect_alt = "r600_dri.so"; break;
+        case 0x10de: vendor_name = "NVIDIA"; expect_primary = "nouveau_dri.so"; expect_alt = NULL; break;
+        default: vendor_name = "Unknown"; expect_primary = ""; expect_alt = NULL; break;
+    }
+    const char *paths[] = {
+        "/usr/lib64/dri",
+        "/usr/lib/x86_64-linux-gnu/dri",
+        "/usr/lib/aarch64-linux-gnu/dri",
+        NULL
+    };
+    int found = 0;
+    for (int i=0; paths[i]; ++i) {
+        if (!paths[i]) break;
+        char buf1[512], buf2[512];
+        if (expect_primary && *expect_primary) {
+            snprintf(buf1, sizeof buf1, "%s/%s", paths[i], expect_primary);
+            if (access(buf1, R_OK) == 0) { found = 1; break; }
+        }
+        if (expect_alt && *expect_alt) {
+            snprintf(buf2, sizeof buf2, "%s/%s", paths[i], expect_alt);
+            if (access(buf2, R_OK) == 0) { found = 1; break; }
+        }
+    }
+    fprintf(stderr, "Diag: GPU vendor: %s (0x%04x)\n", vendor_name, vendor);
+    if (expect_primary && *expect_primary) {
+        fprintf(stderr, "Diag: Expected DRI: %s%s%s\n",
+            expect_primary, expect_alt?" or ":"", expect_alt?expect_alt:"");
+    }
+    for (int i=0; paths[i]; ++i) {
+        fprintf(stderr, "Diag: DRI dir %s: %s\n", paths[i], access(paths[i], R_OK)==0?"present":"missing");
+    }
+    fprintf(stderr, "Diag: DRI driver present: %s\n", found?"yes":"no");
 }
 
 static const char* conn_type_str(uint32_t type) {
@@ -147,7 +348,11 @@ static bool mode_matches(const drmModeModeInfo *m, int w, int h, int hz) {
 }
 
 static bool str_is_digits(const char *s) {
-    if (!s||!*s) return false; for (const char *p=s; *p; ++p) if (*p<'0'||*p>'9') return false; return true;
+    if (!s || !*s) return false;
+    for (const char *p = s; *p; ++p) {
+        if (*p < '0' || *p > '9') return false;
+    }
+    return true;
 }
 
 static void pick_connector_mode(drm_ctx *d, const options_t *opt) {
@@ -194,6 +399,9 @@ static void pick_connector_mode(drm_ctx *d, const options_t *opt) {
     if (!best_conn) die("no suitable connector/mode");
     d->conn = best_conn;
     d->conn_id = best_conn->connector_id;
+    dbg("DRM: selected connector %u (%s-%u), mode %dx%d@?\n",
+        d->conn_id, conn_type_str(best_conn->connector_type), best_conn->connector_type_id,
+        best_mode.hdisplay, best_mode.vdisplay);
 
     // Find an encoder + CRTC
     drmModeEncoder *enc = NULL;
@@ -232,30 +440,162 @@ static void gbm_init(gbm_ctx *g, int drm_fd, int w, int h) {
     g->surface = gbm_surface_create(g->dev, w, h, GBM_FORMAT_XRGB8888,
                                     GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
     if (!g->surface) die("gbm_surface_create");
+    g->w = w; g->h = h;
+    dbg("GBM: device+surface created %dx%d, format=XRGB8888\n", w, h);
+}
+
+static EGLConfig find_config_for_format(EGLDisplay dpy, EGLint renderable_type, EGLBoolean want_alpha, uint32_t fourcc)
+{
+    EGLint num = 0;
+    EGLint attrs[] = {
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_RED_SIZE, 8,
+        EGL_GREEN_SIZE, 8,
+        EGL_BLUE_SIZE, 8,
+        EGL_ALPHA_SIZE, want_alpha ? 8 : 0,
+        EGL_RENDERABLE_TYPE, renderable_type,
+        EGL_NONE
+    };
+    eglChooseConfig(dpy, attrs, NULL, 0, &num);
+    if (num <= 0) return NULL;
+    EGLConfig *cfgs = calloc((size_t)num, sizeof *cfgs);
+    if (!cfgs) return NULL;
+    eglChooseConfig(dpy, attrs, cfgs, num, &num);
+    EGLConfig match = NULL;
+    for (EGLint i=0; i<num; i++) {
+        EGLint id = 0; eglGetConfigAttrib(dpy, cfgs[i], EGL_NATIVE_VISUAL_ID, &id);
+        if ((uint32_t)id == fourcc) { match = cfgs[i]; break; }
+    }
+    if (!match && num>0) match = cfgs[0];
+    EGLConfig ret = match;
+    free(cfgs);
+    return ret;
+}
+
+static const char* egl_err_str(EGLint ecode){
+    switch(ecode){
+        case EGL_SUCCESS: return "EGL_SUCCESS";
+        case EGL_NOT_INITIALIZED: return "EGL_NOT_INITIALIZED";
+        case EGL_BAD_ACCESS: return "EGL_BAD_ACCESS";
+        case EGL_BAD_ALLOC: return "EGL_BAD_ALLOC";
+        case EGL_BAD_ATTRIBUTE: return "EGL_BAD_ATTRIBUTE";
+        case EGL_BAD_CONTEXT: return "EGL_BAD_CONTEXT";
+        case EGL_BAD_CONFIG: return "EGL_BAD_CONFIG";
+        case EGL_BAD_CURRENT_SURFACE: return "EGL_BAD_CURRENT_SURFACE";
+        case EGL_BAD_DISPLAY: return "EGL_BAD_DISPLAY";
+        case EGL_BAD_SURFACE: return "EGL_BAD_SURFACE";
+        case EGL_BAD_MATCH: return "EGL_BAD_MATCH";
+        case EGL_BAD_PARAMETER: return "EGL_BAD_PARAMETER";
+        case EGL_BAD_NATIVE_PIXMAP: return "EGL_BAD_NATIVE_PIXMAP";
+        case EGL_BAD_NATIVE_WINDOW: return "EGL_BAD_NATIVE_WINDOW";
+        default: return "EGL_ERROR";
+    }
+}
+
+static void dbg_print_config(EGLDisplay dpy, EGLConfig cfg){
+    if(!g_debug || !cfg) return;
+    EGLint val=0;
+    eglGetConfigAttrib(dpy, cfg, EGL_RENDERABLE_TYPE, &val);
+    fprintf(stderr, "EGL cfg renderable: 0x%x\n", val);
+    eglGetConfigAttrib(dpy, cfg, EGL_NATIVE_VISUAL_ID, &val);
+    fprintf(stderr, "EGL cfg native_visual_id: 0x%x\n", val);
+    eglGetConfigAttrib(dpy, cfg, EGL_BUFFER_SIZE, &val);
+    fprintf(stderr, "EGL cfg buffer_size: %d\n", val);
 }
 
 static void egl_init(egl_ctx *e, gbm_ctx *g) {
     e->dpy = eglGetDisplay((EGLNativeDisplayType)g->dev);
     if (e->dpy == EGL_NO_DISPLAY) die("eglGetDisplay");
     if (!eglInitialize(e->dpy, NULL, NULL)) die("eglInitialize");
-    static const EGLint cfg_attribs[] = {
-        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-        EGL_RED_SIZE, 8,
-        EGL_GREEN_SIZE, 8,
-        EGL_BLUE_SIZE, 8,
-        EGL_ALPHA_SIZE, 0,
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-        EGL_NONE
-    };
-    EGLint ncfg;
-    if (!eglChooseConfig(e->dpy, cfg_attribs, &e->cfg, 1, &ncfg) || ncfg != 1)
-        die("eglChooseConfig");
+    if (g_debug) {
+        const char *egl_ver = eglQueryString(e->dpy, EGL_VERSION);
+        const char *egl_vendor = eglQueryString(e->dpy, EGL_VENDOR);
+        fprintf(stderr, "EGL initialized: version=%s, vendor=%s\n",
+                egl_ver?egl_ver:"?", egl_vendor?egl_vendor:"?");
+    }
+    if (g_debug) fprintf(stderr, "EGL: binding API EGL_OPENGL_ES_API\n");
+    eglBindAPI(EGL_OPENGL_ES_API);
+
+    // Try to match the GBM surface format first (XRGB8888), else fallback to ARGB8888 and recreate GBM surface
+    EGLint renderable = EGL_OPENGL_ES2_BIT;
+    if (g_debug) fprintf(stderr, "EGL: choosing config for XRGB8888...\n");
+    EGLConfig cfg = find_config_for_format(e->dpy, renderable, EGL_FALSE, GBM_FORMAT_XRGB8888);
+    if (!cfg) cfg = find_config_for_format(e->dpy, renderable, EGL_TRUE, GBM_FORMAT_ARGB8888);
+    e->cfg = cfg;
+    if (!e->cfg) die("eglChooseConfig");
+    if (g_debug) fprintf(stderr, "EGL: got config %p\n", (void*)e->cfg);
+    dbg_print_config(e->dpy, e->cfg);
+
     static const EGLint ctx_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
+    if (g_debug) fprintf(stderr, "EGL: creating context...\n");
     e->ctx = eglCreateContext(e->dpy, e->cfg, EGL_NO_CONTEXT, ctx_attribs);
     if (e->ctx == EGL_NO_CONTEXT) die("eglCreateContext");
+    if (g_debug) fprintf(stderr, "EGL: context %p created\n", (void*)e->ctx);
+
+    if (g_debug) fprintf(stderr, "EGL: creating window surface...\n");
     e->surf = eglCreateWindowSurface(e->dpy, e->cfg, (EGLNativeWindowType)g->surface, NULL);
-    if (e->surf == EGL_NO_SURFACE) die("eglCreateWindowSurface");
+    if (e->surf == EGL_NO_SURFACE) {
+        // Fallback: recreate GBM surface with ARGB8888 and try again
+        EGLint err = eglGetError();
+        fprintf(stderr, "eglCreateWindowSurface failed: %s. Retrying with ARGB8888...\n", egl_err_str(err));
+        int w = g->w;
+        int h = g->h;
+        gbm_surface_destroy(g->surface);
+        g->surface = gbm_surface_create(g->dev, (uint32_t)w, (uint32_t)h, GBM_FORMAT_ARGB8888,
+                                        GBM_BO_USE_SCANOUT | GBM_BO_USE_RENDERING);
+        if (!g->surface) die("gbm_surface_create ARGB8888");
+        e->cfg = find_config_for_format(e->dpy, renderable, EGL_TRUE, GBM_FORMAT_ARGB8888);
+        if (!e->cfg) die("eglChooseConfig ARGB8888");
+        if (g_debug) fprintf(stderr, "EGL: retrying window surface with ARGB8888...\n");
+        e->surf = eglCreateWindowSurface(e->dpy, e->cfg, (EGLNativeWindowType)g->surface, NULL);
+        if (e->surf == EGL_NO_SURFACE) {
+            EGLint err2 = eglGetError();
+            fprintf(stderr, "eglCreateWindowSurface still failing: %s\n", egl_err_str(err2));
+            advise_dri_drivers();
+            die("eglCreateWindowSurface");
+        }
+    }
+    if (g_debug) fprintf(stderr, "EGL: making context current...\n");
     if (!eglMakeCurrent(e->dpy, e->surf, e->surf, e->ctx)) die("eglMakeCurrent");
+    if (g_debug) {
+        EGLContext cur = eglGetCurrentContext();
+        EGLSurface draw = eglGetCurrentSurface(EGL_DRAW);
+        EGLDisplay dcur = eglGetCurrentDisplay();
+        fprintf(stderr, "EGL current: ctx=%p draw=%p dpy=%p\n", (void*)cur, (void*)draw, (void*)dcur);
+    }
+    const char *renderer = (const char*)glGetString(GL_RENDERER);
+    const char *vendor = (const char*)glGetString(GL_VENDOR);
+    if (renderer && vendor)
+        fprintf(stderr, "EGL/GL renderer: %s (%s)\n", renderer, vendor);
+    gl_check("after eglMakeCurrent");
+    if (!renderer || !vendor) {
+        fprintf(stderr, "EGL: GL strings unavailable. Forcing software fallback (kms_swrast) and retrying...\n");
+        setenv("MESA_LOADER_DRIVER_OVERRIDE", "kms_swrast", 1);
+        setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+        eglMakeCurrent(e->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (e->ctx) { eglDestroyContext(e->dpy, e->ctx); }
+        e->ctx = EGL_NO_CONTEXT;
+        if (e->surf) { eglDestroySurface(e->dpy, e->surf); }
+        e->surf = EGL_NO_SURFACE;
+        eglTerminate(e->dpy); e->dpy = EGL_NO_DISPLAY;
+        e->dpy = eglGetDisplay((EGLNativeDisplayType)g->dev);
+        if (e->dpy == EGL_NO_DISPLAY) die("eglGetDisplay-soft");
+        if (!eglInitialize(e->dpy, NULL, NULL)) die("eglInitialize-soft");
+        eglBindAPI(EGL_OPENGL_ES_API);
+        EGLint renderable2 = EGL_OPENGL_ES2_BIT;
+        e->cfg = find_config_for_format(e->dpy, renderable2, EGL_TRUE, GBM_FORMAT_ARGB8888);
+        if (!e->cfg) die("eglChooseConfig-soft");
+        static const EGLint ctx_attribs2[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
+        e->ctx = eglCreateContext(e->dpy, e->cfg, EGL_NO_CONTEXT, ctx_attribs2);
+        if (e->ctx == EGL_NO_CONTEXT) die("eglCreateContext-soft");
+        e->surf = eglCreateWindowSurface(e->dpy, e->cfg, (EGLNativeWindowType)g->surface, NULL);
+        if (e->surf == EGL_NO_SURFACE) die("eglCreateWindowSurface-soft");
+        if (!eglMakeCurrent(e->dpy, e->surf, e->surf, e->ctx)) die("eglMakeCurrent-soft");
+        renderer = (const char*)glGetString(GL_RENDERER);
+        vendor = (const char*)glGetString(GL_VENDOR);
+        if (renderer && vendor)
+            fprintf(stderr, "EGL/GL renderer (soft): %s (%s)\n", renderer, vendor);
+    }
     eglSwapInterval(e->dpy, 1);
 }
 
@@ -282,7 +622,8 @@ static void page_flip(drm_ctx *d, gbm_ctx *g) {
     g->next_bo = gbm_surface_lock_front_buffer(g->surface);
     uint32_t fb = drm_fb_for_bo(d->fd, g->next_bo);
     // Legacy blocking flip via SetCrtc for simplicity
-    drmModeSetCrtc(d->fd, d->crtc_id, fb, 0, 0, &d->conn_id, 1, &d->mode);
+    int ret = drmModeSetCrtc(d->fd, d->crtc_id, fb, 0, 0, &d->conn_id, 1, &d->mode);
+    if (ret) fprintf(stderr, "drmModeSetCrtc (page_flip) failed: %d\n", ret);
     if (g->bo) {
         uint32_t old_fb = g->fb_id;
         gbm_surface_release_buffer(g->surface, g->bo);
@@ -292,11 +633,15 @@ static void page_flip(drm_ctx *d, gbm_ctx *g) {
     g->fb_id = fb;
 }
 
-// mpv wakeup via pipe, so we can poll
-static void mpv_wakeup(void *ctx) {
+// mpv render update wakeup via pipe, so we can poll
+static void mpv_update_wakeup(void *ctx) {
     mpv_ctx *m = (mpv_ctx *)ctx;
     uint64_t one = 1;
-    (void)write(m->wakeup_fd[1], &one, sizeof(one));
+    ssize_t n = write(m->wakeup_fd[1], &one, sizeof(one));
+    if (n < 0) {
+        // ignore EAGAIN for non-blocking pipe; best-effort wakeup
+        (void)n;
+    }
 }
 
 static void *get_proc_address(void *ctx, const char *name) {
@@ -309,22 +654,69 @@ static void gl_clear_color(float r, float g, float b, float a) {
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
+static void gl_check(const char *stage){
+    if(!g_debug) return;
+    GLenum err; int cnt=0;
+    while ((err = glGetError()) != GL_NO_ERROR) {
+        fprintf(stderr, "GL error at %s: 0x%x\n", stage, (unsigned)err);
+        if (++cnt > 8) break;
+    }
+}
+
 // Offscreen render target for logical orientation
 static GLuint rt_fbo=0, rt_tex=0; static int rt_w=0, rt_h=0;
 static GLuint blit_prog=0, blit_vbo=0; static GLint blit_u_tex=-1;
 static GLuint vid_fbo=0, vid_tex=0; static int vid_w=0, vid_h=0;
 
 static GLuint compile_shader(GLenum type, const char *src) {
-    GLuint s = glCreateShader(type); glShaderSource(s,1,&src,NULL); glCompileShader(s); GLint ok; glGetShaderiv(s,GL_COMPILE_STATUS,&ok); if(!ok){char log[512]; glGetShaderInfoLog(s,512,NULL,log); fprintf(stderr,"shader compile: %s\n",log); exit(1);} return s;
+    GLuint s = glCreateShader(type);
+    glShaderSource(s,1,&src,NULL);
+    glCompileShader(s);
+    GLint ok; glGetShaderiv(s,GL_COMPILE_STATUS,&ok);
+    if(!ok){
+        char log[1024]; GLsizei ln=0; log[0]='\0';
+        glGetShaderInfoLog(s,(GLsizei)sizeof(log),&ln,log);
+        fprintf(stderr,"shader compile failed (%s): %.*s\nSource:\n%.*s\n",
+                type==GL_VERTEX_SHADER?"vertex":"fragment",
+                ln, log,
+                200, src);
+        exit(1);
+    }
+    return s;
 }
 
-static void ensure_blit_prog(void){ if(blit_prog) return; const char* vs="attribute vec2 a_pos; attribute vec2 a_uv; varying vec2 v_uv; void main(){v_uv=a_uv; gl_Position=vec4(a_pos,0.0,1.0);}"; const char* fs="precision mediump float; varying vec2 v_uv; uniform sampler2D u_tex; void main(){ gl_FragColor = texture2D(u_tex, v_uv);}"; GLuint v=compile_shader(GL_VERTEX_SHADER,vs), f=compile_shader(GL_FRAGMENT_SHADER,fs); blit_prog=glCreateProgram(); glAttachShader(blit_prog,v); glAttachShader(blit_prog,f); glBindAttribLocation(blit_prog,0,"a_pos"); glBindAttribLocation(blit_prog,1,"a_uv"); glLinkProgram(blit_prog); GLint ok; glGetProgramiv(blit_prog,GL_LINK_STATUS,&ok); if(!ok){fprintf(stderr,"link fail\n"); exit(1);} blit_u_tex=glGetUniformLocation(blit_prog,"u_tex"); glGenBuffers(1,&blit_vbo);} 
+static void ensure_blit_prog(void){
+    if(blit_prog) return;
+    const char* vs =
+        "#version 100\n"
+        "#ifdef GL_ES\n"
+        "precision mediump float;\n"
+        "precision mediump int;\n"
+        "#endif\n"
+        "attribute vec2 a_pos;\n"
+        "attribute vec2 a_uv;\n"
+        "varying vec2 v_uv;\n"
+        "void main(){ v_uv=a_uv; gl_Position=vec4(a_pos,0.0,1.0); }";
+    const char* fs =
+        "#version 100\n"
+        "precision mediump float;\n"
+        "varying vec2 v_uv;\n"
+        "uniform sampler2D u_tex;\n"
+        "void main(){ gl_FragColor = texture2D(u_tex, v_uv); }";
+    GLuint v=compile_shader(GL_VERTEX_SHADER,vs), f=compile_shader(GL_FRAGMENT_SHADER,fs);
+    blit_prog=glCreateProgram();
+    glAttachShader(blit_prog,v); glAttachShader(blit_prog,f);
+    glBindAttribLocation(blit_prog,0,"a_pos"); glBindAttribLocation(blit_prog,1,"a_uv");
+    glLinkProgram(blit_prog); GLint ok; glGetProgramiv(blit_prog,GL_LINK_STATUS,&ok);
+    if(!ok){fprintf(stderr,"link fail\n"); exit(1);} blit_u_tex=glGetUniformLocation(blit_prog,"u_tex");
+    glGenBuffers(1,&blit_vbo);
+}
 
-static void ensure_rt(int w, int h){ if(rt_tex && (rt_w==w && rt_h==h)) return; if(rt_tex){ glDeleteTextures(1,&rt_tex); glDeleteFramebuffers(1,&rt_fbo);} rt_w=w; rt_h=h; glGenTextures(1,&rt_tex); glBindTexture(GL_TEXTURE_2D, rt_tex); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA, w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL); glGenFramebuffers(1,&rt_fbo); glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo); glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rt_tex, 0); GLenum stat=glCheckFramebufferStatus(GL_FRAMEBUFFER); if(stat!=GL_FRAMEBUFFER_COMPLETE){ fprintf(stderr,"FBO incomplete\n"); exit(1);} glBindFramebuffer(GL_FRAMEBUFFER, 0);} 
+static void ensure_rt(int w, int h){ if(rt_tex && (rt_w==w && rt_h==h)) return; if(rt_tex){ glDeleteTextures(1,&rt_tex); glDeleteFramebuffers(1,&rt_fbo);} rt_w=w; rt_h=h; glGenTextures(1,&rt_tex); glBindTexture(GL_TEXTURE_2D, rt_tex); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE); glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA, w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL); glGenFramebuffers(1,&rt_fbo); glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo); glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, rt_tex, 0); GLenum stat=glCheckFramebufferStatus(GL_FRAMEBUFFER); if(stat!=GL_FRAMEBUFFER_COMPLETE){ fprintf(stderr,"FBO incomplete\n"); exit(1);} glBindFramebuffer(GL_FRAMEBUFFER, 0);} 
 
-static void ensure_video_rt(int w, int h){ if(vid_tex && (vid_w==w && vid_h==h)) return; if(vid_tex){ glDeleteTextures(1,&vid_tex); glDeleteFramebuffers(1,&vid_fbo);} vid_w=w; vid_h=h; glGenTextures(1,&vid_tex); glBindTexture(GL_TEXTURE_2D, vid_tex); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA, w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL); glGenFramebuffers(1,&vid_fbo); glBindFramebuffer(GL_FRAMEBUFFER, vid_fbo); glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, vid_tex, 0); GLenum stat=glCheckFramebufferStatus(GL_FRAMEBUFFER); if(stat!=GL_FRAMEBUFFER_COMPLETE){ fprintf(stderr,"Video FBO incomplete\n"); exit(1);} glBindFramebuffer(GL_FRAMEBUFFER, 0);} 
+static void ensure_video_rt(int w, int h){ if(vid_tex && (vid_w==w && vid_h==h)) return; if(vid_tex){ glDeleteTextures(1,&vid_tex); glDeleteFramebuffers(1,&vid_fbo);} vid_w=w; vid_h=h; glGenTextures(1,&vid_tex); glBindTexture(GL_TEXTURE_2D, vid_tex); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE); glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA, w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL); glGenFramebuffers(1,&vid_fbo); glBindFramebuffer(GL_FRAMEBUFFER, vid_fbo); glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, vid_tex, 0); GLenum stat=glCheckFramebufferStatus(GL_FRAMEBUFFER); if(stat!=GL_FRAMEBUFFER_COMPLETE){ fprintf(stderr,"Video FBO incomplete\n"); exit(1);} glBindFramebuffer(GL_FRAMEBUFFER, 0);} 
 
-static void blit_rt_to_screen(rotation_t rot, int fb_w, int fb_h){ ensure_blit_prog(); glUseProgram(blit_prog); glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, rt_tex); glUniform1i(blit_u_tex,0); float L=-1.f,R=1.f,B=-1.f,T=1.f; float verts[24]; // 6 verts * (pos2+uv2)
+static void blit_rt_to_screen(rotation_t rot){ ensure_blit_prog(); glUseProgram(blit_prog); glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, rt_tex); glUniform1i(blit_u_tex,0); float L=-1.f,R=1.f,B=-1.f,T=1.f; float verts[24]; // 6 verts * (pos2+uv2)
     // Set UVs based on rotation
     float u0=0.f,v0=0.f,u1=1.f,v1=1.f;
     float quad[] = { L,B, u0,v1,  R,B, u1,v1,  R,T, u1,v0,  L,B, u0,v1,  R,T, u1,v0,  L,T, u0,v0 };
@@ -336,6 +728,23 @@ static void blit_rt_to_screen(rotation_t rot, int fb_w, int fb_h){ ensure_blit_p
     glBindBuffer(GL_ARRAY_BUFFER, blit_vbo); glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STREAM_DRAW);
     glEnableVertexAttribArray(0); glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)0);
     glEnableVertexAttribArray(1); glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)(2*sizeof(float)));
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+static void draw_tex_fullscreen(GLuint tex){
+    ensure_blit_prog();
+    glUseProgram(blit_prog);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glUniform1i(blit_u_tex, 0);
+    float L=-1.f,R=1.f,B=-1.f,T=1.f;
+    float verts[] = { L,B, 0,0,  R,B, 1,0,  R,T, 1,1,  L,B, 0,0,  R,T, 1,1,  L,T, 0,1 };
+    glBindBuffer(GL_ARRAY_BUFFER, blit_vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STREAM_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)(2*sizeof(float)));
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
@@ -444,10 +853,18 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
 }
 
 int main(int argc, char **argv) {
+    install_signal_handlers();
+    if (getenv("KMS_MPV_DEBUG")) g_debug = 1;
+    // Try to avoid Mesa glthread confusion on some stacks when running headless/GBM
+    setenv("mesa_glthread", "false", 0);
+    setenv("MESA_GLTHREAD", "0", 0);
     options_t opt = (options_t){0};
+    // Always define pane pointers early so cleanup is safe on early exits (e.g., --diag)
+    term_pane *tp_a = NULL;
+    term_pane *tp_b = NULL;
     // Preload config file if specified on CLI, else use default if present
     const char *cfg = NULL; for (int i=1;i<argc;i++){ if (!strcmp(argv[i],"--config") && i+1<argc){ cfg = argv[i+1]; break; } }
-    if (!cfg) { const char *def = default_config_path(); if (access(def, R_OK)==0) cfg = def; }
+    if (!cfg) { const char *def = default_config_path(); if (!opt.no_config && access(def, R_OK)==0) cfg = def; }
     char **merged = NULL; int margc = 0;
     if (cfg) {
         int cargc=0; char **cargv = tokenize_file(cfg, &cargc);
@@ -482,23 +899,56 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--pane-b") && i + 1 < argc) opt.pane_b_cmd = argv[++i];
         else if (!strcmp(argv[i], "--list-connectors")) opt.list_connectors = true;
         else if (!strcmp(argv[i], "--no-video")) opt.no_video = true;
+        else if (!strcmp(argv[i], "--no-panes")) opt.no_panes = true;
+        else if (!strcmp(argv[i], "--diag")) opt.diag = true;
+        else if (!strcmp(argv[i], "--gl-test")) opt.gl_test = true;
+        else if (!strcmp(argv[i], "--no-config")) opt.no_config = true;
+        else if (!strcmp(argv[i], "--smooth")) opt.smooth = true;
+        else if (!strcmp(argv[i], "--portrait-layout") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v,"stack3")) opt.portrait_layout = 0;
+            else if (!strcmp(v,"2x1")) opt.portrait_layout = 1;
+            else if (!strcmp(v,"1x2")) opt.portrait_layout = 2;
+        }
+        else if (!strcmp(argv[i], "--landscape-layout") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v,"stack3")) opt.landscape_layout = 0;
+            else if (!strcmp(v,"row3")) opt.landscape_layout = 1;
+            else if (!strcmp(v,"2x1")) opt.landscape_layout = 2;
+            else if (!strcmp(v,"1x2")) opt.landscape_layout = 3;
+        }
         else if (!strcmp(argv[i], "--loop-file")) opt.loop_file = true;
+        else if (!strcmp(argv[i], "--loop")) opt.loop_flag = true;
         else if (!strcmp(argv[i], "--loop-playlist")) opt.loop_playlist = true;
         else if (!strcmp(argv[i], "--shuffle") || !strcmp(argv[i], "--randomize")) opt.shuffle = true;
+        else if (!strcmp(argv[i], "--no-osd")) opt.no_osd = true;
         else if (!strcmp(argv[i], "--mpv-opt") && i + 1 < argc) {
             if (opt.n_mpv_opts == opt.cap_mpv_opts){ int nc=opt.cap_mpv_opts?opt.cap_mpv_opts*2:8; opt.mpv_opts=realloc(opt.mpv_opts,(size_t)nc*sizeof(char*)); opt.cap_mpv_opts=nc; }
             opt.mpv_opts[opt.n_mpv_opts++] = argv[++i];
         }
         else if (!strcmp(argv[i], "--save-config-default")) opt.save_config_default = true;
+        else if (!strcmp(argv[i], "--debug")) g_debug = 1;
+        else if (!strcmp(argv[i], "--video-rotate") && i + 1 < argc) { opt.video_rotate = atoi(argv[++i]); }
+        else if (!strcmp(argv[i], "--panscan") && i + 1 < argc) { opt.panscan = argv[++i]; }
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             fprintf(stderr, "Usage: %s [--video PATH] [--connector ID|NAME] [--mode WxH[@Hz]] [--rotate 0|90|180|270]\n"
                             "            [--font-size PX] [--right-frac PCT] [--pane-split PCT]\n"
                             "            [--pane-a \"CMD\"] [--pane-b \"CMD\"] [--list-connectors]\n"
-                            "            [--no-video] [--playlist FILE] [--playlist-extended FILE]\n"
-                            "            [--loop-file] [--loop-playlist] [--shuffle] [--mpv-opt K=V]\n"
-                            "            [--video-opt K=V] [--video-frac PCT] [--config FILE] [--save-config FILE] [--save-config-default]\n",
+                            "            [--no-video] [--playlist FILE] [--playlist-extended FILE] [--no-config] [--smooth]\n"
+                            "            [--loop-file] [--loop] [--loop-playlist] [--shuffle] [--mpv-opt K=V]\n"
+                            "            [--video-opt K=V] [--video-frac PCT] [--config FILE] [--save-config FILE] [--save-config-default]\n"
+                            "            [--video-rotate DEG] [--panscan VAL] [--portrait-layout stack3|2x1|1x2] [--landscape-layout stack3|row3|2x1|1x2]\n"
+                            "            [--no-panes] [--gl-test] [--diag] [--debug]\n",
                     argv[0]);
             return 0;
+        }
+        else {
+            // Treat bare arguments that don't start with '-' as video paths for convenience
+            if (argv[i][0] != '-') {
+                push_video(&opt, argv[i]);
+            } else {
+                fprintf(stderr, "Warning: unknown option '%s' (ignored). Use --help for usage.\n", argv[i]);
+            }
         }
     }
 
@@ -526,20 +976,34 @@ int main(int argc, char **argv) {
         }
         return 0;
     }
+    warn_if_missing_dri();
+    if (opt.diag) preflight_expect_dri_driver_diag();
+    else preflight_expect_dri_driver();
     gbm_init(&g, d.fd, d.mode.hdisplay, d.mode.vdisplay);
     egl_init(&e, &g);
 
     // mpv setup (skip if --no-video and no videos provided)
     mpv_ctx m = {0};
     bool use_mpv = !opt.no_video && (opt.video_count > 0 || opt.playlist_path || opt.playlist_ext);
+    const char *disable_env = getenv("KMS_MPV_DISABLE");
+    if (disable_env && (*disable_env=='1' || *disable_env=='y' || *disable_env=='Y')) {
+        use_mpv = false; fprintf(stderr, "Debug: KMS_MPV_DISABLE set; skipping mpv setup.\n");
+    }
     if (use_mpv) {
         if (pipe2(m.wakeup_fd, O_NONBLOCK | O_CLOEXEC) < 0) die("pipe2");
         m.mpv = mpv_create();
         if (!m.mpv) die("mpv_create");
-        mpv_set_option_string(m.mpv, "vo", "gpu");
-        mpv_set_option_string(m.mpv, "gpu-api", "opengl");
+        // Use libmpv render API; ensure mpv does NOT create its own window/VO.
+        // vo=libmpv tells mpv to use the render API output only.
+        mpv_set_option_string(m.mpv, "vo", "libmpv");
         mpv_set_option_string(m.mpv, "keep-open", "yes");
+        // If this context is OpenGL ES, hint mpv accordingly.
+        const char *glver = (const char*)glGetString(GL_VERSION);
+        if (glver && strstr(glver, "OpenGL ES")) {
+            mpv_set_option_string(m.mpv, "opengl-es", "yes");
+        }
         // Global mpv opts
+        bool user_set_hwdec = false;
         for (int i=0;i<opt.n_mpv_opts;i++) {
             const char *kv = opt.mpv_opts[i];
             const char *eq = strchr(kv, '=');
@@ -547,22 +1011,56 @@ int main(int argc, char **argv) {
                 char key[128]; size_t kl = (size_t)(eq-kv); if (kl>=sizeof key) kl=sizeof key-1; memcpy(key, kv, kl); key[kl]='\0';
                 const char *val = eq+1;
                 mpv_set_option_string(m.mpv, key, val);
+                if (strcmp(key, "hwdec")==0) user_set_hwdec = true;
             }
         }
-        if (opt.loop_file) mpv_set_option_string(m.mpv, "loop-file", "inf");
+        if (!user_set_hwdec) mpv_set_option_string(m.mpv, "hwdec", "no");
+        if (opt.loop_file || opt.loop_flag) mpv_set_option_string(m.mpv, "loop-file", "inf");
         if (opt.loop_playlist) mpv_set_option_string(m.mpv, "loop-playlist", "yes");
         if (opt.shuffle) mpv_set_option_string(m.mpv, "shuffle", "yes");
+        // Reasonable defaults mirroring a typical KMS usage; can be overridden via --mpv-opt
+        // Match user's working flags: video-sync=display-resample, keep aspect, rotate/panscan opts.
+        // Only apply if not already set via --mpv-opt.
+        bool user_set_vsync = false, user_set_keepaspect = false, user_set_rotate = false, user_set_panscan = false;
+        bool user_set_interpolation = false, user_set_tscale = false, user_set_eflush = false, user_set_shader_cache = false;
+        for (int i=0;i<opt.n_mpv_opts;i++) {
+            const char *kv = opt.mpv_opts[i];
+            const char *eq = strchr(kv, '=');
+            if (!eq) continue; size_t kl = (size_t)(eq-kv);
+            if (strncmp(kv, "video-sync", kl==strlen("video-sync")?kl:strlen("video-sync"))==0) user_set_vsync=true;
+            else if (strncmp(kv, "keepaspect", kl==strlen("keepaspect")?kl:strlen("keepaspect"))==0) user_set_keepaspect=true;
+            else if (strncmp(kv, "video-rotate", kl==strlen("video-rotate")?kl:strlen("video-rotate"))==0) user_set_rotate=true;
+            else if (strncmp(kv, "panscan", kl==strlen("panscan")?kl:strlen("panscan"))==0) user_set_panscan=true;
+            else if (strncmp(kv, "interpolation", kl==strlen("interpolation")?kl:strlen("interpolation"))==0) user_set_interpolation=true;
+            else if (strncmp(kv, "tscale", kl==strlen("tscale")?kl:strlen("tscale"))==0) user_set_tscale=true;
+            else if (strncmp(kv, "opengl-early-flush", kl==strlen("opengl-early-flush")?kl:strlen("opengl-early-flush"))==0) user_set_eflush=true;
+            else if (strncmp(kv, "gpu-shader-cache", kl==strlen("gpu-shader-cache")?kl:strlen("gpu-shader-cache"))==0) user_set_shader_cache=true;
+        }
+        if (!user_set_vsync) mpv_set_option_string(m.mpv, "video-sync", "display-resample");
+        if (!user_set_keepaspect) mpv_set_option_string(m.mpv, "keepaspect", "yes");
+        if (opt.video_rotate >= 0 && !user_set_rotate) { char buf[16]; snprintf(buf,sizeof buf, "%d", opt.video_rotate); mpv_set_option_string(m.mpv, "video-rotate", buf); }
+        if (opt.panscan && !user_set_panscan) { mpv_set_option_string(m.mpv, "panscan", opt.panscan); }
+        if (opt.smooth) {
+            if (!user_set_interpolation) mpv_set_option_string(m.mpv, "interpolation", "no");
+            if (!user_set_tscale) mpv_set_option_string(m.mpv, "tscale", "linear");
+            if (!user_set_eflush) mpv_set_option_string(m.mpv, "opengl-early-flush", "yes");
+            if (!user_set_shader_cache) mpv_set_option_string(m.mpv, "gpu-shader-cache", "no");
+        }
+        if (g_debug) mpv_request_log_messages(m.mpv, "debug");
         if (mpv_initialize(m.mpv) < 0) die("mpv_initialize");
 
+        int adv = 1;
         mpv_render_param params[] = {
             {MPV_RENDER_PARAM_API_TYPE, (void *)MPV_RENDER_API_TYPE_OPENGL},
             {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
              &(mpv_opengl_init_params){.get_proc_address = get_proc_address, .get_proc_address_ctx = NULL}},
+            {MPV_RENDER_PARAM_ADVANCED_CONTROL, &adv},
             {0}
         };
         if (mpv_render_context_create(&m.mpv_gl, m.mpv, params) < 0)
             die("mpv_render_context_create");
-        mpv_render_context_set_update_callback(m.mpv_gl, mpv_wakeup, &m);
+        mpv_render_context_set_update_callback(m.mpv_gl, mpv_update_wakeup, &m);
+        mpv_set_wakeup_callback(m.mpv, mpv_update_wakeup, &m);
 
         // Load playlist or multiple videos
         if (opt.playlist_path) {
@@ -608,6 +1106,21 @@ int main(int argc, char **argv) {
         }
     }
 
+    if (opt.diag) {
+        const char *gl_ver = (const char*)glGetString(GL_VERSION);
+        const char *glsl = (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION);
+        const char *gl_vendor = (const char*)glGetString(GL_VENDOR);
+        const char *gl_renderer = (const char*)glGetString(GL_RENDERER);
+        fprintf(stderr, "Diag: GL_VERSION=%s\n", gl_ver?gl_ver:"?");
+        fprintf(stderr, "Diag: GLSL_VERSION=%s\n", glsl?glsl:"?");
+        fprintf(stderr, "Diag: GL_VENDOR=%s\n", gl_vendor?gl_vendor:"?");
+        fprintf(stderr, "Diag: GL_RENDERER=%s\n", gl_renderer?gl_renderer:"?");
+        const char *bundled = "/usr/local/lib/kms_mpv_compositor";
+        fprintf(stderr, "Diag: Bundled lib dir %s: %s\n", bundled, access(bundled, R_OK)==0?"present":"missing");
+        // Exit cleanly after diagnostics
+        goto cleanup;
+    }
+
     // First frame to program CRTC
     glViewport(0, 0, d.mode.hdisplay, d.mode.vdisplay);
     gl_clear_color(0.f, 0.f, 0.f, 1.f);
@@ -619,30 +1132,153 @@ int main(int argc, char **argv) {
     int logical_w = (opt.rotation==ROT_90 || opt.rotation==ROT_270) ? fb_h : fb_w;
     int logical_h = (opt.rotation==ROT_90 || opt.rotation==ROT_270) ? fb_w : fb_h;
     ensure_rt(logical_w, logical_h);
+    // Panes declared at function start; no redeclaration here
+
+    if (opt.gl_test) {
+        int frames = 120;
+        for (int f=0; f<frames; ++f) {
+            if (!eglMakeCurrent(e.dpy, e.surf, e.surf, e.ctx)) die("eglMakeCurrent loop");
+            glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
+            glViewport(0, 0, logical_w, logical_h);
+            float t = (float)f / (float)frames;
+            gl_clear_color(0.1f + 0.7f*t, 0.1f + 0.5f*t, 0.2f, 1.0f);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, fb_w, fb_h);
+            gl_clear_color(0.f,0.f,0.f,1.f);
+            blit_rt_to_screen(opt.rotation);
+            eglSwapBuffers(e.dpy, e.surf);
+            page_flip(&d, &g);
+        }
+        fprintf(stderr, "GL test: rendered %d frames successfully.\n", frames);
+        goto cleanup;
+    }
 
     // Create terminal panes in logical space
     int screen_w = logical_w, screen_h = logical_h;
-    int right_pct = opt.right_frac_pct ? opt.right_frac_pct : 33; if (right_pct<10) right_pct=10; if (right_pct>80) right_pct=80;
-    if (opt.video_frac_pct>0 && opt.video_frac_pct<100) right_pct = 100 - opt.video_frac_pct;
-    int right_w = opt.no_video ? screen_w : (screen_w * right_pct / 100);
-    int right_x = screen_w - right_w;
-    int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
-    int top_h = screen_h * split_pct / 100;
-    // Top-right pane cmd: btop
-    pane_layout lay_a = { .x = right_x, .y = screen_h - top_h, .w = right_w, .h = top_h };
-    term_pane *tp_a = NULL;
-    if (opt.pane_a_cmd) tp_a = term_pane_create_cmd(&lay_a, opt.font_px, opt.pane_a_cmd);
-    else {
-        char *argv_a[] = { "btop", NULL };
-        tp_a = term_pane_create(&lay_a, opt.font_px, "btop", argv_a);
+    pane_layout lay_a = {0}, lay_b = {0};
+    pane_layout lay_video = { .x = 0, .y = 0, .w = logical_w, .h = logical_h };
+    // Slot-based layout and permutation control: 0=video,1=paneA,2=paneB
+    static int perm[3] = {0,1,2};
+    static int last_font_px_a=-1, last_font_px_b=-1;
+    static pane_layout prev_a={0}, prev_b={0};
+
+    if (opt.rotation==ROT_90 || opt.rotation==ROT_270) {
+        // Portrait: choose among 3 layouts
+        int mode = opt.portrait_layout; // 0 stack3, 1 2x1 top, 2 1x2 bottom
+        int top_pct = opt.pane_split_pct ? opt.pane_split_pct : 60;
+        if (top_pct < 20) top_pct = 20; if (top_pct > 80) top_pct = 80;
+        // Define base slots
+        pane_layout s0={0}, s1={0}, s2={0};
+        if (mode == 0) {
+            // stack3: video top, pane A middle, pane B bottom
+            int h1 = screen_h * top_pct / 100;
+            int remain = screen_h - h1;
+            int h2 = remain/2; int h3 = remain - h2;
+            s0 = (pane_layout){ .x=0, .y=screen_h - h1, .w=screen_w, .h=h1 };
+            s1 = (pane_layout){ .x=0, .y=screen_h - h1 - h2, .w=screen_w, .h=h2 };
+            s2 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=h3 };
+        } else if (mode == 1) {
+            // 2x1: two columns top row (video left, pane A right), pane B bottom full
+            int htop = screen_h * top_pct / 100;
+            int hbot = screen_h - htop;
+            int wleft = screen_w/2; int wright = screen_w - wleft;
+            s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=wleft, .h=htop };
+            s1 = (pane_layout){ .x=wleft, .y=screen_h - htop, .w=wright, .h=htop };
+            s2 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=hbot };
+        } else {
+            // 1x2: one column top row (video full), bottom split two columns (pane A left, pane B right)
+            int htop = screen_h * top_pct / 100;
+            int hbot = screen_h - htop;
+            int wleft = screen_w/2; int wright = screen_w - wleft;
+            s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=screen_w, .h=htop };
+            s1 = (pane_layout){ .x=0, .y=0, .w=wleft, .h=hbot };
+            s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=hbot };
+        }
+        // Apply permutation to assign slots
+        pane_layout slots[3] = { s0, s1, s2 };
+        lay_video = slots[perm[0]];
+        lay_a     = slots[perm[1]];
+        lay_b     = slots[perm[2]];
+    } else {
+        // Landscape: provide 4 layout modes per request
+        int mode = opt.landscape_layout; // 0=stack3,1=row3,2=2x1,3=1x2
+        // Use right_frac/pane_split to influence columns/rows where applicable
+        int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
+        int col_pct = opt.right_frac_pct ? (100 - opt.right_frac_pct) : 50; // base left column percent for split layouts
+        if (col_pct<20) col_pct=20; if (col_pct>80) col_pct=80;
+        pane_layout s0={0}, s1={0}, s2={0};
+        if (mode == 0) {
+            // stack3: 3 rows in 1 column (full width)
+            int h = screen_h/3; int h2 = h; int h3 = screen_h - h - h2;
+            s0 = (pane_layout){ .x=0, .y=screen_h - h, .w=screen_w, .h=h };
+            s1 = (pane_layout){ .x=0, .y=screen_h - h - h2, .w=screen_w, .h=h2 };
+            s2 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=h3 };
+        } else if (mode == 1) {
+            // row3: 1 row in 3 columns (full height)
+            int w = screen_w/3; int w2 = w; int w3 = screen_w - w - w2;
+            s0 = (pane_layout){ .x=0, .y=0, .w=w, .h=screen_h };
+            s1 = (pane_layout){ .x=w, .y=0, .w=w2, .h=screen_h };
+            s2 = (pane_layout){ .x=w+w2, .y=0, .w=w3, .h=screen_h };
+        } else if (mode == 2) {
+            // 2x1: left column split into two rows, right column full height
+            int wleft = screen_w * col_pct / 100; int wright = screen_w - wleft;
+            int htop = screen_h * split_pct / 100; int hbot = screen_h - htop;
+            s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=wleft, .h=htop };
+            s1 = (pane_layout){ .x=0, .y=0, .w=wleft, .h=hbot };
+            s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=screen_h };
+        } else {
+            // 1x2: left column full height, right column split into two rows
+            int wleft = screen_w * col_pct / 100; int wright = screen_w - wleft;
+            int htop = screen_h * split_pct / 100; int hbot = screen_h - htop;
+            s0 = (pane_layout){ .x=0, .y=0, .w=wleft, .h=screen_h };
+            s1 = (pane_layout){ .x=wleft, .y=screen_h - htop, .w=wright, .h=htop };
+            s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=hbot };
+        }
+        pane_layout slots[3] = { s0, s1, s2 };
+        lay_video = slots[perm[0]];
+        lay_a     = slots[perm[1]];
+        lay_b     = slots[perm[2]];
     }
-    // Bottom-right pane cmd: tail -f
-    pane_layout lay_b = { .x = right_x, .y = 0, .w = right_w, .h = screen_h - top_h };
-    term_pane *tp_b = NULL;
-    if (opt.pane_b_cmd) tp_b = term_pane_create_cmd(&lay_b, opt.font_px, opt.pane_b_cmd);
-    else {
-        char *argv_b[] = { "tail", "-f", "/var/log/syslog", NULL };
-        tp_b = term_pane_create(&lay_b, opt.font_px, "tail", argv_b);
+
+    // Enforce that pane A (default btop) is at least 80x24 characters by
+    // adapting font size and minimally growing its rect if needed.
+    int font_px_a = opt.font_px ? opt.font_px : 18;
+    int cell_w_a=8, cell_h_a=16;
+    term_measure_cell(font_px_a, &cell_w_a, &cell_h_a);
+    for (int px=font_px_a; px>=10; --px) {
+        int cw, ch; if (!term_measure_cell(px, &cw, &ch)) break;
+        int cols_fit = lay_a.w / cw; int rows_fit = lay_a.h / ch;
+        if (cols_fit >= 80 && rows_fit >= 24) { font_px_a = px; cell_w_a=cw; cell_h_a=ch; break; }
+        if (px==10) { font_px_a = px; cell_w_a=cw; cell_h_a=ch; }
+    }
+    int need_w_px = 80 * cell_w_a;
+    int need_h_px = 24 * cell_h_a;
+    if (lay_a.w < need_w_px) { int delta = need_w_px - lay_a.w; if (lay_a.x + lay_a.w + delta <= screen_w) lay_a.w += delta; else { lay_a.x = (lay_a.x - delta > 0)? lay_a.x - delta : 0; lay_a.w = need_w_px; } }
+    if (lay_a.h < need_h_px) { int delta = need_h_px - lay_a.h; if (lay_a.y + lay_a.h + delta <= screen_h) lay_a.h += delta; else { lay_a.y = (lay_a.h > need_h_px)? lay_a.y : 0; lay_a.h = need_h_px; } }
+
+    // Pane B font relative to its pane: aim for at least 60x20 if possible
+    int font_px_b = opt.font_px ? opt.font_px : font_px_a;
+    int cell_w_b=8, cell_h_b=16; term_measure_cell(font_px_b, &cell_w_b, &cell_h_b);
+    for (int px=font_px_b; px>=10; --px) {
+        int cw,ch; if (!term_measure_cell(px,&cw,&ch)) break;
+        int cols_fit = lay_b.w / cw; int rows_fit = lay_b.h / ch;
+        if (cols_fit >= 60 && rows_fit >= 20) { font_px_b=px; cell_w_b=cw; cell_h_b=ch; break; }
+        if (px==10) { font_px_b=px; cell_w_b=cw; cell_h_b=ch; }
+    }
+    if (!opt.no_panes) {
+        if (g_debug) fprintf(stderr, "Pane A min 80x24 -> using font_px=%d (cell=%dx%d), pane_px=%dx%d gives ~%dx%d chars\n",
+                             font_px_a, cell_w_a, cell_h_a, lay_a.w, lay_a.h, lay_a.w/cell_w_a, lay_a.h/cell_h_a);
+        if (opt.pane_a_cmd) tp_a = term_pane_create_cmd(&lay_a, font_px_a, opt.pane_a_cmd);
+        else {
+            char *argv_a[] = { "btop", NULL };
+            tp_a = term_pane_create(&lay_a, font_px_a, "btop", argv_a);
+        }
+        if (opt.pane_b_cmd) tp_b = term_pane_create_cmd(&lay_b, font_px_b, opt.pane_b_cmd);
+        else {
+            char *argv_b[] = { "tail", "-f", "/var/log/syslog", NULL };
+            tp_b = term_pane_create(&lay_b, font_px_b, "tail", argv_b);
+        }
+        last_font_px_a = font_px_a; last_font_px_b = font_px_b; prev_a = lay_a; prev_b = lay_b;
     }
 
     // Set TTY to raw mode for key forwarding
@@ -650,8 +1286,20 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Controls: Tab focus A/B, Ctrl+Q quit, n/p next/prev, space pause, o OSD toggle.\n");
     int focus = 1; // 1=top pane, 2=bottom pane
     bool show_osd = true;
+    if (getenv("KMS_MPV_NO_OSD")) show_osd = false;
 
     bool running = true;
+    const char *direct_env_once = getenv("KMS_MPV_DIRECT");
+    bool direct_mode = (direct_env_once && (*direct_env_once=='1' || *direct_env_once=='y' || *direct_env_once=='Y'));
+    int mpv_flip_y_direct = 1; // default 1; can be overridden by env
+    const char *flip_env = getenv("KMS_MPV_FLIPY");
+    if (flip_env && (*flip_env=='0' || *flip_env=='n' || *flip_env=='N')) mpv_flip_y_direct = 0;
+    bool direct_via_fbo = false; const char *dfbo_env = getenv("KMS_MPV_DIRECT_FBO");
+    if (dfbo_env && (*dfbo_env=='1' || *dfbo_env=='y' || *dfbo_env=='Y')) direct_via_fbo = true;
+    bool direct_test_only = false; const char *dtest_env = getenv("KMS_MPV_DIRECT_TEST");
+    if (dtest_env && (*dtest_env=='1' || *dtest_env=='y' || *dtest_env=='Y')) direct_test_only = true;
+    int frame = 0;
+    int mpv_needs_render = 1; // request an initial render
     struct pollfd pfds[2];
     pfds[0].fd = 0; // stdin for keys
     pfds[0].events = POLLIN;
@@ -661,18 +1309,39 @@ int main(int argc, char **argv) {
     fcntl(0, F_SETFL, O_NONBLOCK);
 
     while (running) {
-        int ret = poll(pfds, nfds, 16); // ~60fps budget, render if needed
+        if (g_stop) { running = false; break; }
+        if (g_debug && frame < 5) fprintf(stderr, "Loop frame %d start\n", frame);
+        // Small timeout to keep input responsive; rendering blocks to target time internally
+        int timeout_ms = 10;
+        int ret = poll(pfds, nfds, timeout_ms);
         if (ret < 0 && errno != EINTR) die("poll");
 
         if (pfds[0].revents & POLLIN) {
             char buf[64]; ssize_t n = read(0, buf, sizeof buf);
             if (n > 0) {
-                // Ctrl+Q to quit
-                for (ssize_t i=0;i<n;i++) if ((unsigned char)buf[i] == 0x11) { running=false; break; }
+                // Ctrl+Q (DC1, 0x11) to quit (Ctrl+C not used)
+                for (ssize_t i=0;i<n;i++) {
+                    unsigned char ch = (unsigned char)buf[i];
+                    if (ch == 0x11) { running=false; break; }
+                }
                 if (!running) break;
                 // Tab switches focus
                 bool consumed=false;
                 for (ssize_t i=0;i<n;i++) if (buf[i]=='\t') { focus = (focus==1?2:1); consumed=true; }
+                // Layout/pane controls
+                for (ssize_t i=0;i<n;i++) {
+                    if (buf[i]=='l') {
+                        if (opt.rotation==ROT_90 || opt.rotation==ROT_270) opt.portrait_layout = (opt.portrait_layout+1)%3;
+                        else opt.landscape_layout = (opt.landscape_layout+1)%4;
+                    }
+                    else if (buf[i]=='L') {
+                        if (opt.rotation==ROT_90 || opt.rotation==ROT_270) opt.portrait_layout = (opt.portrait_layout+2)%3;
+                        else opt.landscape_layout = (opt.landscape_layout+3)%4;
+                    }
+                    else if (buf[i]=='t') { int tmp = perm[1]; perm[1]=perm[2]; perm[2]=tmp; }
+                    else if (buf[i]=='r') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p1; perm[1]=p2; perm[2]=p0; }
+                    else if (buf[i]=='R') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p2; perm[1]=p0; perm[2]=p1; }
+                }
                 // Playback keys sent to mpv if present
                 if (use_mpv) {
                     for (ssize_t i=0;i<n;i++) {
@@ -691,51 +1360,193 @@ int main(int argc, char **argv) {
         if (use_mpv && (pfds[1].revents & POLLIN)) {
             uint64_t tmp;
             while (read(m.wakeup_fd[0], &tmp, sizeof(tmp)) > 0) {}
+            // Drain mpv core events for visibility
+            for (;;) {
+                mpv_event *ev = mpv_wait_event(m.mpv, 0);
+                if (!ev || ev->event_id == MPV_EVENT_NONE) break;
+                if (ev->event_id == MPV_EVENT_LOG_MESSAGE) {
+                    mpv_event_log_message *lm = ev->data;
+                    fprintf(stderr, "mpv[%s]: %s", lm->prefix, lm->text);
+                } else if (ev->event_id == MPV_EVENT_START_FILE) {
+                    fprintf(stderr, "mpv: START_FILE\n");
+                } else if (ev->event_id == MPV_EVENT_FILE_LOADED) {
+                    fprintf(stderr, "mpv: FILE_LOADED\n");
+                    mpv_needs_render = 1;
+                } else if (ev->event_id == MPV_EVENT_VIDEO_RECONFIG) {
+                    fprintf(stderr, "mpv: VIDEO_RECONFIG\n");
+                    mpv_needs_render = 1;
+                } else if (ev->event_id == MPV_EVENT_END_FILE) {
+                    fprintf(stderr, "mpv: END_FILE\n");
+                }
+            }
+            int flags = mpv_render_context_update(m.mpv_gl);
+            if (flags & MPV_RENDER_UPDATE_FRAME) {
+                mpv_needs_render = 1;
+                if (g_debug) fprintf(stderr, "mpv: UPDATE_FRAME\n");
+            }
         }
 
-        // Render frame into offscreen logical FBO
+        // Render frame into offscreen logical FBO (unless in direct debug mode)
         if (!eglMakeCurrent(e.dpy, e.surf, e.surf, e.ctx)) die("eglMakeCurrent loop");
+
+        // In direct test mode (or direct mode without mpv), show solid red so we know default FB is visible
+        if (direct_mode && (direct_test_only || !use_mpv)) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDisable(GL_SCISSOR_TEST);
+            glDisable(GL_BLEND);
+            glDisable(GL_DITHER);
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_DEPTH_TEST);
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            glViewport(0, 0, fb_w, fb_h);
+            gl_clear_color(1.0f, 0.0f, 0.0f, 1.0f);
+            if (g_debug) {
+                GLint vp[4] = {0}; glGetIntegerv(GL_VIEWPORT, vp);
+                GLint cur_fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &cur_fbo);
+                fprintf(stderr, "Direct TEST/Baseline: viewport=%d,%d %dx%d fbo=%d\n", vp[0],vp[1],vp[2],vp[3], cur_fbo);
+            }
+            eglSwapBuffers(e.dpy, e.surf);
+            gl_check("after eglSwapBuffers (direct test/baseline)");
+            page_flip(&d, &g);
+            frame++;
+            continue;
+        }
 
         glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
         glViewport(0, 0, logical_w, logical_h);
         gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
 
         // Draw mpv if enabled into its own FBO sized to the video region (left area)
-        if (use_mpv) {
-            int vw = logical_w - right_w;
-            int vh = logical_h;
-            if (vw < 0) vw = 0;
-            ensure_video_rt(vw, vh);
-            glBindFramebuffer(GL_FRAMEBUFFER, vid_fbo);
-            glViewport(0, 0, vw, vh);
-            gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
-            int flip_y = 1;
-            mpv_opengl_fbo fbo = {.fbo = (int)vid_fbo, .w = vw, .h = vh, .internal_format = 0};
-            mpv_render_param r_params[] = {
-                {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
-                {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
-                {0}
-            };
-            mpv_render_context_render(m.mpv_gl, r_params);
+        if (use_mpv && mpv_needs_render) {
+            int vw = lay_video.w;
+            int vh = lay_video.h;
+            if (vw < 1) vw = 1;
+            if (vh < 1) vh = 1;
+            if (direct_mode) {
+                if (g_debug) fprintf(stderr, "Render: mpv direct to default FB...\n");
+                if (!direct_via_fbo) {
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    // Ensure a clean, simple GL state baseline for mpv
+                    glDisable(GL_SCISSOR_TEST);
+                    glDisable(GL_BLEND);
+                    glDisable(GL_DITHER);
+                    glDisable(GL_CULL_FACE);
+                    glDisable(GL_DEPTH_TEST);
+                    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                    glViewport(0, 0, fb_w, fb_h);
+                    // Clear to red to make default FB visibility obvious
+                    gl_clear_color(1.0f, 0.0f, 0.0f, 1.0f);
+                    if (g_debug) {
+                        GLint vp[4] = {0}; glGetIntegerv(GL_VIEWPORT, vp);
+                        GLint cur_fbo = 0; glGetIntegerv(GL_FRAMEBUFFER_BINDING, &cur_fbo);
+                        fprintf(stderr, "Direct: viewport=%d,%d %dx%d fbo=%d\n", vp[0],vp[1],vp[2],vp[3], cur_fbo);
+                    }
+                    if (!direct_test_only) {
+                    int flip_y = mpv_flip_y_direct;
+                    mpv_opengl_fbo dfbo = {.fbo = 0, .w = fb_w, .h = fb_h, .internal_format = 0};
+                    int block = 1;
+                    mpv_render_param r_params2[] = {
+                        {MPV_RENDER_PARAM_OPENGL_FBO, &dfbo},
+                        {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+                        {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block},
+                        {0}
+                    };
+                        if (g_debug) fprintf(stderr, "Render: calling mpv_render_context_render (direct)...\n");
+                        mpv_render_context_render(m.mpv_gl, r_params2);
+                        gl_check("after mpv_render_context_render (direct)");
+                        mpv_needs_render = 0;
+                    } else if (g_debug) {
+                        fprintf(stderr, "Direct TEST: skipped mpv render (expect solid red)\n");
+                    }
+                } else {
+                    // Render mpv into a texture FBO at full screen, then draw that texture to default FB
+                    ensure_video_rt(fb_w, fb_h);
+                    glBindFramebuffer(GL_FRAMEBUFFER, vid_fbo);
+                    glDisable(GL_SCISSOR_TEST);
+                    glDisable(GL_BLEND);
+                    glDisable(GL_DITHER);
+                    glDisable(GL_CULL_FACE);
+                    glDisable(GL_DEPTH_TEST);
+                    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                    glViewport(0, 0, fb_w, fb_h);
+                    gl_clear_color(0.f, 0.f, 0.f, 1.0f);
+                    if (!direct_test_only) {
+                        int flip_y = 1;
+                        mpv_opengl_fbo fbo = {.fbo = (int)vid_fbo, .w = fb_w, .h = fb_h, .internal_format = 0};
+                        int block2 = 1;
+                        mpv_render_param r_params[] = {
+                            {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
+                            {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+                            {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block2},
+                            {0}
+                        };
+                        if (g_debug) fprintf(stderr, "Render: calling mpv_render_context_render (direct via FBO)...\n");
+                        mpv_render_context_render(m.mpv_gl, r_params);
+                        gl_check("after mpv_render_context_render (direct via FBO)");
+                        mpv_needs_render = 0;
+                    } else if (g_debug) {
+                        fprintf(stderr, "Direct TEST: skipped mpv render into FBO\n");
+                    }
+                    // Now draw texture to the default FB
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    glViewport(0, 0, fb_w, fb_h);
+                    // Clear to red to make default FB visibility obvious (direct via FBO)
+                    gl_clear_color(1.0f, 0.0f, 0.0f, 1.0f);
+                    if (!direct_test_only) draw_tex_fullscreen(vid_tex);
+                    else if (g_debug) fprintf(stderr, "Direct TEST: drew red only (no texture blit)\n");
+                }
+            } else {
+                if (g_debug) fprintf(stderr, "Render: preparing mpv FBO...\n");
+                ensure_video_rt(vw, vh);
+                glBindFramebuffer(GL_FRAMEBUFFER, vid_fbo);
+                // Ensure a clean, simple GL state baseline for mpv
+                glDisable(GL_SCISSOR_TEST);
+                glDisable(GL_BLEND);
+                glDisable(GL_DITHER);
+                glDisable(GL_CULL_FACE);
+                glDisable(GL_DEPTH_TEST);
+                glViewport(0, 0, vw, vh);
+                gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
+                int flip_y = (opt.rotation==ROT_90 || opt.rotation==ROT_270) ? 0 : 1;
+                mpv_opengl_fbo fbo = {.fbo = (int)vid_fbo, .w = vw, .h = vh, .internal_format = 0};
+                mpv_render_param r_params[] = {
+                    {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
+                    {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+                    {0}
+                };
+                if (g_debug) fprintf(stderr, "Render: calling mpv_render_context_render...\n");
+                mpv_render_context_render(m.mpv_gl, r_params);
+                gl_check("after mpv_render_context_render");
+                mpv_needs_render = 0;
 
-            // Composite into logical RT: first the video on the left region
-            glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
-            glViewport(0, 0, logical_w, logical_h);
-            draw_tex_to_rt(vid_tex, 0, 0, vw, vh, logical_w, logical_h);
+                // Composite into logical RT: draw video into its layout rect
+                glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
+                glViewport(0, 0, logical_w, logical_h);
+                draw_tex_to_rt(vid_tex, lay_video.x, lay_video.y, vw, vh, logical_w, logical_h);
+            }
         } else {
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             glViewport(0, 0, logical_w, logical_h);
         }
         
         // Draw terminal panes into rt
-        // Poll PTYs and update textures only if changed
-        (void)term_pane_poll(tp_a);
-        (void)term_pane_poll(tp_b);
-        term_pane_render(tp_a, screen_w, screen_h);
-        term_pane_render(tp_b, screen_w, screen_h);
+        // Before rendering, if layout changed, resize panes and adjust font sizes
+        if (!direct_mode && !opt.no_panes) {
+            // Adjust pane A font if needed
+            if (last_font_px_a != font_px_a) { term_pane_set_font_px(tp_a, font_px_a); last_font_px_a = font_px_a; }
+            if (prev_a.x!=lay_a.x || prev_a.y!=lay_a.y || prev_a.w!=lay_a.w || prev_a.h!=lay_a.h) { term_pane_resize(tp_a, &lay_a); prev_a=lay_a; }
+            // Adjust pane B font if needed
+            if (last_font_px_b != font_px_b) { term_pane_set_font_px(tp_b, font_px_b); last_font_px_b = font_px_b; }
+            if (prev_b.x!=lay_b.x || prev_b.y!=lay_b.y || prev_b.w!=lay_b.w || prev_b.h!=lay_b.h) { term_pane_resize(tp_b, &lay_b); prev_b=lay_b; }
+            // Poll PTYs and update textures only if changed
+            (void)term_pane_poll(tp_a);
+            (void)term_pane_poll(tp_b);
+            term_pane_render(tp_a, screen_w, screen_h);
+            term_pane_render(tp_b, screen_w, screen_h);
+        }
 
         // OSD overlay (title, index/total, paused)
-        if (use_mpv && show_osd) {
+        if (!direct_mode && use_mpv && show_osd && !opt.no_osd) {
             static osd_ctx *osd = NULL; if (!osd) osd = osd_create(opt.font_px?opt.font_px:20);
             int64_t pos=0,count=0; int paused_flag=0; char *title=NULL;
             mpv_get_property(m.mpv, "playlist-pos", MPV_FORMAT_INT64, &pos);
@@ -751,16 +1562,27 @@ int main(int argc, char **argv) {
             osd_draw(osd, 16, 16, logical_w, logical_h);
         }
 
-        // Present: bind default framebuffer and blit rotated
+        // Present
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, fb_w, fb_h);
-        gl_clear_color(0.f,0.f,0.f,1.f);
-        blit_rt_to_screen(opt.rotation, fb_w, fb_h);
+        if (!direct_mode) {
+            glViewport(0, 0, fb_w, fb_h);
+            gl_clear_color(0.f,0.f,0.f,1.f);
+            blit_rt_to_screen(opt.rotation);
+        }
 
         eglSwapBuffers(e.dpy, e.surf);
+        gl_check("after eglSwapBuffers");
         page_flip(&d, &g);
+        if (use_mpv && m.mpv_gl) {
+            // Inform mpv that we swapped (advanced control)
+            mpv_render_context_report_swap(m.mpv_gl);
+        }
+        // Ask for next render; mpv will block to target time internally
+        if (use_mpv) mpv_needs_render = 1;
+        frame++;
     }
 
+cleanup:
     // Cleanup
     if (m.mpv_gl) mpv_render_context_free(m.mpv_gl);
     if (m.mpv) mpv_terminate_destroy(m.mpv);
@@ -790,3 +1612,6 @@ int main(int argc, char **argv) {
     if (d.fd >= 0) close(d.fd);
     return 0;
 }
+#include <stdarg.h>
+// Forward decl for GL error checker used before its definition
+static void gl_check(const char *stage);

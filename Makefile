@@ -1,5 +1,7 @@
 CC ?= cc
 CFLAGS ?= -O2 -g -Wall -Wextra -std=c11
+# Embed an rpath so the binary can find bundled libs at runtime
+LDFLAGS ?= -Wl,-rpath,'$$ORIGIN/../lib/kms_mpv_compositor' -Wl,--enable-new-dtags -rdynamic
 
 PKGS = libdrm gbm egl glesv2 mpv vterm freetype2 fontconfig
 
@@ -8,13 +10,18 @@ PKG_LIBS   := $(shell pkg-config --libs   $(PKGS))
 
 SRC = src/kms_mpv_compositor.c src/term_pane.c src/osd.c
 BIN = kms_mpv_compositor
+ALIAS = kms_mosaic
 
-all: $(BIN)
+all: $(BIN) $(ALIAS)
 
 $(BIN): $(SRC)
-	$(CC) $(CFLAGS) $(PKG_CFLAGS) -o $@ $(SRC) $(PKG_LIBS)
+	$(CC) $(CFLAGS) $(PKG_CFLAGS) -o $@ $(SRC) $(PKG_LIBS) $(LDFLAGS)
+
+$(ALIAS): $(BIN)
+	@# Provide a friendlier alias; keep original for compatibility
+	@[ -e $(ALIAS) ] || cp -f $(BIN) $(ALIAS)
 
 clean:
-	rm -f $(BIN)
+	rm -f $(BIN) $(ALIAS)
 
 .PHONY: all clean

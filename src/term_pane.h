@@ -27,3 +27,10 @@ void term_pane_render(term_pane *tp, int fb_w, int fb_h);
 
 // Send input bytes to the PTY (for interactive control)
 void term_pane_send_input(term_pane *tp, const char *buf, size_t len);
+
+// Measure terminal cell metrics for a given monospace font pixel size.
+// Returns true on success and sets cell_w/cell_h (pixels per character cell).
+bool term_measure_cell(int font_px, int *cell_w, int *cell_h);
+
+// Change the font pixel size and reallocate buffers accordingly.
+void term_pane_set_font_px(term_pane *tp, int font_px);
