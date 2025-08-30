@@ -108,10 +108,8 @@ typedef struct {
     const char *panscan;      // passthrough to mpv panscan value
     bool no_config;           // skip loading default config file
     bool smooth;              // apply a sensible playback preset
-    // Portrait layout: stack3, 2x1 (two top columns, one bottom), 1x2 (one top, two bottom)
-    int portrait_layout;      // 0=stack3,1=2x1,2=1x2
-    // Landscape layout: stack3 (3 rows), row3 (3 columns), 2x1 (left split rows, right full), 1x2 (left full, right split rows)
-    int landscape_layout;     // 0=stack3,1=row3,2=2x1,3=1x2
+    // Unified layout mode: stack3, row3, 2x1, 1x2
+    int layout_mode;          // 0=stack3,1=row3,2=2x1,3=1x2
     const char **mpv_opts; int n_mpv_opts; int cap_mpv_opts; // global mpv opts key=val
     const char *config_file; const char *save_config_file; bool save_config_default;
 } options_t;
@@ -156,6 +154,87 @@ static void install_signal_handlers(void){
 static void die(const char *msg) {
     perror(msg);
     exit(1);
+}
+
+static void gl_reset_state_2d(void){
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_DITHER);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+}
+
+// Translate raw key bytes to mpv key names and send via "keypress".
+// Also issues fallbacks for space/n/p where useful.
+static void mpv_send_keys(mpv_handle *mpv, const char *buf, ssize_t n){
+    for (ssize_t i=0; i<n; ){
+        unsigned char ch = (unsigned char)buf[i];
+        if (ch == 0x1b) { // ESC or CSI
+            if (i+1 >= n) { const char *c[]={"keypress","ESC",NULL}; mpv_command_async(mpv,0,c); i++; continue; }
+            unsigned char n1 = (unsigned char)buf[i+1];
+            if (n1=='[') {
+                // CSI sequences
+                if (i+2 < n) {
+                    unsigned char n2 = (unsigned char)buf[i+2];
+                    const char *name=NULL;
+                    if (n2=='A') name="UP";
+                    else if (n2=='B') name="DOWN";
+                    else if (n2=='C') name="RIGHT";
+                    else if (n2=='D') name="LEFT";
+                    if (name) { const char *c[]={"keypress",name,NULL}; mpv_command_async(mpv,0,c); i+=3; continue; }
+                    // ESC [ <num> ~
+                    int num=0; int j=i+2; while (j<n && buf[j]>='0'&&buf[j]<='9'){ num = num*10 + (buf[j]-'0'); j++; }
+                    if (j<n && buf[j]=='~'){
+                        const char *name2=NULL;
+                        if (num==1) name2="HOME";
+                        else if (num==2) name2="INS";
+                        else if (num==3) name2="DEL";
+                        else if (num==4) name2="END";
+                        else if (num==5) name2="PGUP";
+                        else if (num==6) name2="PGDWN";
+                        else if (num==15) name2="F5";
+                        else if (num==17) name2="F6";
+                        else if (num==18) name2="F7";
+                        else if (num==19) name2="F8";
+                        else if (num==20) name2="F9";
+                        else if (num==21) name2="F10";
+                        else if (num==23) name2="F11";
+                        else if (num==24) name2="F12";
+                        if (name2){ const char *c[]={"keypress",name2,NULL}; mpv_command_async(mpv,0,c); i = j+1; continue; }
+                    }
+                }
+                // Unhandled CSI; skip ESC
+                i++;
+                continue;
+            } else if (n1=='O') {
+                // ESC O P/Q/R/S => F1..F4
+                if (i+2 < n){
+                    unsigned char n2 = (unsigned char)buf[i+2];
+                    const char *name=NULL;
+                    if (n2=='P') name="F1"; else if (n2=='Q') name="F2"; else if (n2=='R') name="F3"; else if (n2=='S') name="F4";
+                    if (name){ const char *c[]={"keypress",name,NULL}; mpv_command_async(mpv,0,c); i+=3; continue; }
+                }
+                i++;
+                continue;
+            } else {
+                const char *c[]={"keypress","ESC",NULL}; mpv_command_async(mpv,0,c); i++; continue;
+            }
+        }
+        // printable ASCII
+        if (ch >= 32 && ch <= 126) {
+            char key[2]={ (char)ch, 0};
+            const char *c[]={"keypress", key, NULL}; mpv_command_async(mpv,0,c);
+            if (ch==' ') { const char *c2[]={"cycle","pause",NULL}; mpv_command_async(mpv,0,c2); }
+            else if (ch=='n') { const char *c3[]={"playlist-next",NULL}; mpv_command_async(mpv,0,c3); }
+            else if (ch=='p') { const char *c4[]={"playlist-prev",NULL}; mpv_command_async(mpv,0,c4); }
+            i++; continue;
+        }
+        if (ch=='\r' || ch=='\n') { const char *c[]={"keypress","ENTER",NULL}; mpv_command_async(mpv,0,c); i++; continue; }
+        if (ch=='\t') { const char *c[]={"keypress","TAB",NULL}; mpv_command_async(mpv,0,c); i++; continue; }
+        if (ch==0x7f) { const char *c[]={"keypress","BS",NULL}; mpv_command_async(mpv,0,c); i++; continue; }
+        // Unknown control, skip
+        i++;
+    }
 }
 
 static void advise_no_drm(void) {
@@ -836,6 +915,7 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
     if (opt->mode_w||opt->mode_h) fprintf(f, "--mode %dx%d@%d\n", opt->mode_w,opt->mode_h,opt->mode_hz);
     if (opt->rotation) fprintf(f, "--rotate %d\n", (int)opt->rotation);
     if (opt->font_px) fprintf(f, "--font-size %d\n", opt->font_px);
+    fprintf(f, "--layout %s\n", opt->layout_mode==0?"stack":opt->layout_mode==1?"row":opt->layout_mode==2?"2x1":"1x2");
     if (opt->video_frac_pct) fprintf(f, "--video-frac %d\n", opt->video_frac_pct);
     else if (opt->right_frac_pct) fprintf(f, "--right-frac %d\n", opt->right_frac_pct);
     if (opt->pane_split_pct) fprintf(f, "--pane-split %d\n", opt->pane_split_pct);
@@ -904,18 +984,26 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--gl-test")) opt.gl_test = true;
         else if (!strcmp(argv[i], "--no-config")) opt.no_config = true;
         else if (!strcmp(argv[i], "--smooth")) opt.smooth = true;
-        else if (!strcmp(argv[i], "--portrait-layout") && i + 1 < argc) {
+        else if (!strcmp(argv[i], "--layout") && i + 1 < argc) {
             const char *v = argv[++i];
-            if (!strcmp(v,"stack3")) opt.portrait_layout = 0;
-            else if (!strcmp(v,"2x1")) opt.portrait_layout = 1;
-            else if (!strcmp(v,"1x2")) opt.portrait_layout = 2;
+            if (!strcmp(v,"stack") || !strcmp(v,"stack3")) opt.layout_mode = 0;
+            else if (!strcmp(v,"row") || !strcmp(v,"row3")) opt.layout_mode = 1;
+            else if (!strcmp(v,"2x1")) opt.layout_mode = 2;
+            else if (!strcmp(v,"1x2")) opt.layout_mode = 3;
         }
-        else if (!strcmp(argv[i], "--landscape-layout") && i + 1 < argc) {
+        else if (!strcmp(argv[i], "--landscape-layout") && i + 1 < argc) { // backward compat
             const char *v = argv[++i];
-            if (!strcmp(v,"stack3")) opt.landscape_layout = 0;
-            else if (!strcmp(v,"row3")) opt.landscape_layout = 1;
-            else if (!strcmp(v,"2x1")) opt.landscape_layout = 2;
-            else if (!strcmp(v,"1x2")) opt.landscape_layout = 3;
+            if (!strcmp(v,"stack") || !strcmp(v,"stack3")) opt.layout_mode = 0;
+            else if (!strcmp(v,"row") || !strcmp(v,"row3")) opt.layout_mode = 1;
+            else if (!strcmp(v,"2x1")) opt.layout_mode = 2;
+            else if (!strcmp(v,"1x2")) opt.layout_mode = 3;
+        }
+        else if (!strcmp(argv[i], "--portrait-layout") && i + 1 < argc) { // backward compat
+            const char *v = argv[++i];
+            if (!strcmp(v,"stack") || !strcmp(v,"stack3")) opt.layout_mode = 0;
+            else if (!strcmp(v,"row") || !strcmp(v,"row3")) opt.layout_mode = 1;
+            else if (!strcmp(v,"2x1")) opt.layout_mode = 2;
+            else if (!strcmp(v,"1x2")) opt.layout_mode = 3;
         }
         else if (!strcmp(argv[i], "--loop-file")) opt.loop_file = true;
         else if (!strcmp(argv[i], "--loop")) opt.loop_flag = true;
@@ -931,15 +1019,59 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--video-rotate") && i + 1 < argc) { opt.video_rotate = atoi(argv[++i]); }
         else if (!strcmp(argv[i], "--panscan") && i + 1 < argc) { opt.panscan = argv[++i]; }
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            fprintf(stderr, "Usage: %s [--video PATH] [--connector ID|NAME] [--mode WxH[@Hz]] [--rotate 0|90|180|270]\n"
-                            "            [--font-size PX] [--right-frac PCT] [--pane-split PCT]\n"
-                            "            [--pane-a \"CMD\"] [--pane-b \"CMD\"] [--list-connectors]\n"
-                            "            [--no-video] [--playlist FILE] [--playlist-extended FILE] [--no-config] [--smooth]\n"
-                            "            [--loop-file] [--loop] [--loop-playlist] [--shuffle] [--mpv-opt K=V]\n"
-                            "            [--video-opt K=V] [--video-frac PCT] [--config FILE] [--save-config FILE] [--save-config-default]\n"
-                            "            [--video-rotate DEG] [--panscan VAL] [--portrait-layout stack3|2x1|1x2] [--landscape-layout stack3|row3|2x1|1x2]\n"
-                            "            [--no-panes] [--gl-test] [--diag] [--debug]\n",
-                    argv[0]);
+            const char *exe = argv[0];
+            fprintf(stderr,
+                "KMS Mosaic — tiled video + terminal panes (Linux KMS console)\n\n"
+                "Usage:\n"
+                "  %s [options] [video...]\n\n"
+                "Core options:\n"
+                "  --connector ID|NAME     Select DRM output (e.g. 42, HDMI-A-1, DP-1). Default: first connected.\n"
+                "  --mode WxH[@Hz]         Mode like 1920x1080@60. Default: preferred.\n"
+                "  --rotate 0|90|180|270   Presentation rotation (affects layout orientation).\n"
+                "  --font-size PX          Terminal font pixel size (default 18).\n"
+                "  --right-frac PCT        Right column width percentage (default 33).\n"
+                "  --video-frac PCT        Override: video width percentage.\n"
+                "  --pane-split PCT        Top row height percentage for split layouts (default 50).\n"
+                "  --pane-a \"CMD\"           Command for Pane A (default: btop).\n"
+                "  --pane-b \"CMD\"           Command for Pane B (default: tail -f /var/log/syslog).\n"
+                "  --layout M              stack | row | 2x1 | 1x2 (applies in any rotation).\n\n"
+                "Video/playlist:\n"
+                "  --video PATH            Add a video (repeatable). Bare args are treated as --video.\n"
+                "  --video-opt K=V         Per-video options (repeatable, applies to the last --video).\n"
+                "  --playlist FILE         Load playlist file.\n"
+                "  --playlist-extended F   Extended playlist (path | k=v,k=v per line).\n"
+                "  --loop-file             Loop current file indefinitely.\n"
+                "  --loop                  Shorthand for --loop-file.\n"
+                "  --loop-playlist         Loop the whole playlist.\n"
+                "  --shuffle               Randomize playlist order.\n"
+                "  --mpv-opt K=V           Global mpv option (repeatable).\n"
+                "  --video-rotate DEG      Pass-through to mpv video-rotate.\n"
+                "  --panscan VAL           Pass-through to mpv panscan.\n\n"
+                "Config and misc:\n"
+                "  --config FILE           Load options from file (supports quotes and # comments).\n"
+                "  --save-config FILE      Save current options to file.\n"
+                "  --save-config-default   Save to the default config path.\n"
+                "  --no-config             Do not auto-load default config.\n"
+                "  --list-connectors       Print connectors/modes and exit.\n"
+                "  --no-video              Disable the video pane.\n"
+                "  --no-panes              Disable terminal panes.\n"
+                "  --smooth                Apply a sensible playback preset.\n"
+                "  --gl-test               Render a diagnostic GL gradient and exit.\n"
+                "  --diag                  Print GL/driver diagnostics and exit.\n"
+                "  --debug                 Verbose logging.\n\n"
+                "Defaults and notes:\n"
+                "  - OSD is off by default (toggle in Control Mode with 'o').\n"
+                "  - If a single video is provided (no playlist), --loop is assumed.\n"
+                "  - Controls are gated behind Control Mode so panes and video receive keys normally.\n\n"
+                "Controls (toggle Control Mode with Ctrl+E):\n"
+                "  Tab           Cycle focus C/A/B (video/paneA/paneB).\n"
+                "  l / L         Cycle layouts forward/back.\n"
+                "  r / R         Rotate roles among C/A/B (and reverse).\n"
+                "  t             Swap panes A and B.\n"
+                "  o             Toggle OSD visibility.\n"
+                "  ?             Help overlay.\n"
+                "  Ctrl+Q        Quit (only active in Control Mode).\n\n",
+                exe);
             return 0;
         }
         else {
@@ -953,6 +1085,14 @@ int main(int argc, char **argv) {
     }
 
     if (opt.playlist_ext) parse_playlist_ext(&opt, opt.playlist_ext);
+
+    // If exactly one video file is provided and no playlist,
+    // assume --loop should be enabled unless user already set a loop.
+    if (!opt.playlist_path && !opt.playlist_ext) {
+        if (opt.video_count == 1 && !opt.loop_file && !opt.loop_flag) {
+            opt.loop_flag = true;
+        }
+    }
 
     drm_ctx d = {0};
     gbm_ctx g = {0};
@@ -1026,7 +1166,8 @@ int main(int argc, char **argv) {
         for (int i=0;i<opt.n_mpv_opts;i++) {
             const char *kv = opt.mpv_opts[i];
             const char *eq = strchr(kv, '=');
-            if (!eq) continue; size_t kl = (size_t)(eq-kv);
+            if (!eq) continue;
+            size_t kl = (size_t)(eq-kv);
             if (strncmp(kv, "video-sync", kl==strlen("video-sync")?kl:strlen("video-sync"))==0) user_set_vsync=true;
             else if (strncmp(kv, "keepaspect", kl==strlen("keepaspect")?kl:strlen("keepaspect"))==0) user_set_keepaspect=true;
             else if (strncmp(kv, "video-rotate", kl==strlen("video-rotate")?kl:strlen("video-rotate"))==0) user_set_rotate=true;
@@ -1159,75 +1300,34 @@ int main(int argc, char **argv) {
     pane_layout lay_video = (pane_layout){ .x = 0, .y = 0, .w = logical_w, .h = logical_h };
     // Slot-based layout and permutation control: 0=video,1=paneA,2=paneB
     static int perm[3] = {0,1,2};
+    static int last_perm[3] = {0,1,2};
     static int last_font_px_a=-1, last_font_px_b=-1;
     static pane_layout prev_a={0}, prev_b={0};
+    static int last_layout_mode=-1;
+    static int layout_reinit_countdown = 0;
 
-    if (opt.rotation==ROT_90 || opt.rotation==ROT_270) {
-        // Portrait: choose among 3 layouts
-        int mode = opt.portrait_layout; // 0 stack3, 1 2x1 top, 2 1x2 bottom
-        int top_pct = opt.pane_split_pct ? opt.pane_split_pct : 60;
-        if (top_pct < 20) top_pct = 20; if (top_pct > 80) top_pct = 80;
-        // Define base slots
-        pane_layout s0={0}, s1={0}, s2={0};
-        if (mode == 0) {
-            // stack3: video top, pane A middle, pane B bottom
-            int h1 = screen_h * top_pct / 100;
-            int remain = screen_h - h1;
-            int h2 = remain/2; int h3 = remain - h2;
-            s0 = (pane_layout){ .x=0, .y=screen_h - h1, .w=screen_w, .h=h1 };
-            s1 = (pane_layout){ .x=0, .y=screen_h - h1 - h2, .w=screen_w, .h=h2 };
-            s2 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=h3 };
-        } else if (mode == 1) {
-            // 2x1: two columns top row (video left, pane A right), pane B bottom full
-            int htop = screen_h * top_pct / 100;
-            int hbot = screen_h - htop;
-            int wleft = screen_w/2; int wright = screen_w - wleft;
-            s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=wleft, .h=htop };
-            s1 = (pane_layout){ .x=wleft, .y=screen_h - htop, .w=wright, .h=htop };
-            s2 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=hbot };
-        } else {
-            // 1x2: one column top row (video full), bottom split two columns (pane A left, pane B right)
-            int htop = screen_h * top_pct / 100;
-            int hbot = screen_h - htop;
-            int wleft = screen_w/2; int wright = screen_w - wleft;
-            s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=screen_w, .h=htop };
-            s1 = (pane_layout){ .x=0, .y=0, .w=wleft, .h=hbot };
-            s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=hbot };
-        }
-        // Apply permutation to assign slots
-        pane_layout slots[3] = { s0, s1, s2 };
-        lay_video = slots[perm[0]];
-        lay_a     = slots[perm[1]];
-        lay_b     = slots[perm[2]];
-    } else {
-        // Landscape: provide 4 layout modes per request
-        int mode = opt.landscape_layout; // 0=stack3,1=row3,2=2x1,3=1x2
-        // Use right_frac/pane_split to influence columns/rows where applicable
+    {
+        int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2
         int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
-        int col_pct = opt.right_frac_pct ? (100 - opt.right_frac_pct) : 50; // base left column percent for split layouts
-        if (col_pct<20) col_pct=20; if (col_pct>80) col_pct=80;
+        int col_pct = opt.right_frac_pct ? (100 - opt.right_frac_pct) : 50; if (col_pct<20) col_pct=20; if (col_pct>80) col_pct=80;
         pane_layout s0={0}, s1={0}, s2={0};
         if (mode == 0) {
-            // stack3: 3 rows in 1 column (full width)
             int h = screen_h/3; int h2 = h; int h3 = screen_h - h - h2;
             s0 = (pane_layout){ .x=0, .y=screen_h - h, .w=screen_w, .h=h };
             s1 = (pane_layout){ .x=0, .y=screen_h - h - h2, .w=screen_w, .h=h2 };
             s2 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=h3 };
         } else if (mode == 1) {
-            // row3: 1 row in 3 columns (full height)
             int w = screen_w/3; int w2 = w; int w3 = screen_w - w - w2;
             s0 = (pane_layout){ .x=0, .y=0, .w=w, .h=screen_h };
             s1 = (pane_layout){ .x=w, .y=0, .w=w2, .h=screen_h };
             s2 = (pane_layout){ .x=w+w2, .y=0, .w=w3, .h=screen_h };
         } else if (mode == 2) {
-            // 2x1: left column split into two rows, right column full height
             int wleft = screen_w * col_pct / 100; int wright = screen_w - wleft;
             int htop = screen_h * split_pct / 100; int hbot = screen_h - htop;
             s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=wleft, .h=htop };
             s1 = (pane_layout){ .x=0, .y=0, .w=wleft, .h=hbot };
             s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=screen_h };
         } else {
-            // 1x2: left column full height, right column split into two rows
             int wleft = screen_w * col_pct / 100; int wright = screen_w - wleft;
             int htop = screen_h * split_pct / 100; int hbot = screen_h - htop;
             s0 = (pane_layout){ .x=0, .y=0, .w=wleft, .h=screen_h };
@@ -1283,8 +1383,8 @@ int main(int argc, char **argv) {
 
     // Set TTY to raw mode for key forwarding
     struct termios rawt; if (tcgetattr(0, &g_oldt)==0) { g_have_oldt = 1; rawt = g_oldt; cfmakeraw(&rawt); tcsetattr(0, TCSANOW, &rawt); atexit(restore_tty); }
-    fprintf(stderr, "Controls: Tab focus A/B, Ctrl+Q quit, n/p next/prev, space pause, o OSD toggle.\n");
-    int focus = 1; // 1=top pane, 2=bottom pane
+            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, l/L layouts, r/R rotate roles, t swap A/B, o OSD, ? help; Ctrl+Q quit.\n");
+    int focus = use_mpv ? 0 : 1; // 0=video, 1=top pane, 2=bottom pane
     bool show_osd = false; // default OSD off
     if (getenv("KMS_MPV_NO_OSD")) show_osd = false;
     bool show_help = false; // OSD help overlay
@@ -1321,44 +1421,46 @@ int main(int argc, char **argv) {
         if (pfds[0].revents & POLLIN) {
             char buf[64]; ssize_t n = read(0, buf, sizeof buf);
             if (n > 0) {
-                // Ctrl+Q (DC1, 0x11) to quit (Ctrl+C not used)
-                for (ssize_t i=0;i<n;i++) {
-                    unsigned char ch = (unsigned char)buf[i];
-                    if (ch == 0x11) { running=false; break; }
-                }
-                if (!running) break;
                 // Toggle UI control mode (Ctrl+E)
                 for (ssize_t i=0;i<n;i++) { unsigned char ch=(unsigned char)buf[i]; if (ch==0x05) { ui_control=!ui_control; }}
-                // Tab switches focus
-                bool consumed=false;
-                for (ssize_t i=0;i<n;i++) if (buf[i]=='\t') { focus = (focus==1?2:1); consumed=true; }
-                // Layout/pane controls (only when in UI control mode)
-                for (ssize_t i=0;i<n;i++) if (ui_control) {
-                    if (buf[i]=='l') {
-                        if (opt.rotation==ROT_90 || opt.rotation==ROT_270) opt.portrait_layout = (opt.portrait_layout+1)%3;
-                        else opt.landscape_layout = (opt.landscape_layout+1)%4;
-                        consumed=true;
-                    } else if (buf[i]=='L') {
-                        if (opt.rotation==ROT_90 || opt.rotation==ROT_270) opt.portrait_layout = (opt.portrait_layout+2)%3;
-                        else opt.landscape_layout = (opt.landscape_layout+3)%4;
-                        consumed=true;
-                    } else if (buf[i]=='t') { int tmp = perm[1]; perm[1]=perm[2]; perm[2]=tmp; consumed=true; }
-                    else if (buf[i]=='r') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p1; perm[1]=p2; perm[2]=p0; consumed=true; }
-                    else if (buf[i]=='R') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p2; perm[1]=p0; perm[2]=p1; consumed=true; }
-                    else if (buf[i]=='?') { show_help = !show_help; consumed=true; }
-                }
-                // Playback keys sent to mpv if present
-                if (use_mpv) {
+                // Ctrl+Q (DC1, 0x11) to quit is only active in Control Mode
+                if (ui_control) {
                     for (ssize_t i=0;i<n;i++) {
-                        if (buf[i]=='n') { const char *c[]={"playlist-next",NULL}; mpv_command_async(m.mpv,0,c); consumed=true; }
-                        else if (buf[i]=='p') { const char *c[]={"playlist-prev",NULL}; mpv_command_async(m.mpv,0,c); consumed=true; }
-                        else if (buf[i]==' ') { const char *c[]={"cycle","pause",NULL}; mpv_command_async(m.mpv,0,c); consumed=true; }
+                        unsigned char ch = (unsigned char)buf[i];
+                        if (ch == 0x11) { running=false; break; }
+                    }
+                    if (!running) break;
+                }
+                bool consumed=false;
+                // Tab switches focus only in UI control mode
+                if (ui_control) {
+                    for (ssize_t i=0;i<n;i++) if (buf[i]=='\t') {
+                        if (use_mpv) { focus = (focus+1)%3; }
+                        else { focus = (focus==1?2:1); }
+                        consumed=true;
                     }
                 }
-                for (ssize_t i=0;i<n;i++) if (buf[i]=='o') { show_osd = !show_osd; consumed=true; }
+                // Layout/pane controls (only when in UI control mode)
+                for (ssize_t i=0;i<n;i++) if (ui_control) {
+                    if (buf[i]=='l') { opt.layout_mode = (opt.layout_mode+1)%4; consumed=true; }
+                    else if (buf[i]=='L') { opt.layout_mode = (opt.layout_mode+3)%4; consumed=true; }
+                    else if (buf[i]=='t') { int tmp = perm[1]; perm[1]=perm[2]; perm[2]=tmp; consumed=true; }
+                    else if (buf[i]=='r') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p1; perm[1]=p2; perm[2]=p0; consumed=true; }
+                    else if (buf[i]=='R') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p2; perm[1]=p0; perm[2]=p1; consumed=true; }
+                    else if (buf[i]=='f') { term_pane_force_rebuild(tp_a); term_pane_force_rebuild(tp_b); consumed=true; }
+                    else if (buf[i]=='?') { show_help = !show_help; consumed=true; }
+                }
+                // OSD toggle only in UI control mode
+                if (ui_control) { for (ssize_t i=0;i<n;i++) if (buf[i]=='o') { show_osd = !show_osd; consumed=true; } }
                 if (!consumed && !ui_control) {
                     if (focus==1) term_pane_send_input(tp_a, buf, (size_t)n);
                     else if (focus==2) term_pane_send_input(tp_b, buf, (size_t)n);
+                    else if (focus==0 && use_mpv) {
+                        mpv_send_keys(m.mpv, buf, n);
+                    }
+                }
+                if (g_debug) {
+                    fprintf(stderr, "Input: focus=%d ui_control=%d consumed=%d bytes=%zd\n", focus, ui_control?1:0, consumed?1:0, n);
                 }
             }
         }
@@ -1393,49 +1495,34 @@ int main(int argc, char **argv) {
 
         // Recompute layout based on current rotation/layout/perm
         {
-            if (opt.rotation==ROT_90 || opt.rotation==ROT_270) {
-                int mode = opt.portrait_layout; // 0=stack3,1=2x1,2=1x2
-                int top_pct = opt.pane_split_pct ? opt.pane_split_pct : 60; if (top_pct<20) top_pct=20; if (top_pct>80) top_pct=80;
-                pane_layout s0={0}, s1={0}, s2={0};
-                if (mode == 0) {
-                    int h1 = screen_h * top_pct / 100; int remain = screen_h - h1; int h2 = remain/2; int h3 = remain - h2;
-                    s0 = (pane_layout){ .x=0, .y=screen_h - h1, .w=screen_w, .h=h1 };
-                    s1 = (pane_layout){ .x=0, .y=screen_h - h1 - h2, .w=screen_w, .h=h2 };
-                    s2 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=h3 };
-                } else if (mode == 1) {
-                    int htop = screen_h * top_pct / 100; int hbot = screen_h - htop; int wleft = screen_w/2; int wright = screen_w - wleft;
-                    s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=wleft, .h=htop };
-                    s1 = (pane_layout){ .x=wleft, .y=screen_h - htop, .w=wright, .h=htop };
-                    s2 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=hbot };
-                } else {
-                    int htop = screen_h * top_pct / 100; int hbot = screen_h - htop; int wleft = screen_w/2; int wright = screen_w - wleft;
-                    s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=screen_w, .h=htop };
-                    s1 = (pane_layout){ .x=0, .y=0, .w=wleft, .h=hbot };
-                    s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=hbot };
-                }
-                pane_layout slots[3] = { s0, s1, s2 };
-                lay_video = slots[perm[0]]; lay_a = slots[perm[1]]; lay_b = slots[perm[2]];
-            } else {
-                int mode = opt.landscape_layout; // 0=stack3,1=row3,2=2x1,3=1x2
+            int layout_changed = 0;
+            if (last_layout_mode != opt.layout_mode) { layout_changed = 1; last_layout_mode = opt.layout_mode; }
+            if (last_perm[0]!=perm[0] || last_perm[1]!=perm[1] || last_perm[2]!=perm[2]) { layout_changed = 1; last_perm[0]=perm[0]; last_perm[1]=perm[1]; last_perm[2]=perm[2]; }
+            {
+                int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2
                 int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
                 int col_pct = opt.right_frac_pct ? (100 - opt.right_frac_pct) : 50; if (col_pct<20) col_pct=20; if (col_pct>80) col_pct=80;
                 pane_layout s0={0}, s1={0}, s2={0};
                 if (mode == 0) {
+                    // 3 rows stack
                     int h = screen_h/3; int h2=h; int h3=screen_h-h-h2;
                     s0=(pane_layout){.x=0,.y=screen_h-h,.w=screen_w,.h=h};
                     s1=(pane_layout){.x=0,.y=screen_h-h-h2,.w=screen_w,.h=h2};
                     s2=(pane_layout){.x=0,.y=0,.w=screen_w,.h=h3};
                 } else if (mode == 1) {
+                    // 3 columns row
                     int w=screen_w/3; int w2=w; int w3=screen_w-w-w2;
                     s0=(pane_layout){.x=0,.y=0,.w=w,.h=screen_h};
                     s1=(pane_layout){.x=w,.y=0,.w=w2,.h=screen_h};
                     s2=(pane_layout){.x=w+w2,.y=0,.w=w3,.h=screen_h};
                 } else if (mode == 2) {
+                    // Left column split rows, right full
                     int wleft=screen_w*col_pct/100; int wright=screen_w-wleft; int htop=screen_h*split_pct/100; int hbot=screen_h-htop;
                     s0=(pane_layout){.x=0,.y=screen_h-htop,.w=wleft,.h=htop};
                     s1=(pane_layout){.x=0,.y=0,.w=wleft,.h=hbot};
                     s2=(pane_layout){.x=wleft,.y=0,.w=wright,.h=screen_h};
                 } else {
+                    // Left full, right column split rows
                     int wleft=screen_w*col_pct/100; int wright=screen_w-wleft; int htop=screen_h*split_pct/100; int hbot=screen_h-htop;
                     s0=(pane_layout){.x=0,.y=0,.w=wleft,.h=screen_h};
                     s1=(pane_layout){.x=wleft,.y=screen_h-htop,.w=wright,.h=htop};
@@ -1443,6 +1530,15 @@ int main(int argc, char **argv) {
                 }
                 pane_layout slots[3] = { s0, s1, s2 };
                 lay_video = slots[perm[0]]; lay_a = slots[perm[1]]; lay_b = slots[perm[2]];
+            }
+            if (layout_changed) {
+                // Force a few frames of reinit to mimic fresh start in this layout
+                int default_frames = 3;
+                const char *rf = getenv("KMS_MOSAIC_REINIT_FRAMES");
+                if (rf) { int v = atoi(rf); if (v>=0 && v<=30) default_frames = v; }
+                layout_reinit_countdown = default_frames;
+                if (g_debug) fprintf(stderr, "Layout changed -> reinit countdown %d (mode=%d, perm=%d/%d/%d, rot=%d)\n",
+                                     layout_reinit_countdown, opt.layout_mode, perm[0],perm[1],perm[2], (int)opt.rotation);
             }
         }
 
@@ -1589,43 +1685,69 @@ int main(int argc, char **argv) {
 
                 // Composite into logical RT: draw video into its layout rect
                 glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
+                gl_reset_state_2d();
                 glViewport(0, 0, logical_w, logical_h);
                 draw_tex_to_rt(vid_tex, lay_video.x, lay_video.y, vw, vh, logical_w, logical_h);
             }
         } else {
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
+            gl_reset_state_2d();
             glViewport(0, 0, logical_w, logical_h);
         }
         
         // Draw terminal panes into rt
         // Before rendering, if layout changed, resize panes and adjust font sizes
         if (!direct_mode && !opt.no_panes) {
-            // Adjust pane A font if needed
+            if (g_debug) {
+                // Tint pane backgrounds to visualize draw rects
+                glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
+                gl_reset_state_2d();
+                glEnable(GL_SCISSOR_TEST);
+                // Pane A: bluish tint
+                glScissor(lay_a.x, logical_h - (lay_a.y + lay_a.h), lay_a.w, lay_a.h);
+                glClearColor(0.05f, 0.10f, 0.20f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+                // Pane B: greenish tint
+                glScissor(lay_b.x, logical_h - (lay_b.y + lay_b.h), lay_b.w, lay_b.h);
+                glClearColor(0.05f, 0.20f, 0.10f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+                glDisable(GL_SCISSOR_TEST);
+            }
+            // Adjust panes and fonts; if forcing reinit, reset and rebuild surfaces like fresh start
             if (last_font_px_a != font_px_a) { term_pane_set_font_px(tp_a, font_px_a); last_font_px_a = font_px_a; }
             if (prev_a.x!=lay_a.x || prev_a.y!=lay_a.y || prev_a.w!=lay_a.w || prev_a.h!=lay_a.h) { term_pane_resize(tp_a, &lay_a); prev_a=lay_a; }
-            // Adjust pane B font if needed
             if (last_font_px_b != font_px_b) { term_pane_set_font_px(tp_b, font_px_b); last_font_px_b = font_px_b; }
             if (prev_b.x!=lay_b.x || prev_b.y!=lay_b.y || prev_b.w!=lay_b.w || prev_b.h!=lay_b.h) { term_pane_resize(tp_b, &lay_b); prev_b=lay_b; }
+            if (layout_reinit_countdown > 0) {
+                // Do NOT reset the vterm screens; that clears content.
+                // Instead, poll aggressively for a few frames to let apps redraw after SIGWINCH.
+                (void)term_pane_poll(tp_a);
+                (void)term_pane_poll(tp_b);
+                layout_reinit_countdown--;
+            }
             // Poll PTYs and update textures only if changed
             (void)term_pane_poll(tp_a);
             (void)term_pane_poll(tp_b);
             term_pane_render(tp_a, screen_w, screen_h);
+            if (g_debug) fprintf(stderr, "Pane A draw at %d,%d %dx%d\n", lay_a.x, lay_a.y, lay_a.w, lay_a.h);
+            gl_check("after term_pane_render A");
             term_pane_render(tp_b, screen_w, screen_h);
+            if (g_debug) fprintf(stderr, "Pane B draw at %d,%d %dx%d\n", lay_b.x, lay_b.y, lay_b.w, lay_b.h);
+            gl_check("after term_pane_render B");
         }
 
-        // OSD overlay (title, index/total, paused)
+        // OSD overlay (title, index/total, paused) and help
         if (!direct_mode && use_mpv && !opt.no_osd && (show_osd || show_help)) {
             static osd_ctx *osd = NULL; if (!osd) osd = osd_create(opt.font_px?opt.font_px:20);
             if (show_help) {
                 const char *help =
-                    "Controls\n"
-                    "  Tab: focus A/B\n"
-                    "  n/p/space: next/prev/pause\n"
+                    "Control Mode\n"
+                    "  Tab: focus cycle C/A/B\n"
                     "  o: toggle OSD\n"
-                    "  Ctrl+E: toggle pane/layout control mode\n"
                     "  l/L: cycle layouts\n"
                     "  r/R: rotate roles C/A/B\n"
                     "  t: swap panes A/B\n"
+                    "  f: force pane rebuild\n"
                     "  Ctrl+Q: quit\n";
                 osd_set_text(osd, help);
             } else {
@@ -1640,8 +1762,18 @@ int main(int argc, char **argv) {
             }
             // Draw into logical RT at 16px margin
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
+            gl_reset_state_2d();
             glViewport(0,0, logical_w, logical_h);
             osd_draw(osd, 16, 16, logical_w, logical_h);
+        }
+        // Control-mode indicator OSD (always visible when active)
+        if (!direct_mode && ui_control) {
+            static osd_ctx *osdcm = NULL; if (!osdcm) osdcm = osd_create(opt.font_px?opt.font_px:20);
+            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  l/L layouts  r/R rotate  t swap  o OSD  ? help");
+            glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
+            gl_reset_state_2d();
+            glViewport(0,0, logical_w, logical_h);
+            osd_draw(osdcm, 16, 48, logical_w, logical_h);
         }
 
         // Present
@@ -1658,15 +1790,6 @@ int main(int argc, char **argv) {
         if (use_mpv && m.mpv_gl) {
             // Inform mpv that we swapped (advanced control)
             mpv_render_context_report_swap(m.mpv_gl);
-        }
-        // Control-mode indicator OSD (always show when active)
-        if (ui_control && !direct_mode) {
-            static osd_ctx *osdcm = NULL; if (!osdcm) osdcm = osd_create(opt.font_px?opt.font_px:20);
-            osd_set_text(osdcm, "Control Mode (Ctrl+E toggles)\n l/L layouts  r/R rotate  t swap  ? help");
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            glViewport(0, 0, fb_w, fb_h);
-            // Draw small overlay in top-left corner
-            osd_draw(osdcm, 16, 48, fb_w, fb_h);
         }
         // Ask for next render; mpv will block to target time internally
         if (use_mpv) mpv_needs_render = 1;

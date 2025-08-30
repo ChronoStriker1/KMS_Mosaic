@@ -104,4 +104,35 @@ static GLuint osd_prog=0, osd_vbo=0; static GLint osd_u_tex=-1;
 static GLuint compile_shader_dbg(GLenum type, const char *src){ GLuint s=glCreateShader(type); glShaderSource(s,1,&src,NULL); glCompileShader(s); GLint ok; glGetShaderiv(s,GL_COMPILE_STATUS,&ok); if(!ok){ char log[512]; GLsizei ln=0; glGetShaderInfoLog(s,sizeof log,&ln,log); fprintf(stderr,"osd shader compile failed (%s): %.*s\nSource:\n%.*s\n", type==GL_VERTEX_SHADER?"vertex":"fragment", ln, log, 200, src); exit(1);} return s; }
 static void ensure_prog(void){ if(osd_prog) return; const char* vs="#version 100\n#ifdef GL_ES\nprecision mediump float;\nprecision mediump int;\n#endif\nattribute vec2 a_pos; attribute vec2 a_uv; varying vec2 v_uv; void main(){ v_uv=a_uv; gl_Position=vec4(a_pos,0,1);}"; const char* fs="#version 100\nprecision mediump float; varying vec2 v_uv; uniform sampler2D u_tex; void main(){ gl_FragColor=texture2D(u_tex,v_uv);}"; GLuint v=compile_shader_dbg(GL_VERTEX_SHADER,vs), f=compile_shader_dbg(GL_FRAGMENT_SHADER,fs); osd_prog=glCreateProgram(); glAttachShader(osd_prog,v); glAttachShader(osd_prog,f); glBindAttribLocation(osd_prog,0,"a_pos"); glBindAttribLocation(osd_prog,1,"a_uv"); glLinkProgram(osd_prog); osd_u_tex=glGetUniformLocation(osd_prog,"u_tex"); glGenBuffers(1,&osd_vbo);} 
 
-void osd_draw(osd_ctx* o, int x, int y, int fb_w, int fb_h){ if(!o||!o->text) return; ensure_prog(); unsigned char *rgba=NULL; int w=0,h=0; render_text_to_rgba(&o->font, o->text, &rgba, &w, &h); if(w<=0||h<=0){ free(rgba); return; } glBindTexture(GL_TEXTURE_2D, o->tex); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,rgba); free(rgba); float L = (2.0f * x / fb_w) - 1.0f; float R = (2.0f * (x + w) / fb_w) - 1.0f; float T = 1.0f - (2.0f * y / fb_h); float B = 1.0f - (2.0f * (y + h) / fb_h); float verts[] = { L,B, 0,0,  R,B, 1,0,  R,T, 1,1,  L,B, 0,0,  R,T, 1,1,  L,T, 0,1 }; glUseProgram(osd_prog); glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, o->tex); glUniform1i(osd_u_tex, 0); glBindBuffer(GL_ARRAY_BUFFER, osd_vbo); glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STREAM_DRAW); glEnableVertexAttribArray(0); glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)0); glEnableVertexAttribArray(1); glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)(2*sizeof(float))); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glDrawArrays(GL_TRIANGLES,0,6); glDisable(GL_BLEND); }
+void osd_draw(osd_ctx* o, int x, int y, int fb_w, int fb_h){
+    if(!o||!o->text) return;
+    ensure_prog();
+    unsigned char *rgba=NULL; int w=0,h=0;
+    render_text_to_rgba(&o->font, o->text, &rgba, &w, &h);
+    if(w<=0||h<=0){ free(rgba); return; }
+    glBindTexture(GL_TEXTURE_2D, o->tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
+    free(rgba);
+    float L = (2.0f * x / fb_w) - 1.0f; float R = (2.0f * (x + w) / fb_w) - 1.0f;
+    float T = 1.0f - (2.0f * y / fb_h); float B = 1.0f - (2.0f * (y + h) / fb_h);
+    float verts[] = { L,B, 0,0,  R,B, 1,0,  R,T, 1,1,  L,B, 0,0,  R,T, 1,1,  L,T, 0,1 };
+    glUseProgram(osd_prog);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, o->tex);
+    glUniform1i(osd_u_tex, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, osd_vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STREAM_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)(2*sizeof(float)));
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDrawArrays(GL_TRIANGLES,0,6);
+    glDisable(GL_BLEND);
+}

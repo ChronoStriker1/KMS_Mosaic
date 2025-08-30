@@ -32,7 +32,7 @@ Run
 - Examples:
 - `./kms_mosaic --video /path/to/video.mp4`
 - `./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90`
-- `./kms_mosaic --no-config --smooth --loop --video-rotate 270 --panscan 1 --portrait-layout 2x1 --video /path/to/movie.mp4`
+- `./kms_mosaic --no-config --smooth --loop --video-rotate 270 --panscan 1 --layout 2x1 --video /path/to/movie.mp4`
 - `./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22`
 - `./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle`
 - `./kms_mosaic --config /path/profile.conf`
@@ -40,25 +40,26 @@ Run
 - `./kms_mosaic --save-config-default`
 
 Controls
-- Tab: switch focus between panes A/B
-- n / p: next / previous video
-- Space: pause/resume video
-- o: toggle OSD on/off
-- l / L: cycle layouts forward/back (portrait: 3 modes; landscape: 4 modes)
-- t: swap terminal panes A and B
-- r / R: rotate roles among (C video, A, B) / reverse
-- Ctrl+Q: quit compositor
-- OSD: title and status in top-left
+- Ctrl+E: toggle Control Mode. While active, compositor consumes layout/role keys.
+- Tab (in Control Mode): cycle focus among C/A/B (video, pane A, pane B)
+- l / L (in Control Mode): cycle layouts forward/back (portrait: 3 modes; landscape: 4 modes)
+- t (in Control Mode): swap terminal panes A and B
+- r / R (in Control Mode): rotate roles among (C video, A, B) / reverse
+- o (in Control Mode): toggle OSD on/off (default off)
+- ? (in Control Mode): help overlay
+- Ctrl+Q (in Control Mode): quit compositor
+- Outside Control Mode: all keys go to the focused pane; when focus is video, keys are forwarded to mpv (space/pause, n/p next/prev, arrows, ASCII)
+  - Video focus key support: ASCII, Space/Enter/Tab, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12, Esc, Backspace; plus fallbacks for space (pause), n/p (next/prev)
 
 
 Layouts
 - Portrait (90/270):
-  - stack3: 3 rows in 1 column (Top=C, Middle=A, Bottom=B by default)
+  - stack: 3 rows in 1 column (Top=C, Middle=A, Bottom=B by default)
   - 2x1: two columns in first row (C | A), second row single column (B)
   - 1x2: one column in first row (C), second row two columns (A | B)
 - Landscape (0/180):
-  - stack3: 3 rows in 1 column
-  - row3: 1 row in 3 columns
+  - stack: 3 rows in 1 column
+  - row: 1 row in 3 columns
   - 2x1: 2 rows in left column, right column full height
   - 1x2: left column full height, right column split into 2 rows
 - Pane role assignment (C=video, A, B) is a permutation over the 3 slots and can be rotated/swapped at runtime via r/R/t.
@@ -82,7 +83,7 @@ Flags
 - --playlist-extended FILE: custom playlist with per-line options (each line: "path | key=val,key=val").
 - --no-video: disable the video region and use full width for the text panes.
 - --loop-file: loop the current file indefinitely.
-- --loop: shorthand for --loop-file (infinite)
+- --loop: shorthand for --loop-file (infinite). Note: if you provide exactly one video and no playlist, looping is assumed by default.
 - --loop-playlist: loop the playlist indefinitely.
 - --shuffle: randomize playlist order (alias: --randomize).
 - --mpv-opt K=V: set global mpv option (repeatable), e.g., --mpv-opt keepaspect=yes.
@@ -99,8 +100,22 @@ Flags
 
 - --no-config: do not auto-load the default config
 - --smooth: balanced playback preset (display-resample, no interp, linear tscale, early-flush, no shader cache)
-- --portrait-layout stack3|2x1|1x2: select portrait tiling mode
-- --landscape-layout stack3|row3|2x1|1x2: select landscape tiling mode
+- --layout stack|row|2x1|1x2: select tiling mode (applies in any rotation)
+
+Runtime focus and input
+- Focus targets: C=video, A=btop (by default), B=syslog (by default). Use Tab in Control Mode to select.
+- Outside Control Mode, keypresses go to the focused target. This keeps underlying programs (btop, shell, mpv) fully interactive.
+
+OSD
+- Default off for a clean display. Toggle in Control Mode with 'o' or show the help overlay with '?'.
+
+Behavioral defaults
+- Single-video auto-loop: if only one file is given and no playlist, looping is enabled automatically.
+
+Debugging
+- Enable verbose logging: set `KMS_MPV_DEBUG=1` to print layout changes, mpv events, and GL checkpoints.
+- Isolate GL state issues: set `KMS_MPV_DISABLE=1` to skip mpv and render only panes/OSD; set `KMS_MPV_DIRECT_TEST=1` to draw diagnostic color frames.
+- If panes go black while video is fine, it may be stale GL state (e.g., scissor) left by mpv. The compositor now resets GL state before drawing panes and OSD.
 
 Default config path
 - On Unraid: `/boot/config/kms_mpv_compositor.conf` (persistent across reboots)
