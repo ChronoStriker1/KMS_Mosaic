@@ -27,17 +27,17 @@ Build
 Run
 - Switch to an unused VT/TTY. Stop any services occupying DRM (X/Wayland).
 - Binary names:
-  - `kms_mosaic` (new alias)
+- `kms_mosaic` (new alias)
   - `kms_mpv_compositor` (kept for compatibility)
 - Examples:
-  - `./kms_mosaic --video /path/to/video.mp4`
-  - `./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90`
-  - `./kms_mosaic --no-config --smooth --loop --video-rotate 270 --panscan 1 --portrait-layout 2x1 --video /path/to/movie.mp4`
-  - `./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22`
-  - `./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle`
-  - `./kms_mosaic --config /path/profile.conf`
-  - `./kms_mosaic --save-config /path/profile.conf`
-  - `./kms_mosaic --save-config-default`
+- `./kms_mosaic --video /path/to/video.mp4`
+- `./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90`
+- `./kms_mosaic --no-config --smooth --loop --video-rotate 270 --panscan 1 --portrait-layout 2x1 --video /path/to/movie.mp4`
+- `./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22`
+- `./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle`
+- `./kms_mosaic --config /path/profile.conf`
+- `./kms_mosaic --save-config /path/profile.conf`
+- `./kms_mosaic --save-config-default`
 
 Controls
 - Tab: switch focus between panes A/B
