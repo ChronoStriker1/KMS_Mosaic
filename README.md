@@ -1,16 +1,15 @@
-KMS Compositor with Embedded mpv and Text Panes
+KMS Mosaic — Tiled Video + Terminal Panes (KMS/GBM/EGL)
 
 Overview
-- Single-binary compositor for a TTY without X/Wayland.
-- Uses DRM/KMS + GBM + EGL/GLES2 to scan out a surface.
-- Embeds libmpv (OpenGL callback API) to render video into a region.
-- Reserves two text panes (top/bottom-right) for btop and syslog tail.
-- Initial version stubs text rendering; PTY + libvterm integration is TODO.
+- Single-binary KMS compositor for the Linux console (no X/Wayland).
+- Uses DRM/KMS + GBM + EGL/GLES2 to present directly to the display.
+- Embeds libmpv (render API) to draw video; embeds libvterm for terminal panes.
+- Dynamically tiles three panes (“mosaic”): Pane C (Video), Pane A (btop), Pane B (syslog tail).
 
 Why this approach
-- Only one DRM master can drive the display; fbcon cannot be mixed reliably
-  once a user-space DRM app takes master. So we emulate text panes in userspace
-  and composite with the video into a single KMS surface.
+- Only one DRM master can drive a KMS display at a time. This compositor provides
+  a video pane + text panes without X/Wayland by compositing all panes in a single
+  scanout surface.
 
 Dependencies (build-time)
 - libdrm (drm, drm_mode), gbm
@@ -27,31 +26,42 @@ Build
 
 Run
 - Switch to an unused VT/TTY. Stop any services occupying DRM (X/Wayland).
+- Binary names:
+  - `kms_mosaic` (new alias)
+  - `kms_mpv_compositor` (kept for compatibility)
 - Examples:
-  - ./kms_mpv_compositor --video /path/to/video.mp4
-  - ./kms_mpv_compositor --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90
-  - ./kms_mpv_compositor --video a.mp4 --video b.mp4 --shuffle --loop-playlist
-  - ./kms_mpv_compositor --playlist /path/to/list.m3u --loop-playlist --rotate 270
-  - ./kms_mpv_compositor --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22
-  - ./kms_mpv_compositor --video cat1.mp4 --video-opt keepaspect=yes --video-opt panscan=1 --video cat2.mp4 --video-opt panscan=0.5
-  - ./kms_mpv_compositor --playlist-extended mylist.txt --loop-playlist --shuffle
-  - ./kms_mpv_compositor --config /path/profile.conf  # load saved profile
-  - ./kms_mpv_compositor --save-config /path/profile.conf  # save current flags
-  - ./kms_mpv_compositor --save-config-default  # save to default (/boot/config on Unraid)
+  - `./kms_mosaic --video /path/to/video.mp4`
+  - `./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90`
+  - `./kms_mosaic --no-config --smooth --loop --video-rotate 270 --panscan 1 --portrait-layout 2x1 --video /path/to/movie.mp4`
+  - `./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22`
+  - `./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle`
+  - `./kms_mosaic --config /path/profile.conf`
+  - `./kms_mosaic --save-config /path/profile.conf`
+  - `./kms_mosaic --save-config-default`
 
 Controls
-- Tab: switch focus between panes
-- n/p: next/previous video
+- Tab: switch focus between panes A/B
+- n / p: next / previous video
 - Space: pause/resume video
 - o: toggle OSD on/off
+- l / L: cycle layouts forward/back (portrait: 3 modes; landscape: 4 modes)
+- t: swap terminal panes A and B
+- r / R: rotate roles among (C video, A, B) / reverse
 - Ctrl+Q: quit compositor
-- OSD: shows play/pause, playlist index/total, and title (top-left).
+- OSD: title and status in top-left
 
 
-Layout (default 1920x1080)
-- Video: left 2/3 of the screen, full height
-- Text Pane A: right column top half (btop in a PTY)
-- Text Pane B: right column bottom half (tail -f /var/log/syslog)
+Layouts
+- Portrait (90/270):
+  - stack3: 3 rows in 1 column (Top=C, Middle=A, Bottom=B by default)
+  - 2x1: two columns in first row (C | A), second row single column (B)
+  - 1x2: one column in first row (C), second row two columns (A | B)
+- Landscape (0/180):
+  - stack3: 3 rows in 1 column
+  - row3: 1 row in 3 columns
+  - 2x1: 2 rows in left column, right column full height
+  - 1x2: left column full height, right column split into 2 rows
+- Pane role assignment (C=video, A, B) is a permutation over the 3 slots and can be rotated/swapped at runtime via r/R/t.
 
 Planned TODOs
 - Improve Unicode/box drawing coverage and performance.
@@ -72,6 +82,7 @@ Flags
 - --playlist-extended FILE: custom playlist with per-line options (each line: "path | key=val,key=val").
 - --no-video: disable the video region and use full width for the text panes.
 - --loop-file: loop the current file indefinitely.
+- --loop: shorthand for --loop-file (infinite)
 - --loop-playlist: loop the playlist indefinitely.
 - --shuffle: randomize playlist order (alias: --randomize).
 - --mpv-opt K=V: set global mpv option (repeatable), e.g., --mpv-opt keepaspect=yes.
@@ -85,6 +96,11 @@ Flags
 - --config FILE: load flags from a config file (supports quotes, comments with #).
 - --save-config FILE: write the current configuration as flags to a file.
 - --save-config-default: write the configuration to the default config path.
+
+- --no-config: do not auto-load the default config
+- --smooth: balanced playback preset (display-resample, no interp, linear tscale, early-flush, no shader cache)
+- --portrait-layout stack3|2x1|1x2: select portrait tiling mode
+- --landscape-layout stack3|row3|2x1|1x2: select landscape tiling mode
 
 Default config path
 - On Unraid: `/boot/config/kms_mpv_compositor.conf` (persistent across reboots)
