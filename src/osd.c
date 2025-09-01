@@ -85,8 +85,20 @@ static void render_text_to_rgba(font_ctx *f, const char *text, unsigned char **o
             for (int xx=0; xx<(int)g->bitmap.width; xx++){
                 int px = gx + xx; if (px<0 || px>=*w) continue;
                 unsigned char a = g->bitmap.buffer[yy*g->bitmap.width + xx];
+                // outline pass: set surrounding pixels to black
+                for (int oy=-1; oy<=1; oy++){
+                    int py2 = py + oy; if (py2<0 || py2>=*h) continue;
+                    for (int ox=-1; ox<=1; ox++){
+                        if (ox==0 && oy==0) continue;
+                        int px2 = px + ox; if (px2<0 || px2>=*w) continue;
+                        unsigned char *dst = &buf[(size_t)(py2 * (*w) + px2) * 4];
+                        if (dst[3] < a) {
+                            dst[0] = 0; dst[1] = 0; dst[2] = 0; dst[3] = a;
+                        }
+                    }
+                }
+                // main glyph pixel (white)
                 unsigned char *dst = &buf[(size_t)(py * (*w) + px) * 4];
-                // white text with alpha
                 dst[0] = 255; dst[1] = 255; dst[2] = 255; dst[3] = a;
             }
         }
