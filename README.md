@@ -38,6 +38,7 @@ Run
 - `./kms_mosaic --config /path/profile.conf`
 - `./kms_mosaic --save-config /path/profile.conf`
 - `./kms_mosaic --save-config-default`
+- `./kms_mosaic --playlist-fifo /tmp/playlist.fifo`
 
 -Controls
 - Ctrl+Q: quit compositor (always active)
@@ -49,6 +50,7 @@ Run
 - o (in Control Mode): toggle OSD on/off (default off)
 - ? (in Control Mode): help overlay
 - f (in Control Mode): force pane surface rebuild (refresh from vterm screen)
+- s (in Control Mode): save current configuration as default
 - Arrows (in Control Mode): resize column/row splits (L-shaped layouts)
   - The focused pane is outlined with a cyan border while in Control Mode.
 - Outside Control Mode: all keys go to the focused pane; when focus is video, keys are forwarded to mpv (space/pause, n/p next/prev, arrows, ASCII)
@@ -88,6 +90,7 @@ Flags
 - --video PATH: path to media file for the left pane. Optional.
 - --video-opt K=V: apply mpv option to the most recent --video (repeatable per item).
 - --playlist FILE: load an mpv playlist file (m3u, one path per line).
+- --playlist-fifo PATH: read newline-delimited video paths at runtime and append to the playlist.
 - --playlist-extended FILE: custom playlist with per-line options (each line: "path | key=val,key=val").
 - --no-video: disable the video region and use full width for the text panes.
 - --loop-file: loop the current file indefinitely.
