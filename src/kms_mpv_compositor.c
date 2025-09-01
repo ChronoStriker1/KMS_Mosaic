@@ -1472,6 +1472,8 @@ int main(int argc, char **argv) {
         }
     }
 
+    if (opt.playlist_fifo) opt.loop_playlist = true;
+
     if (opt.playlist_ext) parse_playlist_ext(&opt, opt.playlist_ext);
 
     // If exactly one video file is provided and no playlist,
@@ -2303,7 +2305,7 @@ int main(int argc, char **argv) {
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             gl_reset_state_2d();
             glViewport(0,0, logical_w, logical_h);
-            int wrap_w = (opt.rotation==ROT_90 || opt.rotation==ROT_270) ? logical_h : logical_w;
+            int wrap_w = logical_w;
             osd_draw(osd, 16, 16, logical_w, logical_h, wrap_w);
         }
         // Control-mode indicator OSD (always visible when active)
@@ -2314,7 +2316,7 @@ int main(int argc, char **argv) {
             gl_reset_state_2d();
             glViewport(0,0, logical_w, logical_h);
             int cm_y = display_help ? (logical_h - (opt.font_px?opt.font_px:20) - 16) : 48;
-            int wrap_w = (opt.rotation==ROT_90 || opt.rotation==ROT_270) ? logical_h : logical_w;
+            int wrap_w = logical_w;
             osd_draw(osdcm, 16, cm_y, logical_w, logical_h, wrap_w);
             // Highlight focused pane with a border
             int bx=0, by=0, bw=0, bh=0; int thickness = 4;

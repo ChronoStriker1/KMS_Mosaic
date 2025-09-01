@@ -152,6 +152,26 @@ void osd_draw(osd_ctx* o, int x, int y, int fb_w, int fb_h, int wrap_w){
     render_text_to_rgba(&o->font, wrapped, &rgba, &w, &h);
     free(wrapped);
     if(w<=0||h<=0){ free(rgba); return; }
+    // Clamp so text stays on screen
+    if (x + w > fb_w) x = fb_w - w;
+    if (y + h > fb_h) y = fb_h - h;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    // Draw black background box with small margin
+    int margin = 8;
+    int bx = x - margin;
+    int by = y - margin;
+    int bw = w + margin*2;
+    int bh = h + margin*2;
+    if (bx < 0) bx = 0;
+    if (by < 0) by = 0;
+    if (bx + bw > fb_w) bx = fb_w - bw;
+    if (by + bh > fb_h) by = fb_h - bh;
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(bx, fb_h - (by + bh), bw, bh);
+    glClearColor(0.f,0.f,0.f,1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_SCISSOR_TEST);
     glBindTexture(GL_TEXTURE_2D, o->tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
