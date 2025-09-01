@@ -26,18 +26,20 @@ Build
 
 Run
 - Switch to an unused VT/TTY. Stop any services occupying DRM (X/Wayland).
-- Binary names:
-- `kms_mosaic` (new alias)
-  - `kms_mpv_compositor` (kept for compatibility)
+- Binary name: `kms_mosaic`
 - Examples:
 - `./kms_mosaic --video /path/to/video.mp4`
 - `./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90`
 - `./kms_mosaic --no-config --smooth --loop --video-rotate 270 --panscan 1 --layout 2x1 --video /path/to/movie.mp4`
+- `./kms_mosaic --cmd-fifo /tmp/mosaic.fifo --video /path/to/video.mp4`
 - `./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22`
 - `./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle`
 - `./kms_mosaic --config /path/profile.conf`
 - `./kms_mosaic --save-config /path/profile.conf`
 - `./kms_mosaic --save-config-default`
+- With `--cmd-fifo PATH`, send commands from another terminal, e.g.:
+  `echo panscan > /tmp/mosaic.fifo` toggles video panscan
+  `echo quit > /tmp/mosaic.fifo` quits the compositor
 - `./kms_mosaic --playlist-fifo /tmp/playlist.fifo`
   - create fifo: `mkfifo /tmp/playlist.fifo` then `echo /path/video.mp4 > /tmp/playlist.fifo`
   - playlist loops back to the first entry when the last video ends
@@ -57,6 +59,7 @@ Run
 - z (in Control Mode): toggle fullscreen for the focused pane
 - n / p (in Control Mode while fullscreen): show next/previous pane
 - a (in Control Mode while fullscreen): toggle auto rotation of panes
+- c (in Control Mode): toggle panscan for the video
   - The focused pane is outlined with a cyan border while in Control Mode.
 - Outside Control Mode: all keys go to the focused pane; when focus is video, keys are forwarded to mpv (space/pause, n/p next/prev, arrows, ASCII)
   - Video focus key support: ASCII, Space/Enter/Tab, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12, Esc, Backspace; plus fallbacks for space (pause), n/p (next/prev)
@@ -105,6 +108,7 @@ Flags
 - --loop-playlist: loop the playlist indefinitely.
 - --shuffle: randomize playlist order (alias: --randomize).
 - --mpv-opt K=V: set global mpv option (repeatable), e.g., --mpv-opt keepaspect=yes.
+- --cmd-fifo PATH: read newline-delimited commands from FIFO for runtime control (e.g., panscan, quit).
 - --font-size PX: terminal font size in pixels (default 18).
 - --right-frac PCT: percent of screen width used by right column (10..80, default 33).
 - --video-frac PCT: percent of screen width for the video region (overrides --right-frac).
@@ -137,13 +141,13 @@ Behavioral defaults
 - Single-video auto-loop: if only one file is given and no playlist, looping is enabled automatically.
 
 Debugging
-- Enable verbose logging: set `KMS_MPV_DEBUG=1` to print layout changes, mpv events, and GL checkpoints.
-- Isolate GL state issues: set `KMS_MPV_DISABLE=1` to skip mpv and render only panes/OSD; set `KMS_MPV_DIRECT_TEST=1` to draw diagnostic color frames.
+- Enable verbose logging: set `KMS_MOSAIC_DEBUG=1` to print layout changes, mpv events, and GL checkpoints.
+- Isolate GL state issues: set `KMS_MOSAIC_DISABLE=1` to skip mpv and render only panes/OSD; set `KMS_MOSAIC_DIRECT_TEST=1` to draw diagnostic color frames.
 - If panes go black while video is fine, it may be stale GL state (e.g., scissor) left by mpv. The compositor now resets GL state before drawing panes and OSD.
 
 Default config path
-- On Unraid: `/boot/config/kms_mpv_compositor.conf` (persistent across reboots)
-- Elsewhere: `$XDG_CONFIG_HOME/kms_mpv_compositor.conf` or `~/.config/kms_mpv_compositor.conf`
+- On Unraid: `/boot/config/kms_mosaic.conf` (persistent across reboots)
+- Elsewhere: `$XDG_CONFIG_HOME/kms_mosaic.conf` or `~/.config/kms_mosaic.conf`
 
 Unraid build
 - Recommended: build inside a Slackware 15 container, then install the resulting .txz on Unraid.
@@ -153,8 +157,8 @@ Steps (containerized)
 - Ensure Docker is enabled on Unraid.
 - From this repo root:
   - scripts/docker_slackware_build.sh  # builds binary and .txz package
-  - The package appears under `dist/` as `kms_mpv_compositor-<ver>-x86_64-1.txz`.
-  - Install on Unraid host: `installpkg dist/kms_mpv_compositor-<ver>-x86_64-1.txz`
+  - The package appears under `dist/` as `kms_mosaic-<ver>-x86_64-1.txz`.
+  - Install on Unraid host: `installpkg dist/kms_mosaic-<ver>-x86_64-1.txz`
 
 Steps (host build)
 - Install dev tools (e.g., via NerdTools/DevTools): `gcc`, `make`, `pkg-config`.
@@ -167,6 +171,6 @@ macOS build + package
 - From this repo root:
   - scripts/macos_build_pkg.sh
   - This launches an Ubuntu container, installs build deps, compiles the Linux binary, and creates a Slackware-style `.txz` (without `makepkg`).
-  - Result: `dist/kms_mpv_compositor-<date>-x86_64-1.txz`
+  - Result: `dist/kms_mosaic-<date>-x86_64-1.txz`
 - Install on Unraid: copy the `.txz` to your server and run `installpkg`.
 - Note: If you prefer a Slackware build environment, set `BASE_IMAGE=slackware:15.0` before running and ensure the image exists locally.
