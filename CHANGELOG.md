@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog, and this project aims to follow
 Semantic Versioning when version numbers are introduced.
 
+## [Unreleased]
+
+### Added
+- Control Mode fullscreen toggle (`z`), with `n/p` navigation and `a` auto-rotate (interval via `--fs-cycle-sec`).
+
 ## [0.2.1] - 2025-09-01
 
 ### Added

@@ -53,6 +53,9 @@ Run
 - f (in Control Mode): force pane surface rebuild (refresh from vterm screen)
 - s (in Control Mode): save current configuration as default
 - Arrows (in Control Mode): resize column/row splits (L-shaped layouts)
+- z (in Control Mode): toggle fullscreen for the focused pane
+- n / p (in Control Mode while fullscreen): show next/previous pane
+- a (in Control Mode while fullscreen): toggle auto rotation of panes
   - The focused pane is outlined with a cyan border while in Control Mode.
 - Outside Control Mode: all keys go to the focused pane; when focus is video, keys are forwarded to mpv (space/pause, n/p next/prev, arrows, ASCII)
   - Video focus key support: ASCII, Space/Enter/Tab, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12, Esc, Backspace; plus fallbacks for space (pause), n/p (next/prev)
@@ -106,6 +109,7 @@ Flags
 - --pane-split PCT: percent of right column height for top pane (10..90, default 50).
 - --pane-a "CMD": shell command for top-right pane (default: btop).
 - --pane-b "CMD": shell command for bottom-right pane (default: tail -f /var/log/syslog).
+- --fs-cycle-sec SEC: seconds between fullscreen pane rotations when auto mode enabled (0 disables).
 - --list-connectors: print connectors and first 8 modes then exit.
 - --config FILE: load flags from a config file (supports quotes, comments with #).
 - --save-config FILE: write the current configuration as flags to a file.

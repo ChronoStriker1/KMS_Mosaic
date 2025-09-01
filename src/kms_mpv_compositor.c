@@ -18,6 +18,7 @@
 #include <ctype.h>
 #include <signal.h>
 #include <sys/stat.h>
+#include <time.h>
 #ifdef __linux__
 #include <execinfo.h>
 #endif
@@ -132,10 +133,17 @@ typedef struct {
     const char **mpv_opts; int n_mpv_opts; int cap_mpv_opts; // global mpv opts key=val
     const char *config_file; const char *save_config_file; bool save_config_default;
     const char *playlist_fifo;
+    int fs_cycle_sec;        // seconds between fullscreen rotations (0=off)
 } options_t;
 
 // Global permutation of roles to slots: index 0=C(video),1=A,2=B -> slot id
 static int g_perm[3] = {0,1,2};
+
+// Fullscreen state
+static bool fullscreen = false;     // fullscreen active
+static int fullscreen_target = 0;   // which pane is fullscreen (0=video,1=A,2=B)
+static bool fs_auto = false;        // auto-rotation enabled
+static double fs_last_switch = 0;   // last switch time
 
 // TTY restore state
 static struct termios g_oldt;
@@ -185,6 +193,12 @@ static void gl_reset_state_2d(void){
     glDisable(GL_CULL_FACE);
     glDisable(GL_DITHER);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+}
+
+static double now_sec(void){
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + ts.tv_nsec/1e9;
 }
 
 // Translate raw key bytes to mpv key names and send via "keypress".
@@ -1278,6 +1292,7 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
     for (int i=0;i<opt->n_mpv_opts;i++) fprintf(f, "--mpv-opt '%s'\n", opt->mpv_opts[i]);
     if (opt->playlist_path) fprintf(f, "--playlist '%s'\n", opt->playlist_path);
     if (opt->playlist_fifo) fprintf(f, "--playlist-fifo '%s'\n", opt->playlist_fifo);
+    if (opt->fs_cycle_sec) fprintf(f, "--fs-cycle-sec %d\n", opt->fs_cycle_sec);
     if (opt->playlist_ext) fprintf(f, "--playlist-extended '%s'\n", opt->playlist_ext);
     for (int i=0;i<opt->video_count;i++){ const video_item *vi=&opt->videos[i]; fprintf(f, "--video '%s'\n", vi->path); for (int k=0;k<vi->nopts;k++) fprintf(f, "--video-opt '%s'\n", vi->opts[k]); }
     fclose(f);
@@ -1330,6 +1345,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--pane-split") && i + 1 < argc) opt.pane_split_pct = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--pane-a") && i + 1 < argc) opt.pane_a_cmd = argv[++i];
         else if (!strcmp(argv[i], "--pane-b") && i + 1 < argc) opt.pane_b_cmd = argv[++i];
+        else if (!strcmp(argv[i], "--fs-cycle-sec") && i + 1 < argc) opt.fs_cycle_sec = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--list-connectors")) opt.list_connectors = true;
         else if (!strcmp(argv[i], "--no-video")) opt.no_video = true;
         else if (!strcmp(argv[i], "--no-panes")) opt.no_panes = true;
@@ -1396,6 +1412,7 @@ int main(int argc, char **argv) {
                 "  --pane-split PCT        Top row height percentage for split layouts (default 50).\n"
                 "  --pane-a \"CMD\"           Command for Pane A (default: btop).\n"
                 "  --pane-b \"CMD\"           Command for Pane B (default: tail -f /var/log/syslog).\n"
+                "  --fs-cycle-sec SEC     Fullscreen auto-rotate interval (seconds, 0=off).\n"
                 "  --layout M              stack | row | 2x1 | 1x2 (applies in any rotation).\n"
                 "  --roles XYZ            Slot order of C/A/B (e.g., CAB).\n\n"
                 "Display/KMS:\n"
@@ -1436,6 +1453,9 @@ int main(int argc, char **argv) {
                 "  l / L         Cycle layouts forward/back.\n"
                 "  r / R         Rotate roles among C/A/B (and reverse).\n"
                 "  t             Swap focused pane with next.\n"
+                "  z             Fullscreen focused pane.\n"
+                "  n / p         Next/prev pane when fullscreen.\n"
+                "  a             Toggle fullscreen auto-rotate.\n"
                 "  o             Toggle OSD visibility.\n"
                 "  ?             Help overlay.\n"
                 "  Ctrl+Q        Quit (only active in Control Mode).\n\n",
@@ -1675,6 +1695,8 @@ int main(int argc, char **argv) {
     static int last_layout_mode=-1;
     static int last_right_frac_pct=-1;
     static int last_pane_split_pct=-1;
+    static int last_fullscreen_state=0;
+    static int last_fs_target=0;
     static int layout_reinit_countdown = 0;
 
     {
@@ -1764,7 +1786,7 @@ int main(int argc, char **argv) {
 
     // Set TTY to raw mode for key forwarding
     struct termios rawt; if (tcgetattr(0, &g_oldt)==0) { g_have_oldt = 1; rawt = g_oldt; cfmakeraw(&rawt); tcsetattr(0, TCSANOW, &rawt); atexit(restore_tty); }
-            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, Arrows resize, l/L layouts, r/R rotate roles, t swap selected pane, o OSD, ? help; Ctrl+Q quit.\n");
+            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, z fullscreen, n/p next/prev, a auto-rotate, Arrows resize, l/L layouts, r/R rotate roles, t swap selected pane, o OSD, ? help; Ctrl+Q quit.\n");
     int focus = use_mpv ? 0 : 1; // 0=video, 1=top pane, 2=bottom pane
     bool show_osd = false; // default OSD off
     if (getenv("KMS_MPV_NO_OSD")) show_osd = false;
@@ -1819,7 +1841,7 @@ int main(int argc, char **argv) {
                 if (!running) break;
                 bool consumed=false;
                 // Tab switches focus only in UI control mode
-                if (ui_control) {
+                if (ui_control && !fullscreen) {
                     for (ssize_t i=0;i<n;i++) if (buf[i]=='\t') {
                         if (use_mpv) { focus = (focus+1)%3; }
                         else { focus = (focus==1?2:1); }
@@ -1836,9 +1858,13 @@ int main(int argc, char **argv) {
                     else if (buf[i]=='f') { term_pane_force_rebuild(tp_a); term_pane_force_rebuild(tp_b); consumed=true; }
                     else if (buf[i]=='?') { show_help = !show_help; consumed=true; }
                     else if (buf[i]=='s') { save_config(&opt, default_config_path()); consumed=true; }
+                    else if (buf[i]=='z') { fullscreen = !fullscreen; if (fullscreen) { fullscreen_target = focus; fs_last_switch = now_sec(); } consumed=true; }
+                    else if (buf[i]=='n' && fullscreen) { fullscreen_target = (fullscreen_target+1)%3; focus = fullscreen_target; fs_last_switch = now_sec(); consumed=true; }
+                    else if (buf[i]=='p' && fullscreen) { fullscreen_target = (fullscreen_target+2)%3; focus = fullscreen_target; fs_last_switch = now_sec(); consumed=true; }
+                    else if (buf[i]=='a' && fullscreen) { fs_auto = !fs_auto; fs_last_switch = now_sec(); consumed=true; }
                 }
                 // While in UI control mode, handle arrow keys for resizing splits
-                if (ui_control) {
+                if (ui_control && !fullscreen) {
                     for (ssize_t i=0; i+2<n; i++) {
                         if ((unsigned char)buf[i] == 0x1b && buf[i+1] == '[') {
                             unsigned char k = (unsigned char)buf[i+2];
@@ -1946,6 +1972,15 @@ int main(int argc, char **argv) {
             }
         }
 
+        if (fullscreen && fs_auto && opt.fs_cycle_sec > 0) {
+            double now = now_sec();
+            if (now - fs_last_switch >= opt.fs_cycle_sec) {
+                fullscreen_target = (fullscreen_target + 1) % 3;
+                focus = fullscreen_target;
+                fs_last_switch = now;
+            }
+        }
+
         // Recompute layout based on current rotation/layout/perm
         {
             int layout_changed = 0;
@@ -1953,6 +1988,7 @@ int main(int argc, char **argv) {
             if (last_right_frac_pct != opt.right_frac_pct) { layout_changed = 1; last_right_frac_pct = opt.right_frac_pct; }
             if (last_pane_split_pct != opt.pane_split_pct) { layout_changed = 1; last_pane_split_pct = opt.pane_split_pct; }
             if (last_perm[0]!=g_perm[0] || last_perm[1]!=g_perm[1] || last_perm[2]!=g_perm[2]) { layout_changed = 1; last_perm[0]=g_perm[0]; last_perm[1]=g_perm[1]; last_perm[2]=g_perm[2]; }
+            if (last_fullscreen_state != (fullscreen?1:0) || last_fs_target != fullscreen_target) { layout_changed = 1; last_fullscreen_state = fullscreen?1:0; last_fs_target = fullscreen_target; }
             {
                 int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2,4=1over2,5=2over1
                 int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
@@ -1997,6 +2033,14 @@ int main(int argc, char **argv) {
                 }
                 pane_layout slots[3] = { s0, s1, s2 };
                 lay_video = slots[g_perm[0]]; lay_a = slots[g_perm[1]]; lay_b = slots[g_perm[2]];
+                if (fullscreen) {
+                    lay_video = (pane_layout){0};
+                    lay_a = (pane_layout){0};
+                    lay_b = (pane_layout){0};
+                    if (fullscreen_target==0) lay_video = (pane_layout){.x=0,.y=0,.w=screen_w,.h=screen_h};
+                    else if (fullscreen_target==1) lay_a = (pane_layout){.x=0,.y=0,.w=screen_w,.h=screen_h};
+                    else lay_b = (pane_layout){.x=0,.y=0,.w=screen_w,.h=screen_h};
+                }
             }
             if (layout_changed) {
                 // Force a few frames of reinit to mimic fresh start in this layout
@@ -2047,7 +2091,7 @@ int main(int argc, char **argv) {
         gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
 
         // Draw mpv if enabled into its own FBO sized to the video region (left area)
-        if (use_mpv && mpv_needs_render) {
+        if (use_mpv && mpv_needs_render && lay_video.w>0 && lay_video.h>0) {
             int vw = lay_video.w;
             int vh = lay_video.h;
             if (vw < 1) vw = 1;
@@ -2182,10 +2226,14 @@ int main(int argc, char **argv) {
                 glDisable(GL_SCISSOR_TEST);
             }
             // Adjust panes and fonts; if forcing reinit, reset and rebuild surfaces like fresh start
-            if (last_font_px_a != font_px_a) { term_pane_set_font_px(tp_a, font_px_a); last_font_px_a = font_px_a; }
-            if (prev_a.x!=lay_a.x || prev_a.y!=lay_a.y || prev_a.w!=lay_a.w || prev_a.h!=lay_a.h) { term_pane_resize(tp_a, &lay_a); prev_a=lay_a; }
-            if (last_font_px_b != font_px_b) { term_pane_set_font_px(tp_b, font_px_b); last_font_px_b = font_px_b; }
-            if (prev_b.x!=lay_b.x || prev_b.y!=lay_b.y || prev_b.w!=lay_b.w || prev_b.h!=lay_b.h) { term_pane_resize(tp_b, &lay_b); prev_b=lay_b; }
+            if (lay_a.w>0 && lay_a.h>0) {
+                if (last_font_px_a != font_px_a) { term_pane_set_font_px(tp_a, font_px_a); last_font_px_a = font_px_a; }
+                if (prev_a.x!=lay_a.x || prev_a.y!=lay_a.y || prev_a.w!=lay_a.w || prev_a.h!=lay_a.h) { term_pane_resize(tp_a, &lay_a); prev_a=lay_a; }
+            }
+            if (lay_b.w>0 && lay_b.h>0) {
+                if (last_font_px_b != font_px_b) { term_pane_set_font_px(tp_b, font_px_b); last_font_px_b = font_px_b; }
+                if (prev_b.x!=lay_b.x || prev_b.y!=lay_b.y || prev_b.w!=lay_b.w || prev_b.h!=lay_b.h) { term_pane_resize(tp_b, &lay_b); prev_b=lay_b; }
+            }
             if (layout_reinit_countdown > 0) {
                 // Do NOT reset the vterm screens; that clears content.
                 // Instead, poll aggressively for a few frames to let apps redraw after SIGWINCH.
@@ -2196,12 +2244,16 @@ int main(int argc, char **argv) {
             // Poll PTYs and update textures only if changed
             (void)term_pane_poll(tp_a);
             (void)term_pane_poll(tp_b);
-            term_pane_render(tp_a, screen_w, screen_h);
-            if (g_debug) fprintf(stderr, "Pane A draw at %d,%d %dx%d\n", lay_a.x, lay_a.y, lay_a.w, lay_a.h);
-            gl_check("after term_pane_render A");
-            term_pane_render(tp_b, screen_w, screen_h);
-            if (g_debug) fprintf(stderr, "Pane B draw at %d,%d %dx%d\n", lay_b.x, lay_b.y, lay_b.w, lay_b.h);
-            gl_check("after term_pane_render B");
+            if (lay_a.w>0 && lay_a.h>0) {
+                term_pane_render(tp_a, screen_w, screen_h);
+                if (g_debug) fprintf(stderr, "Pane A draw at %d,%d %dx%d\n", lay_a.x, lay_a.y, lay_a.w, lay_a.h);
+                gl_check("after term_pane_render A");
+            }
+            if (lay_b.w>0 && lay_b.h>0) {
+                term_pane_render(tp_b, screen_w, screen_h);
+                if (g_debug) fprintf(stderr, "Pane B draw at %d,%d %dx%d\n", lay_b.x, lay_b.y, lay_b.w, lay_b.h);
+                gl_check("after term_pane_render B");
+            }
         }
 
         bool display_help = ui_control || show_help;
@@ -2216,6 +2268,9 @@ int main(int argc, char **argv) {
                     "  l/L: cycle layouts\n"
                     "  r/R: rotate roles C/A/B\n"
                     "  t: swap focused pane with next\n"
+                    "  z: fullscreen focused pane\n"
+                    "  n/p: next/prev pane (fullscreen)\n"
+                    "  a: toggle fullscreen auto-rotate\n"
                     "  Arrows: resize splits\n"
                     "  f: force pane rebuild\n"
                     "  s: save config\n"
@@ -2254,7 +2309,7 @@ int main(int argc, char **argv) {
         // Control-mode indicator OSD (always visible when active)
         if (!direct_mode && ui_control) {
             static osd_ctx *osdcm = NULL; if (!osdcm) osdcm = osd_create(opt.font_px?opt.font_px:20);
-            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  Arrows resize  l/L layouts  r/R rotate  t swap-next  o OSD  s save  ? help");
+            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  z fullscreen  n/p cycle  a auto  Arrows resize  l/L layouts  r/R rotate  t swap-next  o OSD  s save  ? help");
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             gl_reset_state_2d();
             glViewport(0,0, logical_w, logical_h);
