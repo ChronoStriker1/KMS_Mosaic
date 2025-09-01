@@ -86,9 +86,9 @@ static void render_text_to_rgba(font_ctx *f, const char *text, unsigned char **o
                 int px = gx + xx; if (px<0 || px>=*w) continue;
                 unsigned char a = g->bitmap.buffer[yy*g->bitmap.width + xx];
                 // outline pass: set surrounding pixels to black
-                for (int oy=-1; oy<=1; oy++){
+                for (int oy=-2; oy<=2; oy++){
                     int py2 = py + oy; if (py2<0 || py2>=*h) continue;
-                    for (int ox=-1; ox<=1; ox++){
+                    for (int ox=-2; ox<=2; ox++){
                         if (ox==0 && oy==0) continue;
                         int px2 = px + ox; if (px2<0 || px2>=*w) continue;
                         unsigned char *dst = &buf[(size_t)(py2 * (*w) + px2) * 4];
@@ -143,11 +143,11 @@ static GLuint osd_prog=0, osd_vbo=0; static GLint osd_u_tex=-1;
 static GLuint compile_shader_dbg(GLenum type, const char *src){ GLuint s=glCreateShader(type); glShaderSource(s,1,&src,NULL); glCompileShader(s); GLint ok; glGetShaderiv(s,GL_COMPILE_STATUS,&ok); if(!ok){ char log[512]; GLsizei ln=0; glGetShaderInfoLog(s,sizeof log,&ln,log); fprintf(stderr,"osd shader compile failed (%s): %.*s\nSource:\n%.*s\n", type==GL_VERTEX_SHADER?"vertex":"fragment", ln, log, 200, src); exit(1);} return s; }
 static void ensure_prog(void){ if(osd_prog) return; const char* vs="#version 100\n#ifdef GL_ES\nprecision mediump float;\nprecision mediump int;\n#endif\nattribute vec2 a_pos; attribute vec2 a_uv; varying vec2 v_uv; void main(){ v_uv=a_uv; gl_Position=vec4(a_pos,0,1);}"; const char* fs="#version 100\nprecision mediump float; varying vec2 v_uv; uniform sampler2D u_tex; void main(){ gl_FragColor=texture2D(u_tex,v_uv);}"; GLuint v=compile_shader_dbg(GL_VERTEX_SHADER,vs), f=compile_shader_dbg(GL_FRAGMENT_SHADER,fs); osd_prog=glCreateProgram(); glAttachShader(osd_prog,v); glAttachShader(osd_prog,f); glBindAttribLocation(osd_prog,0,"a_pos"); glBindAttribLocation(osd_prog,1,"a_uv"); glLinkProgram(osd_prog); osd_u_tex=glGetUniformLocation(osd_prog,"u_tex"); glGenBuffers(1,&osd_vbo);} 
 
-void osd_draw(osd_ctx* o, int x, int y, int fb_w, int fb_h){
+void osd_draw(osd_ctx* o, int x, int y, int fb_w, int fb_h, int wrap_w){
     if(!o||!o->text) return;
     ensure_prog();
     unsigned char *rgba=NULL; int w=0,h=0;
-    int max_w = fb_w - x - 16; if (max_w < o->font.px_size*8) max_w = o->font.px_size*8;
+    int max_w = wrap_w - x - 16; if (max_w < o->font.px_size*8) max_w = o->font.px_size*8;
     char *wrapped = wrap_text_to_width(&o->font, o->text, max_w);
     render_text_to_rgba(&o->font, wrapped, &rgba, &w, &h);
     free(wrapped);

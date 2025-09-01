@@ -17,6 +17,7 @@
 #include <termios.h>
 #include <ctype.h>
 #include <signal.h>
+#include <sys/stat.h>
 #ifdef __linux__
 #include <execinfo.h>
 #endif
@@ -130,6 +131,7 @@ typedef struct {
     int layout_mode;          // 0=stack3,1=row3,2=2x1,3=1x2,4=1over2,5=2over1
     const char **mpv_opts; int n_mpv_opts; int cap_mpv_opts; // global mpv opts key=val
     const char *config_file; const char *save_config_file; bool save_config_default;
+    const char *playlist_fifo;
 } options_t;
 
 // TTY restore state
@@ -1254,6 +1256,7 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
     if (opt->shuffle) fprintf(f, "--shuffle\n");
     for (int i=0;i<opt->n_mpv_opts;i++) fprintf(f, "--mpv-opt '%s'\n", opt->mpv_opts[i]);
     if (opt->playlist_path) fprintf(f, "--playlist '%s'\n", opt->playlist_path);
+    if (opt->playlist_fifo) fprintf(f, "--playlist-fifo '%s'\n", opt->playlist_fifo);
     if (opt->playlist_ext) fprintf(f, "--playlist-extended '%s'\n", opt->playlist_ext);
     for (int i=0;i<opt->video_count;i++){ const video_item *vi=&opt->videos[i]; fprintf(f, "--video '%s'\n", vi->path); for (int k=0;k<vi->nopts;k++) fprintf(f, "--video-opt '%s'\n", vi->opts[k]); }
     fclose(f);
@@ -1292,6 +1295,7 @@ int main(int argc, char **argv) {
             }
         }
         else if (!strcmp(argv[i], "--playlist") && i + 1 < argc) opt.playlist_path = argv[++i];
+        else if (!strcmp(argv[i], "--playlist-fifo") && i + 1 < argc) opt.playlist_fifo = argv[++i];
         else if (!strcmp(argv[i], "--config") && i + 1 < argc) opt.config_file = argv[++i];
         else if (!strcmp(argv[i], "--save-config") && i + 1 < argc) opt.save_config_file = argv[++i];
         else if (!strcmp(argv[i], "--playlist-extended") && i + 1 < argc) opt.playlist_ext = argv[++i];
@@ -1379,6 +1383,7 @@ int main(int argc, char **argv) {
                 "  --video PATH            Add a video (repeatable). Bare args are treated as --video.\n"
                 "  --video-opt K=V         Per-video options (repeatable, applies to the last --video).\n"
                 "  --playlist FILE         Load playlist file.\n"
+                "  --playlist-fifo PATH    Read newline-delimited video paths to append at runtime.\n"
                 "  --playlist-extended F   Extended playlist (path | k=v,k=v per line).\n"
                 "  --loop-file             Loop current file indefinitely.\n"
                 "  --loop                  Shorthand for --loop-file.\n"
@@ -1756,14 +1761,22 @@ int main(int argc, char **argv) {
     if (dtest_env && (*dtest_env=='1' || *dtest_env=='y' || *dtest_env=='Y')) direct_test_only = true;
     int frame = 0;
     int mpv_needs_render = 1; // request an initial render
-    struct pollfd pfds[3];
+    int fifo_fd = -1; char fifo_buf[4096]; size_t fifo_len = 0;
+    if (opt.playlist_fifo) {
+        mkfifo(opt.playlist_fifo, 0666);
+        fifo_fd = open(opt.playlist_fifo, O_RDONLY | O_NONBLOCK);
+    }
+    struct pollfd pfds[4];
     pfds[0].fd = 0; // stdin for keys
     pfds[0].events = POLLIN;
     pfds[1].fd = use_mpv ? m.wakeup_fd[0] : -1;
     pfds[1].events = POLLIN;
     pfds[2].fd = d.fd; // DRM events (atomic)
     pfds[2].events = POLLIN;
+    pfds[3].fd = fifo_fd;
+    pfds[3].events = POLLIN;
     int nfds = use_mpv ? 3 : 2;
+    if (fifo_fd >= 0) nfds++;
     fcntl(0, F_SETFL, O_NONBLOCK);
 
     while (running) {
@@ -1800,6 +1813,7 @@ int main(int argc, char **argv) {
                     else if (buf[i]=='R') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p2; perm[1]=p0; perm[2]=p1; consumed=true; }
                     else if (buf[i]=='f') { term_pane_force_rebuild(tp_a); term_pane_force_rebuild(tp_b); consumed=true; }
                     else if (buf[i]=='?') { show_help = !show_help; consumed=true; }
+                    else if (buf[i]=='s') { save_config(&opt, default_config_path()); consumed=true; }
                 }
                 // While in UI control mode, handle arrow keys for resizing splits
                 if (ui_control) {
@@ -1885,6 +1899,29 @@ int main(int argc, char **argv) {
             ev.version = 2;
             ev.page_flip_handler = on_page_flip;
             drmHandleEvent(d.fd, &ev);
+        }
+
+        if (fifo_fd >= 0 && (pfds[3].revents & POLLIN)) {
+            ssize_t r = read(fifo_fd, fifo_buf + fifo_len, sizeof(fifo_buf) - fifo_len - 1);
+            if (r > 0) {
+                fifo_len += (size_t)r;
+                fifo_buf[fifo_len] = '\0';
+                char *nl;
+                while ((nl = memchr(fifo_buf, '\n', fifo_len))) {
+                    *nl = '\0';
+                    if (nl > fifo_buf) {
+                        const char *cmd[] = {"loadfile", fifo_buf, "append-play", NULL};
+                        mpv_command_async(m.mpv, 0, cmd);
+                    }
+                    size_t used = (size_t)(nl - fifo_buf) + 1;
+                    memmove(fifo_buf, fifo_buf + used, fifo_len - used);
+                    fifo_len -= used;
+                }
+            } else if (r == 0) {
+                close(fifo_fd);
+                fifo_fd = open(opt.playlist_fifo, O_RDONLY | O_NONBLOCK);
+                pfds[3].fd = fifo_fd;
+            }
         }
 
         // Recompute layout based on current rotation/layout/perm
@@ -2159,6 +2196,7 @@ int main(int argc, char **argv) {
                     "  t: swap panes A/B\n"
                     "  Arrows: resize splits\n"
                     "  f: force pane rebuild\n"
+                    "  s: save config\n"
                     "Always: Ctrl+Q quit\n";
                 osd_set_text(osd, help);
             } else {
@@ -2183,17 +2221,19 @@ int main(int argc, char **argv) {
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             gl_reset_state_2d();
             glViewport(0,0, logical_w, logical_h);
-            osd_draw(osd, 16, 16, logical_w, logical_h);
+            int wrap_w = (opt.rotation==ROT_90 || opt.rotation==ROT_270) ? logical_h : logical_w;
+            osd_draw(osd, 16, 16, logical_w, logical_h, wrap_w);
         }
         // Control-mode indicator OSD (always visible when active)
         if (!direct_mode && ui_control) {
             static osd_ctx *osdcm = NULL; if (!osdcm) osdcm = osd_create(opt.font_px?opt.font_px:20);
-            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  Arrows resize  l/L layouts  r/R rotate  t swap  o OSD  ? help");
+            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  Arrows resize  l/L layouts  r/R rotate  t swap  o OSD  s save  ? help");
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             gl_reset_state_2d();
             glViewport(0,0, logical_w, logical_h);
             int cm_y = display_help ? (logical_h - (opt.font_px?opt.font_px:20) - 16) : 48;
-            osd_draw(osdcm, 16, cm_y, logical_w, logical_h);
+            int wrap_w = (opt.rotation==ROT_90 || opt.rotation==ROT_270) ? logical_h : logical_w;
+            osd_draw(osdcm, 16, cm_y, logical_w, logical_h, wrap_w);
             // Highlight focused pane with a border
             int bx=0, by=0, bw=0, bh=0; int thickness = 4;
             if (focus == 0) { bx = lay_video.x; by = lay_video.y; bw = lay_video.w; bh = lay_video.h; }

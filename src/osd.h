@@ -11,5 +11,6 @@ void osd_destroy(osd_ctx* o);
 void osd_set_text(osd_ctx* o, const char *text);
 
 // Draw at pixel position (x,y) in the logical render target of size (fb_w, fb_h)
-void osd_draw(osd_ctx* o, int x, int y, int fb_w, int fb_h);
+// `wrap_w` specifies the effective width for text wrapping after rotation
+void osd_draw(osd_ctx* o, int x, int y, int fb_w, int fb_h, int wrap_w);
 
