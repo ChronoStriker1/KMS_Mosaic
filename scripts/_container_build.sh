@@ -6,7 +6,14 @@ apt-get install -y --no-install-recommends \
   build-essential pkg-config binutils file binutils-aarch64-linux-gnu \
   libdrm-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev \
   libmpv-dev libvterm-dev libfreetype6-dev libfontconfig1-dev \
+  git cmake ninja-build libvulkan-dev glslang-tools libprotobuf-dev protobuf-compiler \
   ca-certificates
+
+# Build waifu2x-ncnn-vulkan shared library required for --waifu2x
+git clone --depth=1 https://github.com/nihui/waifu2x-ncnn-vulkan /tmp/waifu2x-ncnn-vulkan
+cmake -S /tmp/waifu2x-ncnn-vulkan -B /tmp/waifu2x-ncnn-vulkan/build -D CMAKE_BUILD_TYPE=Release -D BUILD_SHARED_LIBS=ON -G Ninja
+cmake --build /tmp/waifu2x-ncnn-vulkan/build
+cmake --install /tmp/waifu2x-ncnn-vulkan/build
 
 cd /work
 # Force a clean rebuild to avoid stale cross-arch artifacts
@@ -84,6 +91,12 @@ if command -v ldd >/dev/null 2>&1; then
     [ "$so" = "not" ] && so=""
     bundle_one "$so"
   done
+fi
+
+# Ensure waifu2x runtime library is included if present
+if command -v ldconfig >/dev/null 2>&1; then
+  WAIFU_SO=$(ldconfig -p 2>/dev/null | awk '/libwaifu2x-ncnn-vulkan.so/ {print $NF}' | head -n1)
+  bundle_one "$WAIFU_SO"
 fi
 
 # Safety: ensure we never ship toolchain libs that might conflict with system drivers

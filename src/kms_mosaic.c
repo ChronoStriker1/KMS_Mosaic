@@ -126,6 +126,8 @@ typedef struct {
     const char *cmd_fifo;     // path for command FIFO
     bool no_config;           // skip loading default config file
     bool smooth;              // apply a sensible playback preset
+    bool waifu2x;             // enable waifu2x upscaling filter
+    bool svp;                 // enable motion interpolation to 60fps
     bool atomic_nonblock;     // use nonblocking atomic flips
     bool gl_finish;           // call glFinish() before flips (serialize GPU)
     bool use_atomic;          // try DRM atomic modesetting
@@ -1442,6 +1444,8 @@ int main(int argc, char **argv) {
             if (opt.n_mpv_opts == opt.cap_mpv_opts){ int nc=opt.cap_mpv_opts?opt.cap_mpv_opts*2:8; opt.mpv_opts=realloc(opt.mpv_opts,(size_t)nc*sizeof(char*)); opt.cap_mpv_opts=nc; }
             opt.mpv_opts[opt.n_mpv_opts++] = argv[++i];
         }
+        else if (!strcmp(argv[i], "--waifu2x")) opt.waifu2x = true;
+        else if (!strcmp(argv[i], "--svp")) opt.svp = true;
         else if (!strcmp(argv[i], "--save-config-default")) opt.save_config_default = true;
         else if (!strcmp(argv[i], "--debug")) g_debug = 1;
         else if (!strcmp(argv[i], "--video-rotate") && i + 1 < argc) { opt.video_rotate = atoi(argv[++i]); }
@@ -1482,7 +1486,9 @@ int main(int argc, char **argv) {
                 "  --shuffle               Randomize playlist order.\n"
                 "  --mpv-opt K=V           Global mpv option (repeatable).\n"
                 "  --video-rotate DEG      Pass-through to mpv video-rotate.\n"
-                "  --panscan VAL           Pass-through to mpv panscan.\n\n"
+                "  --panscan VAL           Pass-through to mpv panscan.\n"
+                "  --waifu2x              Enable waifu2x upscaling filter.\n"
+                "  --svp                  Interpolate video to 60fps (SmoothVideo-style).\n\n"
                 "  --cmd-fifo PATH        Read commands from named pipe at PATH.\n\n"
                 "Config and misc:\n"
                 "  --config FILE           Load options from file (supports quotes and # comments).\n"
@@ -1651,6 +1657,14 @@ int main(int argc, char **argv) {
             if (!user_set_tscale) mpv_set_option_string(m.mpv, "tscale", "linear");
             if (!user_set_eflush) mpv_set_option_string(m.mpv, "opengl-early-flush", "yes");
             if (!user_set_shader_cache) mpv_set_option_string(m.mpv, "gpu-shader-cache", "no");
+        }
+        if (opt.waifu2x) {
+            mpv_set_option_string(m.mpv, "vf-add", "waifu2x");
+        }
+        if (opt.svp) {
+            mpv_set_option_string(m.mpv, "vf-add", "lavfi=minterpolate=fps=60:mi_mode=mci:mc_mode=aobmc:vsbmc=1");
+            if (!user_set_interpolation) mpv_set_option_string(m.mpv, "interpolation", "yes");
+            if (!user_set_tscale) mpv_set_option_string(m.mpv, "tscale", "oversample");
         }
         if (g_debug) mpv_request_log_messages(m.mpv, "debug");
         if (mpv_initialize(m.mpv) < 0) die("mpv_initialize");
@@ -1890,7 +1904,7 @@ int main(int argc, char **argv) {
     }
     if (opt.cmd_fifo) {
         mkfifo(opt.cmd_fifo, 0666);
-        cmd_fd = open(opt.cmd_fifo, O_RDONLY | O_NONBLOCK);
+        cmd_fd = open(opt.cmd_fifo, O_RDWR | O_NONBLOCK);
     }
     struct pollfd pfds[5];
     pfds[0].fd = 0; // stdin for keys
@@ -2075,10 +2089,6 @@ int main(int argc, char **argv) {
                     memmove(cmd_buf, cmd_buf + used, cmd_len - used);
                     cmd_len -= used;
                 }
-            } else if (r == 0) {
-                close(cmd_fd);
-                cmd_fd = open(opt.cmd_fifo, O_RDONLY | O_NONBLOCK);
-                pfds[cmd_idx].fd = cmd_fd;
             }
         }
 

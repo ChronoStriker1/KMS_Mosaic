@@ -15,6 +15,7 @@ Dependencies (build-time)
 - libdrm (drm, drm_mode), gbm
 - EGL + OpenGL ES 2.0
 - libmpv (>= 0.33 with render_gl API)
+- waifu2x-ncnn-vulkan + libvulkan (for --waifu2x upscaling)
 - libvterm (terminal emulation)
 - FreeType + Fontconfig (text rendering)
 - pkg-config, a C compiler
@@ -34,12 +35,15 @@ Run
 - `./kms_mosaic --cmd-fifo /tmp/mosaic.fifo --video /path/to/video.mp4`
 - `./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22`
 - `./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle`
+- `./kms_mosaic --waifu2x --svp --video /path/to/video.mp4`
 - `./kms_mosaic --config /path/profile.conf`
 - `./kms_mosaic --save-config /path/profile.conf`
 - `./kms_mosaic --save-config-default`
-- With `--cmd-fifo PATH`, send commands from another terminal, e.g.:
-  `echo panscan > /tmp/mosaic.fifo` toggles video panscan
-  `echo quit > /tmp/mosaic.fifo` quits the compositor
+- With `--cmd-fifo PATH`, send commands from another terminal. Accepted commands:
+  - `quit` — terminate the compositor
+  - `panscan` or `c` — toggle mpv panscan
+  - `--KEY=VAL` — set an mpv option (`KEY` to `VAL`)
+  - any other text — passed to mpv as a command string (e.g., `cycle pause`)
 - `./kms_mosaic --playlist-fifo /tmp/playlist.fifo`
   - create fifo: `mkfifo /tmp/playlist.fifo` then `echo /path/video.mp4 > /tmp/playlist.fifo`
   - playlist loops back to the first entry when the last video ends
@@ -108,7 +112,13 @@ Flags
 - --loop-playlist: loop the playlist indefinitely.
 - --shuffle: randomize playlist order (alias: --randomize).
 - --mpv-opt K=V: set global mpv option (repeatable), e.g., --mpv-opt keepaspect=yes.
-- --cmd-fifo PATH: read newline-delimited commands from FIFO for runtime control (e.g., panscan, quit).
+- --waifu2x: enable waifu2x upscaling filter in mpv.
+- --svp: interpolate video to 60fps using mpv's minterpolate filter.
+- --cmd-fifo PATH: read newline-delimited commands from FIFO for runtime control:
+  - `quit` terminates the compositor
+  - `panscan` or `c` toggles panscan
+  - `--KEY=VAL` sets an mpv option
+  - any other text is passed to mpv as a command string
 - --font-size PX: terminal font size in pixels (default 18).
 - --right-frac PCT: percent of screen width used by right column (10..80, default 33).
 - --video-frac PCT: percent of screen width for the video region (overrides --right-frac).
