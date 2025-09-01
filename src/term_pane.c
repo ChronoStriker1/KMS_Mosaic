@@ -619,6 +619,12 @@ void term_pane_resize(term_pane *tp, const pane_layout *layout) {
     int rows = tp->layout.h / tp->font.cell_h;
     if (cols < 10) cols = 10;
     if (rows < 5) rows = 5;
+    /* Update the stored layout dimensions so subsequent redraw logic knows the
+     * terminal grid size.  The incoming layout only specifies x/y/w/h. */
+    tp->layout.cols = cols;
+    tp->layout.rows = rows;
+    tp->layout.cell_w = tp->font.cell_w;
+    tp->layout.cell_h = tp->font.cell_h;
     vterm_set_size(tp->vt, rows, cols);
     set_pty_winsize(tp->pty_master, cols, rows);
     if (tp->child_pid > 0) kill(tp->child_pid, SIGWINCH);
