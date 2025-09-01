@@ -126,8 +126,8 @@ typedef struct {
     bool atomic_nonblock;     // use nonblocking atomic flips
     bool gl_finish;           // call glFinish() before flips (serialize GPU)
     bool use_atomic;          // try DRM atomic modesetting
-    // Unified layout mode: stack3, row3, 2x1, 1x2
-    int layout_mode;          // 0=stack3,1=row3,2=2x1,3=1x2
+    // Unified layout mode: stack3, row3, 2x1, 1x2, 1over2, 2over1
+    int layout_mode;          // 0=stack3,1=row3,2=2x1,3=1x2,4=1over2,5=2over1
     const char **mpv_opts; int n_mpv_opts; int cap_mpv_opts; // global mpv opts key=val
     const char *config_file; const char *save_config_file; bool save_config_default;
 } options_t;
@@ -1237,7 +1237,12 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
     if (opt->mode_w||opt->mode_h) fprintf(f, "--mode %dx%d@%d\n", opt->mode_w,opt->mode_h,opt->mode_hz);
     if (opt->rotation) fprintf(f, "--rotate %d\n", (int)opt->rotation);
     if (opt->font_px) fprintf(f, "--font-size %d\n", opt->font_px);
-    fprintf(f, "--layout %s\n", opt->layout_mode==0?"stack":opt->layout_mode==1?"row":opt->layout_mode==2?"2x1":"1x2");
+    fprintf(f, "--layout %s\n",
+            opt->layout_mode==0?"stack":
+            opt->layout_mode==1?"row":
+            opt->layout_mode==2?"2x1":
+            opt->layout_mode==3?"1x2":
+            opt->layout_mode==4?"1over2":"2over1");
     if (opt->video_frac_pct) fprintf(f, "--video-frac %d\n", opt->video_frac_pct);
     else if (opt->right_frac_pct) fprintf(f, "--right-frac %d\n", opt->right_frac_pct);
     if (opt->pane_split_pct) fprintf(f, "--pane-split %d\n", opt->pane_split_pct);
@@ -1312,6 +1317,8 @@ int main(int argc, char **argv) {
             else if (!strcmp(v,"row") || !strcmp(v,"row3")) opt.layout_mode = 1;
             else if (!strcmp(v,"2x1")) opt.layout_mode = 2;
             else if (!strcmp(v,"1x2")) opt.layout_mode = 3;
+            else if (!strcmp(v,"1over2")) opt.layout_mode = 4;
+            else if (!strcmp(v,"2over1")) opt.layout_mode = 5;
         }
         else if (!strcmp(argv[i], "--landscape-layout") && i + 1 < argc) { // backward compat
             const char *v = argv[++i];
@@ -1319,6 +1326,8 @@ int main(int argc, char **argv) {
             else if (!strcmp(v,"row") || !strcmp(v,"row3")) opt.layout_mode = 1;
             else if (!strcmp(v,"2x1")) opt.layout_mode = 2;
             else if (!strcmp(v,"1x2")) opt.layout_mode = 3;
+            else if (!strcmp(v,"1over2")) opt.layout_mode = 4;
+            else if (!strcmp(v,"2over1")) opt.layout_mode = 5;
         }
         else if (!strcmp(argv[i], "--portrait-layout") && i + 1 < argc) { // backward compat
             const char *v = argv[++i];
@@ -1326,6 +1335,8 @@ int main(int argc, char **argv) {
             else if (!strcmp(v,"row") || !strcmp(v,"row3")) opt.layout_mode = 1;
             else if (!strcmp(v,"2x1")) opt.layout_mode = 2;
             else if (!strcmp(v,"1x2")) opt.layout_mode = 3;
+            else if (!strcmp(v,"1over2")) opt.layout_mode = 4;
+            else if (!strcmp(v,"2over1")) opt.layout_mode = 5;
         }
         else if (!strcmp(argv[i], "--loop-file")) opt.loop_file = true;
         else if (!strcmp(argv[i], "--loop")) opt.loop_flag = true;
@@ -1640,7 +1651,7 @@ int main(int argc, char **argv) {
     static int layout_reinit_countdown = 0;
 
     {
-        int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2
+        int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2,4=1over2,5=2over1
         int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
         int col_pct = opt.right_frac_pct ? (100 - opt.right_frac_pct) : 50; if (col_pct<20) col_pct=20; if (col_pct>80) col_pct=80;
         pane_layout s0={0}, s1={0}, s2={0};
@@ -1660,12 +1671,24 @@ int main(int argc, char **argv) {
             s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=wleft, .h=htop };
             s1 = (pane_layout){ .x=0, .y=0, .w=wleft, .h=hbot };
             s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=screen_h };
-        } else {
+        } else if (mode == 3) {
             int wleft = screen_w * col_pct / 100; int wright = screen_w - wleft;
             int htop = screen_h * split_pct / 100; int hbot = screen_h - htop;
             s0 = (pane_layout){ .x=0, .y=0, .w=wleft, .h=screen_h };
             s1 = (pane_layout){ .x=wleft, .y=screen_h - htop, .w=wright, .h=htop };
             s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=hbot };
+        } else if (mode == 4) {
+            int htop = screen_h * split_pct / 100; int hbot = screen_h - htop;
+            int wleft = screen_w * col_pct / 100; int wright = screen_w - wleft;
+            s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=screen_w, .h=htop };
+            s1 = (pane_layout){ .x=0, .y=0, .w=wleft, .h=hbot };
+            s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=hbot };
+        } else {
+            int htop = screen_h * split_pct / 100; int hbot = screen_h - htop;
+            int wleft = screen_w * col_pct / 100; int wright = screen_w - wleft;
+            s0 = (pane_layout){ .x=0, .y=screen_h - htop, .w=wleft, .h=htop };
+            s1 = (pane_layout){ .x=wleft, .y=screen_h - htop, .w=wright, .h=htop };
+            s2 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=hbot };
         }
         pane_layout slots[3] = { s0, s1, s2 };
         lay_video = slots[perm[0]];
@@ -1770,8 +1793,8 @@ int main(int argc, char **argv) {
                 }
                 // Layout/pane controls (only when in UI control mode)
                 for (ssize_t i=0;i<n;i++) if (ui_control) {
-                    if (buf[i]=='l') { opt.layout_mode = (opt.layout_mode+1)%4; consumed=true; }
-                    else if (buf[i]=='L') { opt.layout_mode = (opt.layout_mode+3)%4; consumed=true; }
+                    if (buf[i]=='l') { opt.layout_mode = (opt.layout_mode+1)%6; consumed=true; }
+                    else if (buf[i]=='L') { opt.layout_mode = (opt.layout_mode+5)%6; consumed=true; }
                     else if (buf[i]=='t') { int tmp = perm[1]; perm[1]=perm[2]; perm[2]=tmp; consumed=true; }
                     else if (buf[i]=='r') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p1; perm[1]=p2; perm[2]=p0; consumed=true; }
                     else if (buf[i]=='R') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p2; perm[1]=p0; perm[2]=p1; consumed=true; }
@@ -1785,25 +1808,25 @@ int main(int argc, char **argv) {
                             unsigned char k = (unsigned char)buf[i+2];
                             int step = 2; // percentage step per keypress
                             if (k=='C') { // Right: increase right column width
-                                if (opt.layout_mode==2 || opt.layout_mode==3) {
+                                if (opt.layout_mode>=2) {
                                     int rf = opt.right_frac_pct ? opt.right_frac_pct : 33;
                                     rf += step; if (rf > 80) rf = 80; if (rf < 20) rf = 20; opt.right_frac_pct = rf; consumed = true;
                                 }
                                 i += 2; continue;
                             } else if (k=='D') { // Left: decrease right column width
-                                if (opt.layout_mode==2 || opt.layout_mode==3) {
+                                if (opt.layout_mode>=2) {
                                     int rf = opt.right_frac_pct ? opt.right_frac_pct : 33;
                                     rf -= step; if (rf < 20) rf = 20; if (rf > 80) rf = 80; opt.right_frac_pct = rf; consumed = true;
                                 }
                                 i += 2; continue;
                             } else if (k=='A') { // Up: increase top pane height in split column
-                                if (opt.layout_mode==2 || opt.layout_mode==3) {
+                                if (opt.layout_mode>=2) {
                                     int sp = opt.pane_split_pct ? opt.pane_split_pct : 50;
                                     sp += step; if (sp > 90) sp = 90; if (sp < 10) sp = 10; opt.pane_split_pct = sp; consumed = true;
                                 }
                                 i += 2; continue;
                             } else if (k=='B') { // Down: decrease top pane height in split column
-                                if (opt.layout_mode==2 || opt.layout_mode==3) {
+                                if (opt.layout_mode>=2) {
                                     int sp = opt.pane_split_pct ? opt.pane_split_pct : 50;
                                     sp -= step; if (sp < 10) sp = 10; if (sp > 90) sp = 90; opt.pane_split_pct = sp; consumed = true;
                                 }
@@ -1872,7 +1895,7 @@ int main(int argc, char **argv) {
             if (last_pane_split_pct != opt.pane_split_pct) { layout_changed = 1; last_pane_split_pct = opt.pane_split_pct; }
             if (last_perm[0]!=perm[0] || last_perm[1]!=perm[1] || last_perm[2]!=perm[2]) { layout_changed = 1; last_perm[0]=perm[0]; last_perm[1]=perm[1]; last_perm[2]=perm[2]; }
             {
-                int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2
+                int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2,4=1over2,5=2over1
                 int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
                 int col_pct = opt.right_frac_pct ? (100 - opt.right_frac_pct) : 50; if (col_pct<20) col_pct=20; if (col_pct>80) col_pct=80;
                 pane_layout s0={0}, s1={0}, s2={0};
@@ -1894,12 +1917,24 @@ int main(int argc, char **argv) {
                     s0=(pane_layout){.x=0,.y=screen_h-htop,.w=wleft,.h=htop};
                     s1=(pane_layout){.x=0,.y=0,.w=wleft,.h=hbot};
                     s2=(pane_layout){.x=wleft,.y=0,.w=wright,.h=screen_h};
-                } else {
+                } else if (mode == 3) {
                     // Left full, right column split rows
                     int wleft=screen_w*col_pct/100; int wright=screen_w-wleft; int htop=screen_h*split_pct/100; int hbot=screen_h-htop;
                     s0=(pane_layout){.x=0,.y=0,.w=wleft,.h=screen_h};
                     s1=(pane_layout){.x=wleft,.y=screen_h-htop,.w=wright,.h=htop};
                     s2=(pane_layout){.x=wleft,.y=0,.w=wright,.h=hbot};
+                } else if (mode == 4) {
+                    // Top full, bottom row split columns
+                    int htop=screen_h*split_pct/100; int hbot=screen_h-htop; int wleft=screen_w*col_pct/100; int wright=screen_w-wleft;
+                    s0=(pane_layout){.x=0,.y=screen_h-htop,.w=screen_w,.h=htop};
+                    s1=(pane_layout){.x=0,.y=0,.w=wleft,.h=hbot};
+                    s2=(pane_layout){.x=wleft,.y=0,.w=wright,.h=hbot};
+                } else {
+                    // Top row split columns, bottom full
+                    int htop=screen_h*split_pct/100; int hbot=screen_h-htop; int wleft=screen_w*col_pct/100; int wright=screen_w-wleft;
+                    s0=(pane_layout){.x=0,.y=screen_h-htop,.w=wleft,.h=htop};
+                    s1=(pane_layout){.x=wleft,.y=screen_h-htop,.w=wright,.h=htop};
+                    s2=(pane_layout){.x=0,.y=0,.w=screen_w,.h=hbot};
                 }
                 pane_layout slots[3] = { s0, s1, s2 };
                 lay_video = slots[perm[0]]; lay_a = slots[perm[1]]; lay_b = slots[perm[2]];
@@ -2110,10 +2145,11 @@ int main(int argc, char **argv) {
             gl_check("after term_pane_render B");
         }
 
+        bool display_help = ui_control || show_help;
         // OSD overlay (title, index/total, paused) and help
-        if (!direct_mode && use_mpv && !opt.no_osd && (show_osd || show_help)) {
+        if (!direct_mode && use_mpv && !opt.no_osd && (show_osd || display_help)) {
             static osd_ctx *osd = NULL; if (!osd) osd = osd_create(opt.font_px?opt.font_px:20);
-            if (show_help) {
+            if (display_help) {
                 const char *help =
                     "Control Mode\n"
                     "  Tab: focus cycle C/A/B\n"
@@ -2121,7 +2157,7 @@ int main(int argc, char **argv) {
                     "  l/L: cycle layouts\n"
                     "  r/R: rotate roles C/A/B\n"
                     "  t: swap panes A/B\n"
-                    "  Arrows: resize splits (2x1/1x2)\n"
+                    "  Arrows: resize splits\n"
                     "  f: force pane rebuild\n"
                     "Always: Ctrl+Q quit\n";
                 osd_set_text(osd, help);
@@ -2131,7 +2167,11 @@ int main(int argc, char **argv) {
                 mpv_get_property(m.mpv, "playlist-count", MPV_FORMAT_INT64, &count);
                 mpv_get_property(m.mpv, "pause", MPV_FORMAT_FLAG, &paused_flag);
                 title = mpv_get_property_string(m.mpv, "media-title");
-                const char *layout_name = (opt.layout_mode==0?"stack": opt.layout_mode==1?"row": opt.layout_mode==2?"2x1":"1x2");
+                const char *layout_name = (opt.layout_mode==0?"stack":
+                                         opt.layout_mode==1?"row":
+                                         opt.layout_mode==2?"2x1":
+                                         opt.layout_mode==3?"1x2":
+                                         opt.layout_mode==4?"1over2":"2over1");
                 char line[512]; snprintf(line,sizeof line, "%s %lld/%lld - %s  |  layout: %s",
                                           paused_flag?"Paused":"Playing",
                                           (long long)(pos+1), (long long)count,
@@ -2152,7 +2192,8 @@ int main(int argc, char **argv) {
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             gl_reset_state_2d();
             glViewport(0,0, logical_w, logical_h);
-            osd_draw(osdcm, 16, 48, logical_w, logical_h);
+            int cm_y = display_help ? (logical_h - (opt.font_px?opt.font_px:20) - 16) : 48;
+            osd_draw(osdcm, 16, cm_y, logical_w, logical_h);
             // Highlight focused pane with a border
             int bx=0, by=0, bw=0, bh=0; int thickness = 4;
             if (focus == 0) { bx = lay_video.x; by = lay_video.y; bw = lay_video.w; bh = lay_video.h; }

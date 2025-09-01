@@ -49,7 +49,7 @@ Run
 - o (in Control Mode): toggle OSD on/off (default off)
 - ? (in Control Mode): help overlay
 - f (in Control Mode): force pane surface rebuild (refresh from vterm screen)
-- Arrows (in Control Mode): resize column/row splits (layouts 2x1/1x2)
+- Arrows (in Control Mode): resize column/row splits (L-shaped layouts)
   - The focused pane is outlined with a cyan border while in Control Mode.
 - Outside Control Mode: all keys go to the focused pane; when focus is video, keys are forwarded to mpv (space/pause, n/p next/prev, arrows, ASCII)
   - Video focus key support: ASCII, Space/Enter/Tab, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12, Esc, Backspace; plus fallbacks for space (pause), n/p (next/prev)
@@ -58,8 +58,8 @@ Run
 Layouts
 - Portrait (90/270):
   - stack: 3 rows in 1 column (Top=C, Middle=A, Bottom=B by default)
-  - 2x1: two columns in first row (C | A), second row single column (B)
-  - 1x2: one column in first row (C), second row two columns (A | B)
+  - 2over1: two columns in first row (C | A), second row single column (B)
+  - 1over2: one column in first row (C), second row two columns (A | B)
 - Landscape (0/180):
   - stack: 3 rows in 1 column
   - row: 1 row in 3 columns
@@ -111,7 +111,7 @@ Flags
 
 - --no-config: do not auto-load the default config
 - --smooth: balanced playback preset (display-resample, no interp, linear tscale, early-flush, no shader cache)
-- --layout stack|row|2x1|1x2: select tiling mode (applies in any rotation)
+- --layout stack|row|2x1|1x2|1over2|2over1: select tiling mode (applies in any rotation)
 
 Runtime focus and input
 - Focus targets: C=video, A=btop (by default), B=syslog (by default). Use Tab in Control Mode to select.
@@ -120,7 +120,7 @@ Runtime focus and input
 OSD
 - Default off for a clean display. Toggle in Control Mode with 'o' or show the help overlay with '?'.
 - Long OSD lines wrap automatically to the viewport width.
-- Status line shows the current layout (stack, row, 2x1, 1x2).
+- Status line shows the current layout (stack, row, 2x1, 1x2, 1over2, 2over1).
 
 Behavioral defaults
 - Single-video auto-loop: if only one file is given and no playlist, looping is enabled automatically.
