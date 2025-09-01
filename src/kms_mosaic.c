@@ -1214,6 +1214,18 @@ static void push_video_opt(video_item *vi, const char *kv){
     vi->opts[vi->nopts++] = kv;
 }
 
+static void add_mpv_opt(options_t *opt, const char *key, const char *val){
+    if (opt->n_mpv_opts == opt->cap_mpv_opts){
+        int nc = opt->cap_mpv_opts ? opt->cap_mpv_opts*2 : 8;
+        opt->mpv_opts = realloc(opt->mpv_opts, (size_t)nc * sizeof(char*));
+        opt->cap_mpv_opts = nc;
+    }
+    size_t len = strlen(key) + 1 + strlen(val) + 1;
+    char *kv = malloc(len);
+    snprintf(kv, len, "%s=%s", key, val);
+    opt->mpv_opts[opt->n_mpv_opts++] = kv;
+}
+
 static const char* trim(char *s){ if(!s) return s; while(isspace((unsigned char)*s)) s++; char *e=s+strlen(s); while(e>s && isspace((unsigned char)e[-1])) *--e='\0'; return s; }
 
 static void parse_playlist_ext(options_t *opt, const char *file){
@@ -1311,6 +1323,28 @@ static void handle_cmd(const char *cmd, mpv_ctx *m, bool *running, bool use_mpv)
             ps = ps > 0.0 ? 0.0 : 1.0;
             mpv_set_property(m->mpv, "panscan", MPV_FORMAT_DOUBLE, &ps);
         }
+    } else if (use_mpv && !strncmp(cmd, "--", 2)) {
+        const char *opt = cmd + 2;
+        const char *val = NULL;
+        char key[128];
+        const char *eq = strchr(opt, '=');
+        const char *sp = strchr(opt, ' ');
+        if (sp && (!eq || sp < eq)) eq = sp;
+        if (eq) {
+            size_t klen = (size_t)(eq - opt); if (klen >= sizeof key) klen = sizeof key - 1;
+            memcpy(key, opt, klen); key[klen] = '\0';
+            val = eq + 1; while (*val == ' ') val++;
+        } else if (!strncmp(opt, "no-", 3)) {
+            strncpy(key, opt + 3, sizeof key - 1); key[sizeof key - 1] = '\0';
+            val = "no";
+        } else {
+            strncpy(key, opt, sizeof key - 1); key[sizeof key - 1] = '\0';
+            val = "yes";
+        }
+        const char *args[] = {"set", key, val, NULL};
+        mpv_command(m->mpv, args);
+    } else if (use_mpv) {
+        mpv_command_string(m->mpv, cmd);
     }
 }
 
@@ -1485,6 +1519,28 @@ int main(int argc, char **argv) {
             // Treat bare arguments that don't start with '-' as video paths for convenience
             if (argv[i][0] != '-') {
                 push_video(&opt, argv[i]);
+            } else if (!strncmp(argv[i], "--", 2)) {
+                const char *optstr = argv[i] + 2;
+                const char *val = NULL;
+                char key[128];
+                const char *eq = strchr(optstr, '=');
+                if (!eq) {
+                    const char *sp = strchr(optstr, ' ');
+                    if (sp && (!eq || sp < eq)) eq = sp;
+                }
+                if (eq) {
+                    size_t klen = (size_t)(eq - optstr); if (klen >= sizeof key) klen = sizeof key - 1;
+                    memcpy(key, optstr, klen); key[klen] = '\0';
+                    val = eq + 1; while (*val == ' ') val++;
+                } else if (!strncmp(optstr, "no-", 3)) {
+                    strncpy(key, optstr + 3, sizeof key - 1); key[sizeof key - 1] = '\0';
+                    val = "no";
+                } else {
+                    strncpy(key, optstr, sizeof key - 1); key[sizeof key - 1] = '\0';
+                    if (i + 1 < argc && argv[i+1][0] != '-') val = argv[++i];
+                    else val = "yes";
+                }
+                add_mpv_opt(&opt, key, val);
             } else {
                 fprintf(stderr, "Warning: unknown option '%s' (ignored). Use --help for usage.\n", argv[i]);
             }
