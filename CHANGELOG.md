@@ -10,6 +10,10 @@ Semantic Versioning when version numbers are introduced.
 ### Added
 - Control Mode fullscreen toggle (`z`), with `n/p` navigation and `a` auto-rotate (interval via `--fs-cycle-sec`).
 
+### Changed
+- OSD, menu, and help text now render white on a black box and stay within screen bounds, including in portrait mode.
+- `--playlist-fifo` playlists automatically loop back to the first entry when the last video finishes.
+
 ## [0.2.1] - 2025-09-01
 
 ### Added

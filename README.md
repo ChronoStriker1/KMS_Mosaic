@@ -40,6 +40,7 @@ Run
 - `./kms_mosaic --save-config-default`
 - `./kms_mosaic --playlist-fifo /tmp/playlist.fifo`
   - create fifo: `mkfifo /tmp/playlist.fifo` then `echo /path/video.mp4 > /tmp/playlist.fifo`
+  - playlist loops back to the first entry when the last video ends
 
 -Controls
 - Ctrl+Q: quit compositor (always active)
@@ -95,6 +96,7 @@ Flags
 - --video-opt K=V: apply mpv option to the most recent --video (repeatable per item).
 - --playlist FILE: load an mpv playlist file (m3u, one path per line).
 - --playlist-fifo PATH: watch a named pipe for newline-delimited video paths; use `mkfifo PATH` then write file paths to it to append.
+  Playlist automatically loops back to the first entry when reaching the end.
 - --roles XYZ: set initial slot order of panes (e.g., CAB); saved with `--save-config`.
 - --playlist-extended FILE: custom playlist with per-line options (each line: "path | key=val,key=val").
 - --no-video: disable the video region and use full width for the text panes.
