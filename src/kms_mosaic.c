@@ -123,6 +123,7 @@ typedef struct {
     bool loop_flag;           // --loop shorthand for loop-file=inf
     int video_rotate;         // passthrough to mpv video-rotate (-1 unset)
     const char *panscan;      // passthrough to mpv panscan value
+    const char *cmd_fifo;     // path for command FIFO
     bool no_config;           // skip loading default config file
     bool smooth;              // apply a sensible playback preset
     bool atomic_nonblock;     // use nonblocking atomic flips
@@ -1256,18 +1257,18 @@ static const char* default_config_path(void){
     static char buf[512];
     // Prefer Unraid boot config if available
     if (access("/boot/config", F_OK) == 0) {
-        snprintf(buf, sizeof buf, "/boot/config/kms_mpv_compositor.conf");
+        snprintf(buf, sizeof buf, "/boot/config/kms_mosaic.conf");
         return buf;
     }
     const char *xdg = getenv("XDG_CONFIG_HOME");
     const char *home = getenv("HOME");
-    if (xdg && *xdg) { snprintf(buf, sizeof buf, "%s/kms_mpv_compositor.conf", xdg); return buf; }
-    if (home && *home) { snprintf(buf, sizeof buf, "%s/.config/kms_mpv_compositor.conf", home); return buf; }
-    snprintf(buf, sizeof buf, ".kms_mpv_compositor.conf");
+    if (xdg && *xdg) { snprintf(buf, sizeof buf, "%s/kms_mosaic.conf", xdg); return buf; }
+    if (home && *home) { snprintf(buf, sizeof buf, "%s/.config/kms_mosaic.conf", home); return buf; }
+    snprintf(buf, sizeof buf, ".kms_mosaic.conf");
     return buf;
 }
 
-static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(path,"w"); if(!f){perror("save-config"); return;} 
+static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(path,"w"); if(!f){perror("save-config"); return;}
     if (opt->connector_opt) fprintf(f, "--connector '%s'\n", opt->connector_opt);
     if (opt->mode_w||opt->mode_h) fprintf(f, "--mode %dx%d@%d\n", opt->mode_w,opt->mode_h,opt->mode_hz);
     if (opt->rotation) fprintf(f, "--rotate %d\n", (int)opt->rotation);
@@ -1289,6 +1290,9 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
     if (opt->loop_file) fprintf(f, "--loop-file\n");
     if (opt->loop_playlist) fprintf(f, "--loop-playlist\n");
     if (opt->shuffle) fprintf(f, "--shuffle\n");
+    if (opt->video_rotate >= 0) fprintf(f, "--video-rotate %d\n", opt->video_rotate);
+    if (opt->panscan) fprintf(f, "--panscan %s\n", opt->panscan);
+    if (opt->cmd_fifo) fprintf(f, "--cmd-fifo '%s'\n", opt->cmd_fifo);
     for (int i=0;i<opt->n_mpv_opts;i++) fprintf(f, "--mpv-opt '%s'\n", opt->mpv_opts[i]);
     if (opt->playlist_path) fprintf(f, "--playlist '%s'\n", opt->playlist_path);
     if (opt->playlist_fifo) fprintf(f, "--playlist-fifo '%s'\n", opt->playlist_fifo);
@@ -1298,9 +1302,21 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
     fclose(f);
 }
 
+static void handle_cmd(const char *cmd, mpv_ctx *m, bool *running, bool use_mpv){
+    if (!strcmp(cmd, "quit")) {
+        *running = false;
+    } else if ((!strcmp(cmd, "panscan") || !strcmp(cmd, "c")) && use_mpv) {
+        double ps = 0.0;
+        if (mpv_get_property(m->mpv, "panscan", MPV_FORMAT_DOUBLE, &ps) >= 0) {
+            ps = ps > 0.0 ? 0.0 : 1.0;
+            mpv_set_property(m->mpv, "panscan", MPV_FORMAT_DOUBLE, &ps);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     install_signal_handlers();
-    if (getenv("KMS_MPV_DEBUG")) g_debug = 1;
+    if (getenv("KMS_MOSAIC_DEBUG")) g_debug = 1;
     // Try to avoid Mesa glthread confusion on some stacks when running headless/GBM
     setenv("mesa_glthread", "false", 0);
     setenv("MESA_GLTHREAD", "0", 0);
@@ -1396,6 +1412,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--debug")) g_debug = 1;
         else if (!strcmp(argv[i], "--video-rotate") && i + 1 < argc) { opt.video_rotate = atoi(argv[++i]); }
         else if (!strcmp(argv[i], "--panscan") && i + 1 < argc) { opt.panscan = argv[++i]; }
+        else if (!strcmp(argv[i], "--cmd-fifo") && i + 1 < argc) opt.cmd_fifo = argv[++i];
         else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             const char *exe = argv[0];
             fprintf(stderr,
@@ -1432,6 +1449,7 @@ int main(int argc, char **argv) {
                 "  --mpv-opt K=V           Global mpv option (repeatable).\n"
                 "  --video-rotate DEG      Pass-through to mpv video-rotate.\n"
                 "  --panscan VAL           Pass-through to mpv panscan.\n\n"
+                "  --cmd-fifo PATH        Read commands from named pipe at PATH.\n\n"
                 "Config and misc:\n"
                 "  --config FILE           Load options from file (supports quotes and # comments).\n"
                 "  --save-config FILE      Save current options to file.\n"
@@ -1457,6 +1475,7 @@ int main(int argc, char **argv) {
                 "  n / p         Next/prev pane when fullscreen.\n"
                 "  a             Toggle fullscreen auto-rotate.\n"
                 "  o             Toggle OSD visibility.\n"
+                "  c             Toggle panscan on/off.\n"
                 "  ?             Help overlay.\n"
                 "  Ctrl+Q        Quit (only active in Control Mode).\n\n",
                 exe);
@@ -1515,9 +1534,9 @@ int main(int argc, char **argv) {
     // mpv setup (skip if --no-video and no videos provided)
     mpv_ctx m = {0};
     bool use_mpv = !opt.no_video && (opt.video_count > 0 || opt.playlist_path || opt.playlist_ext);
-    const char *disable_env = getenv("KMS_MPV_DISABLE");
+    const char *disable_env = getenv("KMS_MOSAIC_DISABLE");
     if (disable_env && (*disable_env=='1' || *disable_env=='y' || *disable_env=='Y')) {
-        use_mpv = false; fprintf(stderr, "Debug: KMS_MPV_DISABLE set; skipping mpv setup.\n");
+        use_mpv = false; fprintf(stderr, "Debug: KMS_MOSAIC_DISABLE set; skipping mpv setup.\n");
     }
     if (use_mpv) {
         if (pipe2(m.wakeup_fd, O_NONBLOCK | O_CLOEXEC) < 0) die("pipe2");
@@ -1646,7 +1665,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Diag: GLSL_VERSION=%s\n", glsl?glsl:"?");
         fprintf(stderr, "Diag: GL_VENDOR=%s\n", gl_vendor?gl_vendor:"?");
         fprintf(stderr, "Diag: GL_RENDERER=%s\n", gl_renderer?gl_renderer:"?");
-        const char *bundled = "/usr/local/lib/kms_mpv_compositor";
+        const char *bundled = "/usr/local/lib/kms_mosaic";
         fprintf(stderr, "Diag: Bundled lib dir %s: %s\n", bundled, access(bundled, R_OK)==0?"present":"missing");
         // Exit cleanly after diagnostics
         goto cleanup;
@@ -1788,41 +1807,46 @@ int main(int argc, char **argv) {
 
     // Set TTY to raw mode for key forwarding
     struct termios rawt; if (tcgetattr(0, &g_oldt)==0) { g_have_oldt = 1; rawt = g_oldt; cfmakeraw(&rawt); tcsetattr(0, TCSANOW, &rawt); atexit(restore_tty); }
-            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, z fullscreen, n/p next/prev, a auto-rotate, Arrows resize, l/L layouts, r/R rotate roles, t swap selected pane, o OSD, ? help; Ctrl+Q quit.\n");
+            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, z fullscreen, n/p next/prev, a auto-rotate, Arrows resize, l/L layouts, r/R rotate roles, t swap selected pane, o OSD, c panscan, ? help; Ctrl+Q quit.\n");
     int focus = use_mpv ? 0 : 1; // 0=video, 1=top pane, 2=bottom pane
     bool show_osd = false; // default OSD off
-    if (getenv("KMS_MPV_NO_OSD")) show_osd = false;
+    if (getenv("KMS_MOSAIC_NO_OSD")) show_osd = false;
     bool show_help = false; // OSD help overlay
     bool ui_control = false; // when true, keystrokes control mosaic instead of panes
 
     bool running = true;
-    const char *direct_env_once = getenv("KMS_MPV_DIRECT");
+    const char *direct_env_once = getenv("KMS_MOSAIC_DIRECT");
     bool direct_mode = (direct_env_once && (*direct_env_once=='1' || *direct_env_once=='y' || *direct_env_once=='Y'));
     int mpv_flip_y_direct = 1; // default 1; can be overridden by env
-    const char *flip_env = getenv("KMS_MPV_FLIPY");
+    const char *flip_env = getenv("KMS_MOSAIC_FLIPY");
     if (flip_env && (*flip_env=='0' || *flip_env=='n' || *flip_env=='N')) mpv_flip_y_direct = 0;
-    bool direct_via_fbo = false; const char *dfbo_env = getenv("KMS_MPV_DIRECT_FBO");
+    bool direct_via_fbo = false; const char *dfbo_env = getenv("KMS_MOSAIC_DIRECT_FBO");
     if (dfbo_env && (*dfbo_env=='1' || *dfbo_env=='y' || *dfbo_env=='Y')) direct_via_fbo = true;
-    bool direct_test_only = false; const char *dtest_env = getenv("KMS_MPV_DIRECT_TEST");
+    bool direct_test_only = false; const char *dtest_env = getenv("KMS_MOSAIC_DIRECT_TEST");
     if (dtest_env && (*dtest_env=='1' || *dtest_env=='y' || *dtest_env=='Y')) direct_test_only = true;
     int frame = 0;
     int mpv_needs_render = 1; // request an initial render
     int fifo_fd = -1; char fifo_buf[4096]; size_t fifo_len = 0;
+    int cmd_fd = -1; char cmd_buf[256]; size_t cmd_len = 0;
     if (opt.playlist_fifo) {
         mkfifo(opt.playlist_fifo, 0666);
         fifo_fd = open(opt.playlist_fifo, O_RDONLY | O_NONBLOCK);
     }
-    struct pollfd pfds[4];
+    if (opt.cmd_fifo) {
+        mkfifo(opt.cmd_fifo, 0666);
+        cmd_fd = open(opt.cmd_fifo, O_RDONLY | O_NONBLOCK);
+    }
+    struct pollfd pfds[5];
     pfds[0].fd = 0; // stdin for keys
     pfds[0].events = POLLIN;
     pfds[1].fd = use_mpv ? m.wakeup_fd[0] : -1;
     pfds[1].events = POLLIN;
     pfds[2].fd = d.fd; // DRM events (atomic)
     pfds[2].events = POLLIN;
-    pfds[3].fd = fifo_fd;
-    pfds[3].events = POLLIN;
     int nfds = use_mpv ? 3 : 2;
-    if (fifo_fd >= 0) nfds++;
+    int pl_idx = -1, cmd_idx = -1;
+    if (fifo_fd >= 0) { pfds[nfds].fd = fifo_fd; pfds[nfds].events = POLLIN; pl_idx = nfds; nfds++; }
+    if (cmd_fd >= 0) { pfds[nfds].fd = cmd_fd; pfds[nfds].events = POLLIN; cmd_idx = nfds; nfds++; }
     fcntl(0, F_SETFL, O_NONBLOCK);
 
     while (running) {
@@ -1864,6 +1888,14 @@ int main(int argc, char **argv) {
                     else if (buf[i]=='n' && fullscreen) { fullscreen_target = (fullscreen_target+1)%3; focus = fullscreen_target; fs_last_switch = now_sec(); consumed=true; }
                     else if (buf[i]=='p' && fullscreen) { fullscreen_target = (fullscreen_target+2)%3; focus = fullscreen_target; fs_last_switch = now_sec(); consumed=true; }
                     else if (buf[i]=='a' && fullscreen) { fs_auto = !fs_auto; fs_last_switch = now_sec(); consumed=true; }
+                    else if (buf[i]=='c' && use_mpv) {
+                        double ps = 0.0;
+                        if (mpv_get_property(m.mpv, "panscan", MPV_FORMAT_DOUBLE, &ps) >= 0) {
+                            ps = ps > 0.0 ? 0.0 : 1.0;
+                            mpv_set_property(m.mpv, "panscan", MPV_FORMAT_DOUBLE, &ps);
+                        }
+                        consumed = true;
+                    }
                 }
                 // While in UI control mode, handle arrow keys for resizing splits
                 if (ui_control && !fullscreen) {
@@ -1951,7 +1983,7 @@ int main(int argc, char **argv) {
             drmHandleEvent(d.fd, &ev);
         }
 
-        if (fifo_fd >= 0 && (pfds[3].revents & POLLIN)) {
+        if (pl_idx >= 0 && (pfds[pl_idx].revents & POLLIN)) {
             ssize_t r = read(fifo_fd, fifo_buf + fifo_len, sizeof(fifo_buf) - fifo_len - 1);
             if (r > 0) {
                 fifo_len += (size_t)r;
@@ -1970,7 +2002,27 @@ int main(int argc, char **argv) {
             } else if (r == 0) {
                 close(fifo_fd);
                 fifo_fd = open(opt.playlist_fifo, O_RDONLY | O_NONBLOCK);
-                pfds[3].fd = fifo_fd;
+                pfds[pl_idx].fd = fifo_fd;
+            }
+        }
+
+        if (cmd_idx >= 0 && (pfds[cmd_idx].revents & POLLIN)) {
+            ssize_t r = read(cmd_fd, cmd_buf + cmd_len, sizeof(cmd_buf) - cmd_len - 1);
+            if (r > 0) {
+                cmd_len += (size_t)r;
+                cmd_buf[cmd_len] = '\0';
+                char *nl;
+                while ((nl = memchr(cmd_buf, '\n', cmd_len))) {
+                    *nl = '\0';
+                    if (nl > cmd_buf) handle_cmd(cmd_buf, &m, &running, use_mpv);
+                    size_t used = (size_t)(nl - cmd_buf) + 1;
+                    memmove(cmd_buf, cmd_buf + used, cmd_len - used);
+                    cmd_len -= used;
+                }
+            } else if (r == 0) {
+                close(cmd_fd);
+                cmd_fd = open(opt.cmd_fifo, O_RDONLY | O_NONBLOCK);
+                pfds[cmd_idx].fd = cmd_fd;
             }
         }
 
@@ -2276,6 +2328,7 @@ int main(int argc, char **argv) {
                     "  Arrows: resize splits\n"
                     "  f: force pane rebuild\n"
                     "  s: save config\n"
+                    "  c: toggle panscan\n"
                     "Always: Ctrl+Q quit\n";
                 osd_set_text(osd, help);
             } else {
@@ -2311,7 +2364,7 @@ int main(int argc, char **argv) {
         // Control-mode indicator OSD (always visible when active)
         if (!direct_mode && ui_control) {
             static osd_ctx *osdcm = NULL; if (!osdcm) osdcm = osd_create(opt.font_px?opt.font_px:20);
-            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  z fullscreen  n/p cycle  a auto  Arrows resize  l/L layouts  r/R rotate  t swap-next  o OSD  s save  ? help");
+            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  z fullscreen  n/p cycle  a auto  Arrows resize  l/L layouts  r/R rotate  t swap-next  o OSD  c panscan  s save  ? help");
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             gl_reset_state_2d();
             glViewport(0,0, logical_w, logical_h);
