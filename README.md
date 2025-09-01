@@ -39,15 +39,16 @@ Run
 - `./kms_mosaic --save-config /path/profile.conf`
 - `./kms_mosaic --save-config-default`
 - `./kms_mosaic --playlist-fifo /tmp/playlist.fifo`
+  - create fifo: `mkfifo /tmp/playlist.fifo` then `echo /path/video.mp4 > /tmp/playlist.fifo`
 
 -Controls
 - Ctrl+Q: quit compositor (always active)
 - Ctrl+E: toggle Control Mode. While active, compositor consumes layout/role keys.
 - Tab (in Control Mode): cycle focus among C/A/B (video, pane A, pane B)
 - l / L (in Control Mode): cycle layouts forward/back
-- t (in Control Mode): swap terminal panes A and B
+- t (in Control Mode): swap the focused pane with the next pane
 - r / R (in Control Mode): rotate roles among (C video, A, B) / reverse
-- o (in Control Mode): toggle OSD on/off (default off)
+- o (in Control Mode): toggle OSD showing video title and layout
 - ? (in Control Mode): help overlay
 - f (in Control Mode): force pane surface rebuild (refresh from vterm screen)
 - s (in Control Mode): save current configuration as default
@@ -90,7 +91,8 @@ Flags
 - --video PATH: path to media file for the left pane. Optional.
 - --video-opt K=V: apply mpv option to the most recent --video (repeatable per item).
 - --playlist FILE: load an mpv playlist file (m3u, one path per line).
-- --playlist-fifo PATH: read newline-delimited video paths at runtime and append to the playlist.
+- --playlist-fifo PATH: watch a named pipe for newline-delimited video paths; use `mkfifo PATH` then write file paths to it to append.
+- --roles XYZ: set initial slot order of panes (e.g., CAB); saved with `--save-config`.
 - --playlist-extended FILE: custom playlist with per-line options (each line: "path | key=val,key=val").
 - --no-video: disable the video region and use full width for the text panes.
 - --loop-file: loop the current file indefinitely.
@@ -121,7 +123,7 @@ Runtime focus and input
 - Outside Control Mode, keypresses go to the focused target. This keeps underlying programs (btop, shell, mpv) fully interactive.
 
 OSD
-- Default off for a clean display. Toggle in Control Mode with 'o' or show the help overlay with '?'.
+- Default off for a clean display. Toggle in Control Mode with 'o' to show current video title and layout, or '?' for help overlay.
 - Long OSD lines wrap automatically to the viewport width.
 - Status line shows the current layout (stack, row, 2x1, 1x2, 1over2, 2over1).
 

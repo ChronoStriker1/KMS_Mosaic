@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog, and this project aims to follow
 Semantic Versioning when version numbers are introduced.
 
+## [0.2.1] - 2025-09-01
+
+### Added
+- `--roles` flag to persist pane positions in saved configs.
+
+### Changed
+- `t` in Control Mode swaps the focused pane with the next pane.
+- `--help` now documents how `--playlist-fifo` works.
+
+### Fixed
+- OSD toggle works without video and shows layout info.
+- Saving configuration includes pane positions.
+
+### Docs
+- README updated for playlist FIFO usage, pane swapping, and OSD details.
+
 ## [0.2.0] - 2025-08-30
 
 ### Added
