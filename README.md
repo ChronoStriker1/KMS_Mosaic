@@ -159,3 +159,14 @@ macOS build + package
   - Result: `dist/kms_mpv_compositor-<date>-x86_64-1.txz`
 - Install on Unraid: copy the `.txz` to your server and run `installpkg`.
 - Note: If you prefer a Slackware build environment, set `BASE_IMAGE=slackware:15.0` before running and ensure the image exists locally.
+
+Anime4K shaders
+---------------
+This repository includes a helper script to download the Anime4K GLSL shaders for use with mpv. Run:
+
+    scripts/fetch_anime4k_shaders.sh
+
+The script saves the shaders under `shaders/anime4k`. Apply them through the compositor by passing an mpv option, e.g.:
+
+    ./kms_mosaic --mpv-opt glsl-shader=shaders/anime4k/Anime4K_Clamp_Highlights.glsl
+
