@@ -114,11 +114,10 @@ typedef struct {
     bool no_panes;
     bool gl_test;
     bool diag;
-    bool loop_file;
+    bool loop_file;           // --loop-file or --loop
     bool loop_playlist;
     bool shuffle;
     bool no_osd;
-    bool loop_flag;           // --loop shorthand for loop-file=inf
     int video_rotate;         // passthrough to mpv video-rotate (-1 unset)
     const char *panscan;      // passthrough to mpv panscan value
     bool no_config;           // skip loading default config file
@@ -1244,6 +1243,7 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
     if (opt->pane_a_cmd) fprintf(f, "--pane-a '%s'\n", opt->pane_a_cmd);
     if (opt->pane_b_cmd) fprintf(f, "--pane-b '%s'\n", opt->pane_b_cmd);
     if (opt->no_video) fprintf(f, "--no-video\n");
+    if (opt->no_osd) fprintf(f, "--no-osd\n");
     if (opt->loop_file) fprintf(f, "--loop-file\n");
     if (opt->loop_playlist) fprintf(f, "--loop-playlist\n");
     if (opt->shuffle) fprintf(f, "--shuffle\n");
@@ -1313,22 +1313,7 @@ int main(int argc, char **argv) {
             else if (!strcmp(v,"2x1")) opt.layout_mode = 2;
             else if (!strcmp(v,"1x2")) opt.layout_mode = 3;
         }
-        else if (!strcmp(argv[i], "--landscape-layout") && i + 1 < argc) { // backward compat
-            const char *v = argv[++i];
-            if (!strcmp(v,"stack") || !strcmp(v,"stack3")) opt.layout_mode = 0;
-            else if (!strcmp(v,"row") || !strcmp(v,"row3")) opt.layout_mode = 1;
-            else if (!strcmp(v,"2x1")) opt.layout_mode = 2;
-            else if (!strcmp(v,"1x2")) opt.layout_mode = 3;
-        }
-        else if (!strcmp(argv[i], "--portrait-layout") && i + 1 < argc) { // backward compat
-            const char *v = argv[++i];
-            if (!strcmp(v,"stack") || !strcmp(v,"stack3")) opt.layout_mode = 0;
-            else if (!strcmp(v,"row") || !strcmp(v,"row3")) opt.layout_mode = 1;
-            else if (!strcmp(v,"2x1")) opt.layout_mode = 2;
-            else if (!strcmp(v,"1x2")) opt.layout_mode = 3;
-        }
-        else if (!strcmp(argv[i], "--loop-file")) opt.loop_file = true;
-        else if (!strcmp(argv[i], "--loop")) opt.loop_flag = true;
+        else if (!strcmp(argv[i], "--loop-file") || !strcmp(argv[i], "--loop")) opt.loop_file = true;
         else if (!strcmp(argv[i], "--loop-playlist")) opt.loop_playlist = true;
         else if (!strcmp(argv[i], "--shuffle") || !strcmp(argv[i], "--randomize")) opt.shuffle = true;
         else if (!strcmp(argv[i], "--no-osd")) opt.no_osd = true;
@@ -1369,10 +1354,9 @@ int main(int argc, char **argv) {
                 "  --video-opt K=V         Per-video options (repeatable, applies to the last --video).\n"
                 "  --playlist FILE         Load playlist file.\n"
                 "  --playlist-extended F   Extended playlist (path | k=v,k=v per line).\n"
-                "  --loop-file             Loop current file indefinitely.\n"
-                "  --loop                  Shorthand for --loop-file.\n"
+                "  --loop-file, --loop     Loop current file indefinitely.\n"
                 "  --loop-playlist         Loop the whole playlist.\n"
-                "  --shuffle               Randomize playlist order.\n"
+                "  --shuffle, --randomize  Randomize playlist order.\n"
                 "  --mpv-opt K=V           Global mpv option (repeatable).\n"
                 "  --video-rotate DEG      Pass-through to mpv video-rotate.\n"
                 "  --panscan VAL           Pass-through to mpv panscan.\n\n"
@@ -1384,13 +1368,14 @@ int main(int argc, char **argv) {
                 "  --list-connectors       Print connectors/modes and exit.\n"
                 "  --no-video              Disable the video pane.\n"
                 "  --no-panes              Disable terminal panes.\n"
+                "  --no-osd               Disable the on-screen display.\n"
                 "  --smooth                Apply a sensible playback preset.\n"
                 "  --gl-test               Render a diagnostic GL gradient and exit.\n"
                 "  --diag                  Print GL/driver diagnostics and exit.\n"
                 "  --debug                 Verbose logging.\n\n"
                 "Defaults and notes:\n"
                 "  - OSD is off by default (toggle in Control Mode with 'o').\n"
-                "  - If a single video is provided (no playlist), --loop is assumed.\n"
+                "  - If a single video is provided (no playlist), --loop-file is assumed.\n"
                 "  - Controls are gated behind Control Mode so panes and video receive keys normally.\n\n"
                 "Controls (toggle Control Mode with Ctrl+E):\n"
                 "  Tab           Cycle focus C/A/B (video/paneA/paneB).\n"
@@ -1416,10 +1401,10 @@ int main(int argc, char **argv) {
     if (opt.playlist_ext) parse_playlist_ext(&opt, opt.playlist_ext);
 
     // If exactly one video file is provided and no playlist,
-    // assume --loop should be enabled unless user already set a loop.
+    // assume --loop-file should be enabled unless user already set a loop.
     if (!opt.playlist_path && !opt.playlist_ext) {
-        if (opt.video_count == 1 && !opt.loop_file && !opt.loop_flag) {
-            opt.loop_flag = true;
+        if (opt.video_count == 1 && !opt.loop_file) {
+            opt.loop_file = true;
         }
     }
 
@@ -1484,7 +1469,7 @@ int main(int argc, char **argv) {
             }
         }
         if (!user_set_hwdec) mpv_set_option_string(m.mpv, "hwdec", "no");
-        if (opt.loop_file || opt.loop_flag) mpv_set_option_string(m.mpv, "loop-file", "inf");
+        if (opt.loop_file) mpv_set_option_string(m.mpv, "loop-file", "inf");
         if (opt.loop_playlist) mpv_set_option_string(m.mpv, "loop-playlist", "yes");
         if (opt.shuffle) mpv_set_option_string(m.mpv, "shuffle", "yes");
         // Reasonable defaults mirroring a typical KMS usage; can be overridden via --mpv-opt
