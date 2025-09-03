@@ -2007,22 +2007,42 @@ int main(int argc, char **argv) {
                 if (!ev || ev->event_id == MPV_EVENT_NONE) break;
                 if (ev->event_id == MPV_EVENT_LOG_MESSAGE) {
                     mpv_event_log_message *lm = ev->data;
-                    fprintf(stderr, "mpv[%s]: %s", lm->prefix, lm->text);
-                    if (mpv_out) { fprintf(mpv_out, "[%s] %s", lm->prefix, lm->text); fflush(mpv_out); }
+                    if (g_debug)
+                        fprintf(stderr, "mpv[%s]: %s", lm->prefix, lm->text);
+                    if (mpv_out) {
+                        fprintf(mpv_out, "[%s] %s", lm->prefix, lm->text);
+                        fflush(mpv_out);
+                    }
                 } else if (ev->event_id == MPV_EVENT_START_FILE) {
-                    fprintf(stderr, "mpv: START_FILE\n");
-                    if (mpv_out) { fprintf(mpv_out, "START_FILE\n"); fflush(mpv_out); }
+                    if (g_debug)
+                        fprintf(stderr, "mpv: START_FILE\n");
+                    if (mpv_out) {
+                        fprintf(mpv_out, "START_FILE\n");
+                        fflush(mpv_out);
+                    }
                 } else if (ev->event_id == MPV_EVENT_FILE_LOADED) {
-                    fprintf(stderr, "mpv: FILE_LOADED\n");
-                    if (mpv_out) { fprintf(mpv_out, "FILE_LOADED\n"); fflush(mpv_out); }
+                    if (g_debug)
+                        fprintf(stderr, "mpv: FILE_LOADED\n");
+                    if (mpv_out) {
+                        fprintf(mpv_out, "FILE_LOADED\n");
+                        fflush(mpv_out);
+                    }
                     mpv_needs_render = 1;
                 } else if (ev->event_id == MPV_EVENT_VIDEO_RECONFIG) {
-                    fprintf(stderr, "mpv: VIDEO_RECONFIG\n");
-                    if (mpv_out) { fprintf(mpv_out, "VIDEO_RECONFIG\n"); fflush(mpv_out); }
+                    if (g_debug)
+                        fprintf(stderr, "mpv: VIDEO_RECONFIG\n");
+                    if (mpv_out) {
+                        fprintf(mpv_out, "VIDEO_RECONFIG\n");
+                        fflush(mpv_out);
+                    }
                     mpv_needs_render = 1;
                 } else if (ev->event_id == MPV_EVENT_END_FILE) {
-                    fprintf(stderr, "mpv: END_FILE\n");
-                    if (mpv_out) { fprintf(mpv_out, "END_FILE\n"); fflush(mpv_out); }
+                    if (g_debug)
+                        fprintf(stderr, "mpv: END_FILE\n");
+                    if (mpv_out) {
+                        fprintf(mpv_out, "END_FILE\n");
+                        fflush(mpv_out);
+                    }
                 }
             }
             int flags = mpv_render_context_update(m.mpv_gl);
