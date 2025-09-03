@@ -106,7 +106,6 @@ static char* wrap_text_to_width(font_ctx *f, const char *text, int max_width_px)
         // measure next word (including following space if present)
         int word_w = 0; size_t j=i; while (text[j] && text[j]!=' ' && text[j]!='\n'){ word_w += glyph_advance_px(f, (unsigned char)text[j]); j++; }
         int space_w = 0; int has_space = 0; if (text[j]==' '){ space_w = glyph_advance_px(f, ' '); has_space = 1; }
-        int add_w = word_w + (has_space?space_w:0);
         if (line_w>0 && line_w + word_w > max_width_px){
             // wrap before word
             if (oi+1>=cap){cap*=2; out=realloc(out,cap);} out[oi++]='\n'; line_w = 0;

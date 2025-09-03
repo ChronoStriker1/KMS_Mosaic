@@ -1022,6 +1022,7 @@ static void gl_check(const char *stage){
 // Draw a colored rectangular border into the currently bound framebuffer using scissor clears
 static void draw_border_rect(int x, int y, int w, int h, int thickness, int fb_w, int fb_h,
                              float r, float g, float b, float a) {
+    (void)fb_w;
     if (w <= 0 || h <= 0 || thickness <= 0) return;
     if (thickness > w/2) thickness = w/2;
     if (thickness > h/2) thickness = h/2;
@@ -1031,7 +1032,8 @@ static void draw_border_rect(int x, int y, int w, int h, int thickness, int fb_w
     // Convert to scissor coords (origin bottom-left). Our layout y is bottom-left already.
     int sx = x;
     int sy = fb_h - (y + h);
-    if (sx < 0) sx = 0; if (sy < 0) sy = 0;
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
     // Top edge
     glScissor(sx, sy + h - thickness, w, thickness);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -1674,6 +1676,11 @@ int main(int argc, char **argv) {
     static int last_fullscreen = 0;
     static int last_fs_pane = 0;
     static int layout_reinit_countdown = 0;
+
+    bool fullscreen = false;
+    int fs_pane = 0;
+    bool fs_cycle = false;
+    double fs_next_switch = 0.0;
 
     {
         int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2,4=2over1,5=1over2
