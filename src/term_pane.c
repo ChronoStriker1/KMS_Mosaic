@@ -20,9 +20,7 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
-#include <fontconfig/fontconfig.h>
-#include <ft2build.h>
-#include FT_FREETYPE_H
+#include "font_util.h"
 
 // No libvterm callbacks are registered to avoid ABI mismatches.
 
@@ -81,32 +79,9 @@ static void die(const char *msg) {
     exit(1);
 }
 
-static char* find_monospace_font(void) {
-    FcInit();
-    FcPattern *pat = FcNameParse((const FcChar8*)"monospace");
-    FcConfigSubstitute(NULL, pat, FcMatchPattern);
-    FcDefaultSubstitute(pat);
-    FcResult res;
-    FcPattern *match = FcFontMatch(NULL, pat, &res);
-    FcPatternDestroy(pat);
-    if (!match) return NULL;
-    FcChar8 *file = NULL;
-    if (FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch) {
-        char *out = strdup((const char*)file);
-        FcPatternDestroy(match);
-        return out;
-    }
-    FcPatternDestroy(match);
-    return NULL;
-}
-
 static void font_init(font_ctx *f, int px_size) {
-    if (FT_Init_FreeType(&f->ftlib)) die("FT_Init_FreeType");
-    char *path = find_monospace_font();
-    if (!path) die("fontconfig monospace not found");
-    if (FT_New_Face(f->ftlib, path, 0, &f->face)) die("FT_New_Face");
-    free(path);
-    FT_Set_Pixel_Sizes(f->face, 0, px_size);
+    if (font_util_init(&f->ftlib, &f->face, px_size))
+        die("font_util_init");
     f->px_size = px_size;
     // Measure cell from 'M'
     FT_Load_Char(f->face, 'M', FT_LOAD_RENDER);
@@ -121,8 +96,7 @@ static void font_destroy(font_ctx *f) {
         for (int i=0;i<f->cache_count;i++) free(f->cache[i].gb.bitmap);
         free(f->cache);
     }
-    if (f->face) FT_Done_Face(f->face);
-    if (f->ftlib) FT_Done_FreeType(f->ftlib);
+    font_util_destroy(f->ftlib, f->face);
 }
 
 static glyph_bitmap* get_glyph(font_ctx *f, uint32_t cp) {
@@ -799,18 +773,12 @@ void term_pane_send_input(term_pane *tp, const char *buf, size_t len) {
 bool term_measure_cell(int font_px, int *cell_w, int *cell_h) {
     font_ctx f = {0};
     if (font_px <= 0) font_px = 18;
-    // Initialize a temporary freetype face via fontconfig monospace
-    if (FT_Init_FreeType(&f.ftlib)) return false;
-    char *path = find_monospace_font();
-    if (!path) { FT_Done_FreeType(f.ftlib); return false; }
-    if (FT_New_Face(f.ftlib, path, 0, &f.face)) { free(path); FT_Done_FreeType(f.ftlib); return false; }
-    free(path);
-    FT_Set_Pixel_Sizes(f.face, 0, font_px);
+    if (font_util_init(&f.ftlib, &f.face, font_px))
+        return false;
     FT_Load_Char(f.face, 'M', FT_LOAD_RENDER);
     int cw = (f.face->glyph->advance.x + 31) / 64;
     int ch = font_px + 2;
-    FT_Done_Face(f.face);
-    FT_Done_FreeType(f.ftlib);
+    font_util_destroy(f.ftlib, f.face);
     if (cell_w) *cell_w = cw;
     if (cell_h) *cell_h = ch;
     return true;

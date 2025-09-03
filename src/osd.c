@@ -8,9 +8,7 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
-#include <fontconfig/fontconfig.h>
-#include <ft2build.h>
-#include FT_FREETYPE_H
+#include "font_util.h"
 
 typedef struct {
     FT_Library ftlib;
@@ -30,36 +28,15 @@ static void die_local(const char *msg) {
     exit(1);
 }
 
-static char* find_monospace_font(void) {
-    FcInit();
-    FcPattern *pat = FcNameParse((const FcChar8*)"monospace");
-    FcConfigSubstitute(NULL, pat, FcMatchPattern);
-    FcDefaultSubstitute(pat);
-    FcResult res; FcPattern *match = FcFontMatch(NULL, pat, &res); FcPatternDestroy(pat);
-    if (!match) return NULL;
-    FcChar8 *file = NULL;
-    if (FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch) {
-        char *out = strdup((const char*)file);
-        FcPatternDestroy(match);
-        return out;
-    }
-    FcPatternDestroy(match); return NULL;
-}
-
 static void font_init(font_ctx *f, int px_size) {
-    if (FT_Init_FreeType(&f->ftlib)) die_local("FT_Init_FreeType");
-    char *path = find_monospace_font();
-    if (!path) die_local("fontconfig monospace not found");
-    if (FT_New_Face(f->ftlib, path, 0, &f->face)) die_local("FT_New_Face");
-    free(path);
-    FT_Set_Pixel_Sizes(f->face, 0, px_size);
+    if (font_util_init(&f->ftlib, &f->face, px_size))
+        die_local("font_util_init");
     f->px_size = px_size;
     f->baseline = (f->face->size->metrics.ascender + 31) / 64;
 }
 
 static void font_destroy(font_ctx *f) {
-    if (f->face) FT_Done_Face(f->face);
-    if (f->ftlib) FT_Done_FreeType(f->ftlib);
+    font_util_destroy(f->ftlib, f->face);
 }
 
 static void render_text_to_rgba(font_ctx *f, const char *text, unsigned char **out, int *w, int *h) {
