@@ -8,7 +8,7 @@ PKGS = libdrm gbm egl glesv2 mpv vterm freetype2 fontconfig
 PKG_CFLAGS := $(shell pkg-config --cflags $(PKGS))
 PKG_LIBS   := $(shell pkg-config --libs   $(PKGS))
 
-SRC = src/kms_mpv_compositor.c src/term_pane.c src/osd.c
+SRC = src/kms_mpv_compositor.c src/term_pane.c src/osd.c src/drm_gbm.c
 BIN = kms_mosaic
 ALIAS = kms_mpv_compositor
 
