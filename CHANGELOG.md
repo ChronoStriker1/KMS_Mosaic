@@ -39,6 +39,11 @@ Semantic Versioning when version numbers are introduced.
 ### Fixed
 - Corrected default mpv framebuffer orientation so video is no longer upside down; set `KMS_MPV_FLIPY=1` to flip if needed.
 
+## [0.3.3] - 2025-09-06
+
+### Fixed
+- `--roles` flag now correctly assigns panes based on slot order.
+
 ## [0.3.0] - 2025-09-01
 
 ### Added
