@@ -49,22 +49,21 @@ Run
 - o (in Control Mode): toggle OSD on/off (default off)
 - ? (in Control Mode): help overlay
 - f (in Control Mode): force pane surface rebuild (refresh from vterm screen)
-- Arrows (in Control Mode): resize column/row splits (layouts 2x1/1x2)
+- z (in Control Mode): fullscreen the focused pane
+- c (in Control Mode): cycle fullscreen panes
+- Arrows (in Control Mode): resize column/row splits (split layouts)
   - The focused pane is outlined with a cyan border while in Control Mode.
 - Outside Control Mode: all keys go to the focused pane; when focus is video, keys are forwarded to mpv (space/pause, n/p next/prev, arrows, ASCII)
   - Video focus key support: ASCII, Space/Enter/Tab, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12, Esc, Backspace; plus fallbacks for space (pause), n/p (next/prev)
 
 
 Layouts
-- Portrait (90/270):
-  - stack: 3 rows in 1 column (Top=C, Middle=A, Bottom=B by default)
-  - 2x1: two columns in first row (C | A), second row single column (B)
-  - 1x2: one column in first row (C), second row two columns (A | B)
-- Landscape (0/180):
-  - stack: 3 rows in 1 column
-  - row: 1 row in 3 columns
-  - 2x1: 2 rows in left column, right column full height
-  - 1x2: left column full height, right column split into 2 rows
+- stack: 3 rows in 1 column
+- row: 1 row in 3 columns
+- 2x1: left column split into two rows, right column full height
+- 1x2: left column full height, right column split into two rows
+- 2over1: top row split into two columns, bottom row full width
+- 1over2: top row full width, bottom row split into two columns
 - Pane role assignment (C=video, A, B) is a permutation over the 3 slots and can be rotated/swapped at runtime via r/R/t.
 
 Planned TODOs
@@ -123,7 +122,9 @@ Flags
 
 - --no-config: do not auto-load the default config
 - --smooth: balanced playback preset (display-resample, no interp, linear tscale, early-flush, no shader cache)
-- --layout stack|row|2x1|1x2: select tiling mode (applies in any rotation)
+- --layout stack|row|2x1|1x2|2over1|1over2: select tiling mode
+- --roles RRR: initial slot roles (permutation of CAB)
+- --fs-cycle-sec SEC: fullscreen cycle interval for 'c' key
 
 Runtime focus and input
 - Focus targets: C=video, A=btop (by default), B=syslog (by default). Use Tab in Control Mode to select.
