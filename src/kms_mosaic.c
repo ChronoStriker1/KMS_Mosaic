@@ -1465,7 +1465,7 @@ int main(int argc, char **argv) {
                 "  --video-frac PCT        Override: video width percentage.\n"
                 "  --pane-split PCT        Top row height percentage for split layouts (default 50).\n"
                 "  --pane-a \"CMD\"           Command for Pane A (default: btop).\n"
-                "  --pane-b \"CMD\"           Command for Pane B (default: tail -F /var/log/syslog -n 100).\n"
+                "  --pane-b \"CMD\"           Command for Pane B (default: tail -F /var/log/syslog -n 500).\n"
                 "  --layout M              stack | row | 2x1 | 1x2 | 2over1 | 1over2 | overlay\n"
                 "  --roles RRR            Slot roles order, e.g. CAB (default CAB).\n"
                 "  --fs-cycle-sec SEC     Fullscreen cycle interval for 'c' key.\n\n"
@@ -1897,13 +1897,13 @@ int main(int argc, char **argv) {
             const char *cmd_b = NULL;
             if (access("/var/log/syslog", R_OK) == 0) {
                 cmd_b = "tail";
-                argv_b[0] = "tail"; argv_b[1] = "-F"; argv_b[2] = "/var/log/syslog"; argv_b[3] = "-n"; argv_b[4] = "100"; argv_b[5] = NULL;
+                argv_b[0] = "tail"; argv_b[1] = "-F"; argv_b[2] = "/var/log/syslog"; argv_b[3] = "-n"; argv_b[4] = "500"; argv_b[5] = NULL;
             } else if (access("/usr/bin/journalctl", X_OK) == 0) {
                 cmd_b = "journalctl";
                 argv_b[0] = "journalctl"; argv_b[1] = "-f"; argv_b[2] = NULL; argv_b[3] = NULL; argv_b[4] = NULL; argv_b[5] = NULL;
             } else {
                 cmd_b = "tail";
-                argv_b[0] = "tail"; argv_b[1] = "-F"; argv_b[2] = "/var/log/messages"; argv_b[3] = "-n"; argv_b[4] = "100"; argv_b[5] = NULL;
+                argv_b[0] = "tail"; argv_b[1] = "-F"; argv_b[2] = "/var/log/messages"; argv_b[3] = "-n"; argv_b[4] = "500"; argv_b[5] = NULL;
             }
             tp_b = term_pane_create(&lay_b, font_px_b, cmd_b, argv_b);
         }
