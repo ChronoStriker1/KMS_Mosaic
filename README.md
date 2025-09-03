@@ -50,7 +50,7 @@ Run
 - t (in Control Mode): swap focused pane with the next pane
 - r / R (in Control Mode): rotate roles among (C video, A, B) / reverse
 - o (in Control Mode): toggle OSD on/off (default off)
-- ? (in Control Mode): help overlay
+- Help text is shown automatically while in Control Mode
 - f (in Control Mode): force pane surface rebuild (refresh from vterm screen)
 - z (in Control Mode): fullscreen the focused pane
 - n / p (in Control Mode, fullscreen): next / previous fullscreen pane
@@ -138,9 +138,9 @@ Runtime focus and input
 - Outside Control Mode, keypresses go to the focused target. This keeps underlying programs (btop, shell, mpv) fully interactive.
 
 OSD
-- Default off for a clean display. Toggle in Control Mode with 'o' or show the help overlay with '?'.
+- Default off for a clean display. Toggle in Control Mode with 'o'.
 - Long OSD lines wrap automatically to the viewport width.
-- Status line shows the current layout (stack, row, 2x1, 1x2, 2over1, 1over2, overlay).
+- The current layout is shown in Control Mode, not in the OSD.
 
 Behavioral defaults
 - Single-video auto-loop: if only one file is given and no playlist, looping is enabled automatically.
