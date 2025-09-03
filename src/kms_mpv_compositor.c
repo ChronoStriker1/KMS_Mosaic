@@ -1997,6 +1997,7 @@ int main(int argc, char **argv) {
                     else if (buf[i]=='p' && fullscreen) { fs_pane = (fs_pane+2)%3; focus = fs_pane; fs_cycle=false; consumed=true; }
                     else if (buf[i]=='c') { fs_cycle = !fs_cycle; if (fs_cycle){ fullscreen=true; fs_pane=focus; fs_next_switch=0.0; } else { fullscreen=false; } consumed=true; }
                     else if (buf[i]=='f') { term_pane_force_rebuild(tp_a); term_pane_force_rebuild(tp_b); consumed=true; }
+                    else if (buf[i]=='s') { const char *p = default_config_path(); save_config(&opt, p); fprintf(stderr, "Saved config to %s\n", p); consumed=true; }
                 }
                 // While in UI control mode, handle arrow keys for resizing splits
                 if (ui_control) {
