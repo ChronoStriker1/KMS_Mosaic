@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "font_util.h"
 #include <fontconfig/fontconfig.h>
 #include <stdlib.h>

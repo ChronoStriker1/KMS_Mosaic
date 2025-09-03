@@ -91,8 +91,11 @@ Flags
 - --video-opt K=V: apply mpv option to the most recent --video (repeatable per item).
 - --playlist FILE: load an mpv playlist file (m3u, one path per line).
 - --playlist-extended FILE: custom playlist with per-line options (each line: "path | key=val,key=val").
+- --playlist-fifo PATH: watch FIFO for newline-separated paths to append to the playlist.
 - --no-video: disable the video region and use full width for the text panes.
 - --no-osd: disable the on-screen display.
+- --roles CAB: initial role order for slots (C=video, A=pane A, B=pane B).
+- --fs-cycle-sec SEC: automatically rotate roles every SEC seconds.
 - --loop-file: loop the current file indefinitely (alias: --loop). Note: if you provide exactly one video and no playlist, looping is assumed by default.
 - --loop-playlist: loop the playlist indefinitely.
 - --shuffle: randomize playlist order (alias: --randomize).

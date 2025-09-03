@@ -21,6 +21,7 @@
 #include <execinfo.h>
 #endif
 #include <dirent.h>
+#include <time.h>
 
 #include <drm.h>
 #include <xf86drm.h>
@@ -118,6 +119,9 @@ typedef struct {
     bool loop_playlist;
     bool shuffle;
     bool no_osd;
+    const char *roles;        // initial role order e.g., CAB
+    int fs_cycle_sec;         // auto-rotate roles interval in seconds
+    const char *playlist_fifo;// fifo path for dynamic playlist
     int video_rotate;         // passthrough to mpv video-rotate (-1 unset)
     const char *panscan;      // passthrough to mpv panscan value
     bool no_config;           // skip loading default config file
@@ -1247,6 +1251,9 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
     if (opt->loop_file) fprintf(f, "--loop-file\n");
     if (opt->loop_playlist) fprintf(f, "--loop-playlist\n");
     if (opt->shuffle) fprintf(f, "--shuffle\n");
+    if (opt->roles) fprintf(f, "--roles %s\n", opt->roles);
+    if (opt->fs_cycle_sec) fprintf(f, "--fs-cycle-sec %d\n", opt->fs_cycle_sec);
+    if (opt->playlist_fifo) fprintf(f, "--playlist-fifo '%s'\n", opt->playlist_fifo);
     for (int i=0;i<opt->n_mpv_opts;i++) fprintf(f, "--mpv-opt '%s'\n", opt->mpv_opts[i]);
     if (opt->playlist_path) fprintf(f, "--playlist '%s'\n", opt->playlist_path);
     if (opt->playlist_ext) fprintf(f, "--playlist-extended '%s'\n", opt->playlist_ext);
@@ -1317,6 +1324,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--loop-playlist")) opt.loop_playlist = true;
         else if (!strcmp(argv[i], "--shuffle") || !strcmp(argv[i], "--randomize")) opt.shuffle = true;
         else if (!strcmp(argv[i], "--no-osd")) opt.no_osd = true;
+        else if (!strcmp(argv[i], "--roles") && i + 1 < argc) opt.roles = argv[++i];
+        else if (!strcmp(argv[i], "--fs-cycle-sec") && i + 1 < argc) opt.fs_cycle_sec = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--playlist-fifo") && i + 1 < argc) opt.playlist_fifo = argv[++i];
         else if (!strcmp(argv[i], "--atomic")) opt.use_atomic = true;
         else if (!strcmp(argv[i], "--atomic-nonblock")) { opt.use_atomic = true; opt.atomic_nonblock = true; }
         else if (!strcmp(argv[i], "--gl-finish")) opt.gl_finish = true;
@@ -1354,6 +1364,7 @@ int main(int argc, char **argv) {
                 "  --video-opt K=V         Per-video options (repeatable, applies to the last --video).\n"
                 "  --playlist FILE         Load playlist file.\n"
                 "  --playlist-extended F   Extended playlist (path | k=v,k=v per line).\n"
+                "  --playlist-fifo PATH   Watch FIFO for paths to append.\n"
                 "  --loop-file, --loop     Loop current file indefinitely.\n"
                 "  --loop-playlist         Loop the whole playlist.\n"
                 "  --shuffle, --randomize  Randomize playlist order.\n"
@@ -1363,6 +1374,8 @@ int main(int argc, char **argv) {
                 "Config and misc:\n"
                 "  --config FILE           Load options from file (supports quotes and # comments).\n"
                 "  --save-config FILE      Save current options to file.\n"
+                "  --roles CAB             Initial role order (C/A/B).\n"
+                "  --fs-cycle-sec SEC      Auto-rotate roles every SEC seconds.\n"
                 "  --save-config-default   Save to the default config path.\n"
                 "  --no-config             Do not auto-load default config.\n"
                 "  --list-connectors       Print connectors/modes and exit.\n"
@@ -1617,6 +1630,17 @@ int main(int argc, char **argv) {
     // Slot-based layout and permutation control: 0=video,1=paneA,2=paneB
     static int perm[3] = {0,1,2};
     static int last_perm[3] = {0,1,2};
+    if (opt.roles) {
+        int used[3]={0};
+        if (strlen(opt.roles)>=3) {
+            for (int i=0;i<3;i++) {
+                char c=opt.roles[i];
+                int v=(c=='C'||c=='c')?0:(c=='A'||c=='a')?1:(c=='B'||c=='b')?2:-1;
+                if (v>=0 && !used[v]) { perm[i]=v; used[v]=1; }
+            }
+        }
+        last_perm[0]=perm[0]; last_perm[1]=perm[1]; last_perm[2]=perm[2];
+    }
     static int last_font_px_a=-1, last_font_px_b=-1;
     static pane_layout prev_a={0}, prev_b={0};
     static int last_layout_mode=-1;
@@ -1718,7 +1742,10 @@ int main(int argc, char **argv) {
     if (dtest_env && (*dtest_env=='1' || *dtest_env=='y' || *dtest_env=='Y')) direct_test_only = true;
     int frame = 0;
     int mpv_needs_render = 1; // request an initial render
-    struct pollfd pfds[3];
+    struct pollfd pfds[4];
+    int pf_playlist = -1;
+    char fifo_buf[1024];
+    int fifo_len = 0;
     pfds[0].fd = 0; // stdin for keys
     pfds[0].events = POLLIN;
     pfds[1].fd = use_mpv ? m.wakeup_fd[0] : -1;
@@ -1726,7 +1753,17 @@ int main(int argc, char **argv) {
     pfds[2].fd = d.fd; // DRM events (atomic)
     pfds[2].events = POLLIN;
     int nfds = use_mpv ? 3 : 2;
+    if (opt.playlist_fifo) {
+        int fd = open(opt.playlist_fifo, O_RDONLY | O_NONBLOCK);
+        if (fd >= 0) {
+            pf_playlist = nfds;
+            pfds[nfds].fd = fd;
+            pfds[nfds].events = POLLIN;
+            nfds++;
+        }
+    }
     fcntl(0, F_SETFL, O_NONBLOCK);
+    time_t last_fs_cycle = time(NULL);
 
     while (running) {
         if (g_stop) { running = false; break; }
@@ -1847,6 +1884,35 @@ int main(int argc, char **argv) {
             ev.version = 2;
             ev.page_flip_handler = on_page_flip;
             drmHandleEvent(d.fd, &ev);
+        }
+
+        if (pf_playlist >= 0 && (pfds[pf_playlist].revents & POLLIN)) {
+            char buf[256];
+            ssize_t n = read(pfds[pf_playlist].fd, buf, sizeof buf);
+            if (n > 0) {
+                for (ssize_t i=0;i<n;i++) {
+                    char c = buf[i];
+                    if (c=='\n') {
+                        fifo_buf[fifo_len]='\0';
+                        if (fifo_len>0 && use_mpv) {
+                            const char *args[] = {"loadfile", fifo_buf, "append", NULL};
+                            mpv_command_async(m.mpv, 0, args);
+                        }
+                        fifo_len = 0;
+                    } else if (fifo_len < (int)sizeof(fifo_buf)-1) {
+                        fifo_buf[fifo_len++] = c;
+                    }
+                }
+            }
+        }
+
+        if (opt.fs_cycle_sec > 0) {
+            time_t now = time(NULL);
+            if (now - last_fs_cycle >= opt.fs_cycle_sec) {
+                int p0=perm[0], p1=perm[1], p2=perm[2];
+                perm[0]=p1; perm[1]=p2; perm[2]=p0;
+                last_fs_cycle = now;
+            }
         }
 
         // Recompute layout based on current rotation/layout/perm
@@ -2172,6 +2238,7 @@ cleanup:
     // Cleanup
     if (m.mpv_gl) mpv_render_context_free(m.mpv_gl);
     if (m.mpv) mpv_terminate_destroy(m.mpv);
+    if (pf_playlist >= 0) close(pfds[pf_playlist].fd);
     if (d.orig_crtc) {
         drmModeSetCrtc(d.fd, d.orig_crtc->crtc_id, d.orig_crtc->buffer_id,
                        d.orig_crtc->x, d.orig_crtc->y, &d.conn_id, 1, &d.orig_crtc->mode);
