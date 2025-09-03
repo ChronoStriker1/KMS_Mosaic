@@ -45,7 +45,7 @@ Run
 - Ctrl+E: toggle Control Mode. While active, compositor consumes layout/role keys.
 - Tab (in Control Mode): cycle focus among C/A/B (video, pane A, pane B)
 - l / L (in Control Mode): cycle layouts forward/back
-- t (in Control Mode): swap terminal panes A and B
+- t (in Control Mode): swap focused pane with the next pane
 - r / R (in Control Mode): rotate roles among (C video, A, B) / reverse
 - o (in Control Mode): toggle OSD on/off (default off)
 - ? (in Control Mode): help overlay
