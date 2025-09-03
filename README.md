@@ -39,6 +39,7 @@ Run
 - `./kms_mosaic --config /path/profile.conf`
 - `./kms_mosaic --save-config /path/profile.conf`
 - `./kms_mosaic --save-config-default`
+  - `./kms_mosaic --layout overlay /path/to/video.mp4`
 
 -Controls
 - Ctrl+Q: quit compositor (always active)
@@ -62,16 +63,16 @@ Run
 Layouts
 - stack: 3 rows in 1 column
 - row: 1 row in 3 columns
-- 2x1: left column split into two rows, right column full height
-- 1x2: left column full height, right column split into two rows
-- 2over1: top row split into two columns, bottom row full width
-- 1over2: top row full width, bottom row split into two columns
+  - 2x1: left column split into two rows, right column full height
+  - 1x2: left column full height, right column split into two rows
+  - 2over1: top row split into two columns, bottom row full width
+  - 1over2: top row full width, bottom row split into two columns
+  - overlay: video full-screen with both panes overlaid; split orientation follows `--rotate` and `--pane-split` sets the percentage. Panes are alpha-blended so the video remains visible beneath.
 - Pane role assignment (C=video, A, B) is a permutation over the 3 slots and can be rotated/swapped at runtime via r/R/t.
 
 Planned TODOs
 - Refactor the monolithic compositor into separate DRM/GBM, mpv embed, and UI modules. [DRM/GBM split done]
 - Support a variable number of terminal panes rather than the fixed A/B pair.
-- Add a layout option with transparent terminal panes overlaying the video background.
 - The function find_monospace_font and surrounding FreeType initialization code appear in both src/osd.c and src/term_pane.c, leading to duplication and potential drift.
 - The glyph cache inside term_pane.c uses a linear search and grows without bounds, which can slow rendering for diverse Unicode output.
 - Change detection for terminal panes hashes every cell in every row (pane_row_hash), which is O(rows × cols) per frame.
@@ -126,7 +127,7 @@ Flags
 
 - --no-config: do not auto-load the default config
 - --smooth: balanced playback preset (display-resample, no interp, linear tscale, early-flush, no shader cache)
-- --layout stack|row|2x1|1x2|2over1|1over2: select tiling mode
+- --layout stack|row|2x1|1x2|2over1|1over2|overlay: select tiling mode
 - --roles RRR: initial slot roles (permutation of CAB)
 - --fs-cycle-sec SEC: fullscreen cycle interval for 'c' key
 
@@ -137,7 +138,7 @@ Runtime focus and input
 OSD
 - Default off for a clean display. Toggle in Control Mode with 'o' or show the help overlay with '?'.
 - Long OSD lines wrap automatically to the viewport width.
-- Status line shows the current layout (stack, row, 2x1, 1x2).
+- Status line shows the current layout (stack, row, 2x1, 1x2, 2over1, 1over2, overlay).
 
 Behavioral defaults
 - Single-video auto-loop: if only one file is given and no playlist, looping is enabled automatically.
