@@ -114,7 +114,6 @@ typedef struct {
     bool list_connectors;
     bool no_video;
     bool no_panes;
-    bool overlay;
     bool gl_test;
     bool diag;
     bool loop_file;
@@ -1316,7 +1315,6 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
     if (opt->fs_cycle_sec) fprintf(f, "--fs-cycle-sec %d\n", opt->fs_cycle_sec);
     if (opt->pane_a_cmd) fprintf(f, "--pane-a '%s'\n", opt->pane_a_cmd);
     if (opt->pane_b_cmd) fprintf(f, "--pane-b '%s'\n", opt->pane_b_cmd);
-    if (opt->overlay) fprintf(f, "--overlay\n");
     if (opt->no_video) fprintf(f, "--no-video\n");
     if (opt->loop_file) fprintf(f, "--loop-file\n");
     if (opt->loop_playlist) fprintf(f, "--loop-playlist\n");
@@ -1385,7 +1383,6 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--list-connectors")) opt.list_connectors = true;
         else if (!strcmp(argv[i], "--no-video")) opt.no_video = true;
         else if (!strcmp(argv[i], "--no-panes")) opt.no_panes = true;
-        else if (!strcmp(argv[i], "--overlay")) opt.overlay = true;
         else if (!strcmp(argv[i], "--diag")) opt.diag = true;
         else if (!strcmp(argv[i], "--gl-test")) opt.gl_test = true;
         else if (!strcmp(argv[i], "--no-config")) opt.no_config = true;
@@ -1530,6 +1527,11 @@ int main(int argc, char **argv) {
     }
 
     if (opt.playlist_ext) parse_playlist_ext(&opt, opt.playlist_ext);
+
+
+    // Auto-enable playlist looping to avoid exiting after the last entry
+    if (!opt.loop_playlist && (opt.playlist_path || opt.playlist_ext || opt.playlist_fifo))
+        opt.loop_playlist = true;
 
     // If exactly one video file is provided and no playlist,
     // assume --loop should be enabled unless user already set a loop.
@@ -1761,6 +1763,7 @@ int main(int argc, char **argv) {
     static int perm[3] = {0,1,2};
     static int last_perm[3] = {0,1,2};
     if (opt.roles_set) { perm[0]=opt.roles[0]; perm[1]=opt.roles[1]; perm[2]=opt.roles[2]; }
+    if (opt.layout_mode == 6) { perm[0]=0; perm[1]=1; perm[2]=2; }
     static int last_font_px_a=-1, last_font_px_b=-1;
     static pane_layout prev_a={0}, prev_b={0};
     static int last_layout_mode=-1;
@@ -1826,9 +1829,15 @@ int main(int argc, char **argv) {
         s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=hbot };
     }
     pane_layout slots[3] = { s0, s1, s2 };
-    lay_video = slots[perm[0]];
-    lay_a     = slots[perm[1]];
-    lay_b     = slots[perm[2]];
+    if (mode == 6) {
+        lay_video = s0;
+        lay_a = s1;
+        lay_b = s2;
+    } else {
+        lay_video = slots[perm[0]];
+        lay_a     = slots[perm[1]];
+        lay_b     = slots[perm[2]];
+    }
     if (fullscreen) {
         pane_layout full = (pane_layout){ .x=0,.y=0,.w=screen_w,.h=screen_h };
         if (fs_pane==0) lay_video = full;
@@ -2106,6 +2115,7 @@ int main(int argc, char **argv) {
 
         // Recompute layout based on current rotation/layout/perm
         {
+            if (opt.layout_mode == 6) { perm[0]=0; perm[1]=1; perm[2]=2; }
             int layout_changed = 0;
             if (last_layout_mode != opt.layout_mode) { layout_changed = 1; last_layout_mode = opt.layout_mode; }
             if (last_right_frac_pct != opt.right_frac_pct) { layout_changed = 1; last_right_frac_pct = opt.right_frac_pct; }
@@ -2165,12 +2175,27 @@ int main(int argc, char **argv) {
                 s2=(pane_layout){.x=wleft,.y=0,.w=wright,.h=hbot};
             }
             pane_layout slots[3] = { s0, s1, s2 };
-            lay_video = slots[perm[0]]; lay_a = slots[perm[1]]; lay_b = slots[perm[2]];
+            if (mode == 6) {
+                lay_video = s0;
+                lay_a = s1;
+                lay_b = s2;
+            } else {
+                lay_video = slots[perm[0]]; lay_a = slots[perm[1]]; lay_b = slots[perm[2]];
+            }
             if (fullscreen) {
                 pane_layout full = (pane_layout){ .x=0,.y=0,.w=screen_w,.h=screen_h };
                 if (fs_pane==0) lay_video=full; else if (fs_pane==1) lay_a=full; else lay_b=full;
             }
             if (layout_changed) {
+                if (tp_a && tp_b) {
+                    if (opt.layout_mode == 6) {
+                        term_pane_set_alpha(tp_a, 192);
+                        term_pane_set_alpha(tp_b, 192);
+                    } else {
+                        term_pane_set_alpha(tp_a, 255);
+                        term_pane_set_alpha(tp_b, 255);
+                    }
+                }
                 // Force a few frames of reinit to mimic fresh start in this layout
                 int default_frames = 3;
                 const char *rf = getenv("KMS_MOSAIC_REINIT_FRAMES");
