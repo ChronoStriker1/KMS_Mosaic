@@ -833,8 +833,14 @@ void term_pane_set_font_px(term_pane *tp, int font_px) {
     int rows = tp->layout.h / tp->font.cell_h;
     if (cols < 10) cols = 10;
     if (rows < 5) rows = 5;
+    /* Update stored layout dimensions so subsequent logic uses the new grid */
+    tp->layout.cols = cols;
+    tp->layout.rows = rows;
+    tp->layout.cell_w = tp->font.cell_w;
+    tp->layout.cell_h = tp->font.cell_h;
     vterm_set_size(tp->vt, rows, cols);
     set_pty_winsize(tp->pty_master, cols, rows);
+    if (tp->child_pid > 0) kill(tp->child_pid, SIGWINCH);
     // Recreate texture surface
     pane_tex old = tp->surface; tp->surface = (pane_tex){0};
     pane_tex_init(&tp->surface, cols*tp->font.cell_w, rows*tp->font.cell_h);
@@ -852,7 +858,7 @@ void term_pane_set_font_px(term_pane *tp, int font_px) {
     if (old.tex) glDeleteTextures(1, &old.tex);
     free(old.pixels);
     free(tp->row_hash);
-    tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
+    tp->row_hash = calloc((size_t)rows, sizeof(uint32_t));
 }
 
 void term_pane_set_alpha(term_pane *tp, uint8_t alpha) {
