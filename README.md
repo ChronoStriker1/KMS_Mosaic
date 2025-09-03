@@ -145,6 +145,7 @@ Debugging
 - Enable verbose logging: set `KMS_MPV_DEBUG=1` to print layout changes, mpv events, and GL checkpoints.
 - Isolate GL state issues: set `KMS_MPV_DISABLE=1` to skip mpv and render only panes/OSD; set `KMS_MPV_DIRECT_TEST=1` to draw diagnostic color frames.
 - If panes go black while video is fine, it may be stale GL state (e.g., scissor) left by mpv. The compositor now resets GL state before drawing panes and OSD.
+- If video renders upside down, set `KMS_MPV_FLIPY=1` to flip the mpv framebuffer vertically.
 
 Default config path
 - On Unraid: `/boot/config/kms_mpv_compositor.conf` (persistent across reboots)

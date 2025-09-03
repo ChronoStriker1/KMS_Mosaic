@@ -1863,9 +1863,12 @@ int main(int argc, char **argv) {
     bool running = true;
     const char *direct_env_once = getenv("KMS_MPV_DIRECT");
     bool direct_mode = (direct_env_once && (*direct_env_once=='1' || *direct_env_once=='y' || *direct_env_once=='Y'));
-    int mpv_flip_y_direct = 1; // default 1; can be overridden by env
+    int mpv_flip_y_direct = 0; // default 0; can be overridden by env
     const char *flip_env = getenv("KMS_MPV_FLIPY");
-    if (flip_env && (*flip_env=='0' || *flip_env=='n' || *flip_env=='N')) mpv_flip_y_direct = 0;
+    if (flip_env) {
+        if (*flip_env=='1' || *flip_env=='y' || *flip_env=='Y') mpv_flip_y_direct = 1;
+        else if (*flip_env=='0' || *flip_env=='n' || *flip_env=='N') mpv_flip_y_direct = 0;
+    }
     bool direct_via_fbo = false; const char *dfbo_env = getenv("KMS_MPV_DIRECT_FBO");
     if (dfbo_env && (*dfbo_env=='1' || *dfbo_env=='y' || *dfbo_env=='Y')) direct_via_fbo = true;
     bool direct_test_only = false; const char *dtest_env = getenv("KMS_MPV_DIRECT_TEST");
@@ -2202,7 +2205,7 @@ int main(int argc, char **argv) {
                     glViewport(0, 0, fb_w, fb_h);
                     gl_clear_color(0.f, 0.f, 0.f, 1.0f);
                     if (!direct_test_only) {
-                        int flip_y = 1;
+                        int flip_y = 0;
                         mpv_opengl_fbo fbo = {.fbo = (int)vid_fbo, .w = fb_w, .h = fb_h, .internal_format = 0};
                         int block2 = 1;
                         mpv_render_param r_params[] = {
@@ -2239,7 +2242,7 @@ int main(int argc, char **argv) {
                 glDisable(GL_DEPTH_TEST);
                 glViewport(0, 0, vw, vh);
                 gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
-                int flip_y = 1;
+                int flip_y = 0;
                 mpv_opengl_fbo fbo = {.fbo = (int)vid_fbo, .w = vw, .h = vh, .internal_format = 0};
                 mpv_render_param r_params[] = {
                     {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
