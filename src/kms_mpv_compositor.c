@@ -1528,7 +1528,6 @@ int main(int argc, char **argv) {
 
     if (opt.playlist_ext) parse_playlist_ext(&opt, opt.playlist_ext);
 
-
     // Auto-enable playlist looping to avoid exiting after the last entry
     if (!opt.loop_playlist && (opt.playlist_path || opt.playlist_ext || opt.playlist_fifo))
         opt.loop_playlist = true;
