@@ -568,10 +568,10 @@ term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *
     int tex_w = tp->layout.cols * tp->font.cell_w;
     int tex_h = tp->layout.rows * tp->font.cell_h;
     pane_tex_init(&tp->surface, tex_w, tex_h);
-
-    // Prime screen empty
-    rebuild_surface(tp);
     tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
+
+    // Prime screen empty and populate row hashes so blank lines render
+    rebuild_surface(tp);
     return tp;
 }
 
@@ -601,8 +601,10 @@ term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const ch
     int tex_w = tp->layout.cols * tp->font.cell_w;
     int tex_h = tp->layout.rows * tp->font.cell_h;
     pane_tex_init(&tp->surface, tex_w, tex_h);
-    rebuild_surface(tp);
     tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
+
+    // Prime screen empty and populate row hashes so blank lines render
+    rebuild_surface(tp);
     return tp;
 }
 
