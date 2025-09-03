@@ -4,7 +4,7 @@ Overview
 - Single-binary KMS compositor for the Linux console (no X/Wayland).
 - Uses DRM/KMS + GBM + EGL/GLES2 to present directly to the display.
 - Embeds libmpv (render API) to draw video; embeds libvterm for terminal panes.
-- Dynamically tiles three panes (“mosaic”): Pane C (Video), Pane A (btop), Pane B (syslog tail via `tail -F /var/log/syslog -n 100`).
+- Dynamically tiles three panes (“mosaic”): Pane C (Video), Pane A (btop), Pane B (syslog tail via `tail -F /var/log/syslog -n 500`).
 
 Why this approach
 - Only one DRM master can drive a KMS display at a time. This compositor provides
@@ -117,8 +117,8 @@ Flags
 - --video-frac PCT: percent of screen width for the video region (overrides --right-frac).
 - --pane-split PCT: percent of right column height for top pane (10..90, default 50).
 - --pane-a "CMD": shell command for top-right pane (default: btop).
-- --pane-b "CMD": shell command for bottom-right pane (default: tail -F /var/log/syslog -n 100,
-   falling back to journalctl -f or tail -F /var/log/messages -n 100 if unavailable).
+- --pane-b "CMD": shell command for bottom-right pane (default: tail -F /var/log/syslog -n 500,
+   falling back to journalctl -f or tail -F /var/log/messages -n 500 if unavailable).
 - --list-connectors: print connectors and first 8 modes then exit.
 - --config FILE: load flags from a config file (supports quotes, comments with #).
 - --save-config FILE: write the current configuration as flags to a file.
