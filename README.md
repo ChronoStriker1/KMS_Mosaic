@@ -117,7 +117,8 @@ Flags
 - --video-frac PCT: percent of screen width for the video region (overrides --right-frac).
 - --pane-split PCT: percent of right column height for top pane (10..90, default 50).
 - --pane-a "CMD": shell command for top-right pane (default: btop).
-- --pane-b "CMD": shell command for bottom-right pane (default: tail -f /var/log/syslog).
+- --pane-b "CMD": shell command for bottom-right pane (default: tail -f /var/log/syslog,
+   falling back to journalctl -f or /var/log/messages if unavailable).
 - --list-connectors: print connectors and first 8 modes then exit.
 - --config FILE: load flags from a config file (supports quotes, comments with #).
 - --save-config FILE: write the current configuration as flags to a file.
