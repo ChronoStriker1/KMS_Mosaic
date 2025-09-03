@@ -34,6 +34,11 @@ Semantic Versioning when version numbers are introduced.
 - Restored `--mpv-out` to write mpv logs/events to a file or FIFO.
 - Restored dynamic playlist updates via `--playlist-fifo`.
 
+## [0.3.2] - 2025-09-05
+
+### Fixed
+- Corrected default mpv framebuffer orientation so video is no longer upside down; set `KMS_MPV_FLIPY=1` to flip if needed.
+
 ## [0.3.0] - 2025-09-01
 
 ### Added
