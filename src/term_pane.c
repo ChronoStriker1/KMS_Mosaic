@@ -652,6 +652,11 @@ void term_pane_resize(term_pane *tp, const pane_layout *layout) {
     free(old.pixels);
     free(tp->row_hash);
     tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
+    /* The newly allocated surface may contain uninitialized areas when the
+     * pane grows. Re-render the current vterm screen so the texture is fully
+     * populated rather than showing transparent regions until the application
+     * outputs more text. */
+    rebuild_surface(tp);
 }
 
 static void update_changed_rows(term_pane *tp) {
@@ -865,6 +870,10 @@ void term_pane_set_font_px(term_pane *tp, int font_px) {
     free(old.pixels);
     free(tp->row_hash);
     tp->row_hash = calloc((size_t)rows, sizeof(uint32_t));
+    /* After changing font metrics, the pane surface is reallocated.  Ensure
+     * it reflects the current screen contents so the background is fully
+     * drawn with the new dimensions. */
+    rebuild_surface(tp);
 }
 
 void term_pane_set_alpha(term_pane *tp, uint8_t alpha) {
