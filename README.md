@@ -44,6 +44,7 @@ Run
 -Controls
 - Ctrl+Q: quit compositor (always active)
 - Ctrl+E: toggle Control Mode. While active, compositor consumes layout/role keys.
+- Ctrl+P (video focus): toggle mpv panscan on/off.
 - Tab (in Control Mode): cycle focus among C/A/B (video, pane A, pane B)
 - l / L (in Control Mode): cycle layouts forward/back
 - t (in Control Mode): swap focused pane with the next pane
@@ -57,6 +58,7 @@ Run
 - Arrows (in Control Mode): resize column/row splits (split layouts)
   - The focused pane is outlined with a cyan border while in Control Mode.
 - Outside Control Mode: all keys go to the focused pane; when focus is video, keys are forwarded to mpv (space/pause, n/p next/prev, arrows, ASCII)
+  - Ctrl+P toggles mpv panscan without forwarding the key.
   - Video focus key support: ASCII, Space/Enter/Tab, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12, Esc, Backspace; plus fallbacks for space (pause), n/p (next/prev)
 
 
