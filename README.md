@@ -71,6 +71,13 @@ Planned TODOs
 - Improve Unicode/box drawing coverage and performance. [in-progress]
 - Make connector/mode selection configurable.
 - Implement atomic modesetting + nonblocking pageflips. [in-progress]
+- Replace linear glyph cache with a hashed LRU to cap memory and speed lookups.
+- Use libvterm damage callbacks instead of hashing every row for change detection.
+- Integrate PTY descriptors into the compositor event loop to avoid per-frame polling.
+- Refactor the monolithic compositor into separate DRM/GBM, mpv embed, and UI modules.
+- Allow configurable key bindings via a user-editable keymap.
+- Support a variable number of terminal panes rather than the fixed A/B pair.
+- Add a layout option with transparent terminal panes overlaying the video background.
 
 Notes
 - This program becomes DRM master and will blank fbcon while active.
