@@ -35,6 +35,7 @@ bool term_measure_cell(int font_px, int *cell_w, int *cell_h);
 
 // Change the font pixel size and reallocate buffers accordingly.
 void term_pane_set_font_px(term_pane *tp, int font_px);
+void term_pane_set_alpha(term_pane *tp, uint8_t alpha);
 
 // Reset the libvterm screen to force a redraw (hard=1 clears).
 void term_pane_reset_screen(term_pane *tp, int hard);
