@@ -1779,7 +1779,6 @@ int main(int argc, char **argv) {
     if (getenv("KMS_MPV_NO_OSD")) show_osd = false;
     bool show_help = false; // OSD help overlay
     bool ui_control = false; // when true, keystrokes control mosaic instead of panes
-    bool fullscreen = false; int fs_pane = 0; bool fs_cycle=false; double fs_next_switch=0.0;
 
     bool running = true;
     const char *direct_env_once = getenv("KMS_MPV_DIRECT");
