@@ -26,9 +26,8 @@ Build
 
 Run
 - Switch to an unused VT/TTY. Stop any services occupying DRM (X/Wayland).
-- Binary names:
-- `kms_mosaic` (new alias)
-  - `kms_mpv_compositor` (kept for compatibility)
+- Binary name:
+- `kms_mosaic`
 - Examples:
 - `./kms_mosaic --video /path/to/video.mp4`
 - `./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90`
@@ -52,6 +51,7 @@ Run
 - o (in Control Mode): toggle OSD on/off (default off)
 - Help text is shown automatically while in Control Mode
 - f (in Control Mode): force pane surface rebuild (refresh from vterm screen)
+- s (in Control Mode): save current configuration to the config path (uses --config if set, else default)
 - z (in Control Mode): fullscreen the focused pane
 - n / p (in Control Mode, fullscreen): next / previous fullscreen pane
 - c (in Control Mode): cycle fullscreen panes
@@ -79,7 +79,7 @@ Planned TODOs
 - The glyph cache inside term_pane.c uses a linear search and grows without bounds, which can slow rendering for diverse Unicode output.
 - Change detection for terminal panes hashes every cell in every row (pane_row_hash), which is O(rows × cols) per frame.
 - term_pane_poll attempts to read from the PTY every frame, even when no data is available.
-- src/kms_mpv_compositor.c (≈2k+ lines) combines DRM setup, mpv integration, input handling, and UI logic, which hinders maintainability.
+- src/kms_mosaic.c (≈2k+ lines) combines DRM setup, mpv integration, input handling, and UI logic, which hinders maintainability.
 - Improve Unicode/box drawing coverage and performance. [in-progress]
 - Make connector/mode selection configurable.
 - Implement atomic modesetting + nonblocking pageflips. [in-progress]
@@ -152,8 +152,8 @@ Debugging
 - If video renders upside down, set `KMS_MPV_FLIPY=1` to flip the mpv framebuffer vertically.
 
 Default config path
-- On Unraid: `/boot/config/kms_mpv_compositor.conf` (persistent across reboots)
-- Elsewhere: `$XDG_CONFIG_HOME/kms_mpv_compositor.conf` or `~/.config/kms_mpv_compositor.conf`
+- On Unraid: `/boot/config/kms_mosaic.conf` (persistent across reboots)
+- Elsewhere: `$XDG_CONFIG_HOME/kms_mosaic.conf` or `~/.config/kms_mosaic.conf`
 
 Unraid build
 - Recommended: build inside a Slackware 15 container, then install the resulting .txz on Unraid.
@@ -163,8 +163,8 @@ Steps (containerized)
 - Ensure Docker is enabled on Unraid.
 - From this repo root:
   - scripts/docker_slackware_build.sh  # builds binary and .txz package
-  - The package appears under `dist/` as `kms_mpv_compositor-<ver>-x86_64-1.txz`.
-  - Install on Unraid host: `installpkg dist/kms_mpv_compositor-<ver>-x86_64-1.txz`
+  - The package appears under `dist/` as `kms_mosaic-<ver>-x86_64-1.txz`.
+  - Install on Unraid host: `installpkg dist/kms_mosaic-<ver>-x86_64-1.txz`
 
 Steps (host build)
 - Install dev tools (e.g., via NerdTools/DevTools): `gcc`, `make`, `pkg-config`.
@@ -177,6 +177,6 @@ macOS build + package
 - From this repo root:
   - scripts/macos_build_pkg.sh
   - This launches an Ubuntu container, installs build deps, compiles the Linux binary, and creates a Slackware-style `.txz` (without `makepkg`).
-  - Result: `dist/kms_mpv_compositor-<date>-x86_64-1.txz`
+  - Result: `dist/kms_mosaic-<date>-x86_64-1.txz`
 - Install on Unraid: copy the `.txz` to your server and run `installpkg`.
 - Note: If you prefer a Slackware build environment, set `BASE_IMAGE=slackware:15.0` before running and ensure the image exists locally.

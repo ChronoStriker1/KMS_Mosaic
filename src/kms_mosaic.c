@@ -1285,14 +1285,14 @@ static const char* default_config_path(void){
     static char buf[512];
     // Prefer Unraid boot config if available
     if (access("/boot/config", F_OK) == 0) {
-        snprintf(buf, sizeof buf, "/boot/config/kms_mpv_compositor.conf");
+        snprintf(buf, sizeof buf, "/boot/config/kms_mosaic.conf");
         return buf;
     }
     const char *xdg = getenv("XDG_CONFIG_HOME");
     const char *home = getenv("HOME");
-    if (xdg && *xdg) { snprintf(buf, sizeof buf, "%s/kms_mpv_compositor.conf", xdg); return buf; }
-    if (home && *home) { snprintf(buf, sizeof buf, "%s/.config/kms_mpv_compositor.conf", home); return buf; }
-    snprintf(buf, sizeof buf, ".kms_mpv_compositor.conf");
+    if (xdg && *xdg) { snprintf(buf, sizeof buf, "%s/kms_mosaic.conf", xdg); return buf; }
+    if (home && *home) { snprintf(buf, sizeof buf, "%s/.config/kms_mosaic.conf", home); return buf; }
+    snprintf(buf, sizeof buf, ".kms_mosaic.conf");
     return buf;
 }
 
@@ -1346,6 +1346,7 @@ int main(int argc, char **argv) {
     // Preload config file if specified on CLI, else use default if present
     const char *cfg = NULL; for (int i=1;i<argc;i++){ if (!strcmp(argv[i],"--config") && i+1<argc){ cfg = argv[i+1]; break; } }
     if (!cfg) { const char *def = default_config_path(); if (!opt.no_config && access(def, R_OK)==0) cfg = def; }
+    opt.config_file = cfg;
     char **merged = NULL; int margc = 0;
     if (cfg) {
         int cargc=0; char **cargv = tokenize_file(cfg, &cargc);
@@ -1717,7 +1718,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Diag: GLSL_VERSION=%s\n", glsl?glsl:"?");
         fprintf(stderr, "Diag: GL_VENDOR=%s\n", gl_vendor?gl_vendor:"?");
         fprintf(stderr, "Diag: GL_RENDERER=%s\n", gl_renderer?gl_renderer:"?");
-        const char *bundled = "/usr/local/lib/kms_mpv_compositor";
+        const char *bundled = "/usr/local/lib/kms_mosaic";
         fprintf(stderr, "Diag: Bundled lib dir %s: %s\n", bundled, access(bundled, R_OK)==0?"present":"missing");
         // Exit cleanly after diagnostics
         goto cleanup;
@@ -1766,8 +1767,20 @@ int main(int argc, char **argv) {
     static int last_perm[3] = {0,1,2};
     static bool overlay_swap = false; // track A/B order in overlay layout
     static bool last_overlay_swap = false;
-    if (opt.roles_set) { perm[0]=opt.roles[0]; perm[1]=opt.roles[1]; perm[2]=opt.roles[2]; }
-    if (opt.layout_mode == 6) { perm[0]=0; perm[1]=1; perm[2]=2; overlay_swap=false; last_overlay_swap=false; }
+    if (opt.roles_set) {
+        perm[0] = opt.roles[0];
+        perm[1] = opt.roles[1];
+        perm[2] = opt.roles[2];
+        if (opt.layout_mode == 6) {
+            overlay_swap = (opt.roles[1] == 2 && opt.roles[2] == 1);
+            opt.roles[0] = 0;
+        }
+    }
+    if (opt.layout_mode == 6) {
+        perm[0] = 0;
+        if (!opt.roles_set) { perm[1] = 1; perm[2] = 2; overlay_swap = false; }
+        last_overlay_swap = overlay_swap;
+    }
     static int last_font_px_a=-1, last_font_px_b=-1;
     static pane_layout prev_a={0}, prev_b={0};
     static int last_layout_mode=-1;
@@ -1959,7 +1972,13 @@ int main(int argc, char **argv) {
                     else if (buf[i]=='L') { opt.layout_mode = (opt.layout_mode+6)%7; consumed=true; }
                     else if (buf[i]=='t') {
                         if (opt.layout_mode == 6) {
-                            if (focus == 1 || focus == 2) overlay_swap = !overlay_swap;
+                            if (focus == 1 || focus == 2) {
+                                overlay_swap = !overlay_swap;
+                                opt.roles_set = true;
+                                opt.roles[0] = 0;
+                                opt.roles[1] = overlay_swap ? 2 : 1;
+                                opt.roles[2] = overlay_swap ? 1 : 2;
+                            }
                         } else {
                             int next = use_mpv ? (focus + 1) % 3 : (focus == 1 ? 2 : 1);
                             int tmp = perm[focus];
@@ -1979,6 +1998,7 @@ int main(int argc, char **argv) {
                     else if (buf[i]=='p' && fullscreen) { fs_pane = (fs_pane+2)%3; focus = fs_pane; fs_cycle=false; consumed=true; }
                     else if (buf[i]=='c') { fs_cycle = !fs_cycle; if (fs_cycle){ fullscreen=true; fs_pane=focus; fs_next_switch=0.0; } else { fullscreen=false; } consumed=true; }
                     else if (buf[i]=='f') { term_pane_force_rebuild(tp_a); term_pane_force_rebuild(tp_b); consumed=true; }
+                    else if (buf[i]=='s') { const char *p = opt.config_file ? opt.config_file : default_config_path(); save_config(&opt, p); fprintf(stderr, "Saved config to %s\n", p); consumed=true; }
                 }
                 // While in UI control mode, handle arrow keys for resizing splits
                 if (ui_control) {
@@ -2136,7 +2156,17 @@ int main(int argc, char **argv) {
         {
             if (opt.layout_mode == 6) {
                 perm[0] = 0;
-                if (last_layout_mode != 6) { perm[1] = 1; perm[2] = 2; overlay_swap = false; last_overlay_swap = false; }
+                if (last_layout_mode != 6) {
+                    if (opt.roles_set) {
+                        perm[1] = opt.roles[1];
+                        perm[2] = opt.roles[2];
+                        overlay_swap = (opt.roles[1] == 2 && opt.roles[2] == 1);
+                        opt.roles[0] = 0;
+                    } else {
+                        perm[1] = 1; perm[2] = 2; overlay_swap = false;
+                    }
+                    last_overlay_swap = overlay_swap;
+                }
             }
             int layout_changed = 0;
             if (last_layout_mode != opt.layout_mode) { layout_changed = 1; last_layout_mode = opt.layout_mode; }
