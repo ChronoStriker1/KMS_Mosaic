@@ -52,6 +52,7 @@ Run
 - o (in Control Mode): toggle OSD on/off (default off)
 - Help text is shown automatically while in Control Mode
 - f (in Control Mode): force pane surface rebuild (refresh from vterm screen)
+- s (in Control Mode): save current configuration to the default path
 - z (in Control Mode): fullscreen the focused pane
 - n / p (in Control Mode, fullscreen): next / previous fullscreen pane
 - c (in Control Mode): cycle fullscreen panes
