@@ -10,7 +10,7 @@ apt-get install -y --no-install-recommends \
 
 cd /work
 # Force a clean rebuild to avoid stale cross-arch artifacts
-rm -f ./kms_mosaic ./kms_mpv_compositor || true
+rm -f ./kms_mosaic || true
 make clean || true
 make -B
 
@@ -105,14 +105,6 @@ fi
 exec "$SCRIPT_DIR/kms_mosaic.bin" "$@"
 WRAP
 chmod +x "$PKGROOT/usr/local/bin/kms_mosaic"
-
-# Compatibility alias wrapper for old name
-cat >"$PKGROOT/usr/local/bin/kms_mpv_compositor" <<'WRAP2'
-#!/usr/bin/env bash
-set -euo pipefail
-exec "$(cd "$(dirname "$0")" && pwd)/kms_mosaic" "$@"
-WRAP2
-chmod +x "$PKGROOT/usr/local/bin/kms_mpv_compositor"
 
 cat >"$PKGROOT/install/slack-desc" <<SLK
 |-----handy-ruler------------------------------------------------------|
