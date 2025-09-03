@@ -1513,6 +1513,9 @@ int main(int argc, char **argv) {
                 "  o             Toggle OSD visibility.\n"
                 "  (Help shown automatically in Control Mode)\n"
                 "  Ctrl+Q        Quit (only active in Control Mode).\n\n",
+                "  Ctrl+Q        Quit (only active in Control Mode).\n"
+                "Outside Control Mode (video focus):\n"
+                "  Ctrl+P        Toggle mpv panscan.\n\n",
                 exe);
             return 0;
         }
@@ -2007,6 +2010,19 @@ int main(int argc, char **argv) {
                 }
                 // OSD toggle only in UI control mode
                 if (ui_control) { for (ssize_t i=0;i<n;i++) if (buf[i]=='o') { show_osd = !show_osd; consumed=true; } }
+                // Ctrl+P: toggle mpv panscan when video is focused
+                if (!ui_control && focus==0 && use_mpv) {
+                    for (ssize_t i=0; i<n; i++) {
+                        unsigned char ch = (unsigned char)buf[i];
+                        if (ch == 0x10) { // Ctrl+P
+                            const char *ps = opt.panscan ? opt.panscan : "1";
+                            const char *c[] = {"cycle-values", "panscan", "0", ps, NULL};
+                            mpv_command_async(m.mpv, 0, c);
+                            consumed = true;
+                            break;
+                        }
+                    }
+                }
                 if (!consumed && !ui_control) {
                     if (focus==1) term_pane_send_input(tp_a, buf, (size_t)n);
                     else if (focus==2) term_pane_send_input(tp_b, buf, (size_t)n);
