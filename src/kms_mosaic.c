@@ -2042,7 +2042,9 @@ int main(int argc, char **argv) {
                             double cur = 0.0;
                             if (mpv_get_property(m.mpv, "panscan", MPV_FORMAT_DOUBLE, &cur) >= 0) {
                                 double target = cur > 0.0 ? 0.0 : (opt.panscan ? atof(opt.panscan) : 1.0);
-                                mpv_set_property(m.mpv, "panscan", MPV_FORMAT_DOUBLE, &target);
+                                char cmd[64];
+                                snprintf(cmd, sizeof(cmd), "set panscan %f", target);
+                                mpv_command_string(m.mpv, cmd);
                             }
                             consumed = true;
                             break;
