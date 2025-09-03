@@ -28,3 +28,13 @@ Semantic Versioning when version numbers are introduced.
 ### Docs
 - README updated for new flags (`--atomic`, `--atomic-nonblock`, `--gl-finish`), Control Mode border highlight, OSD wrapping, and layout name display.
 
+## [0.3.0] - 2025-09-01
+
+### Added
+- Layout options `2over1` and `1over2` for asymmetric row/column splits.
+- Fullscreen pane toggle (`z`) and cycling (`c`) with configurable interval via `--fs-cycle-sec`.
+- `--roles` flag to persist pane role assignments.
+
+### Fixed
+- Restored video playback by correcting mpv framebuffer orientation.
+
