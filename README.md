@@ -70,11 +70,6 @@ Layouts
   - overlay: video full-screen with both panes overlaid; split orientation follows `--rotate` and `--pane-split` sets the percentage. Panes are alpha-blended so the video remains visible beneath.
 - Pane role assignment (C=video, A, B) is a permutation over the 3 slots and can be rotated/swapped at runtime via r/R/t.
 
-Overlay mode
-- `--overlay` (alias of `--layout overlay`) renders the video full-screen and draws the two terminal panes on top.
-- Split orientation follows `--rotate`: 0/180 degrees split the screen vertically, while 90/270 degrees split horizontally. `--pane-split` sets the percentage (default 50).
-- Panes use alpha blending so the video remains visible beneath them.
-
 Planned TODOs
 - Refactor the monolithic compositor into separate DRM/GBM, mpv embed, and UI modules. [DRM/GBM split done]
 - Support a variable number of terminal panes rather than the fixed A/B pair.
