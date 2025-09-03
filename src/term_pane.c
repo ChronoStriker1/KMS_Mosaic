@@ -67,6 +67,7 @@ struct term_pane {
 
     font_ctx font;
     pane_tex surface;
+    uint8_t alpha;
 
     // Row-level change detection
     uint32_t *row_hash; // length = layout.rows
@@ -348,7 +349,7 @@ static int sattr_to_rgb_idx(const VTermScreenCell *cell, int is_fg) {
 // Helpers to draw simple box-drawing lines into the pane texture
 static void draw_h_line(pane_tex *tex, int y, int xstart, int xend,
                         int x0, int x1, int y0, int y1,
-                        int thickness, rgb8 fgc) {
+                        int thickness, rgb8 fgc, uint8_t alpha) {
     if (xstart > xend) { int t = xstart; xstart = xend; xend = t; }
     if (y < y0) y = y0;
     if (y >= y1) y = y1 - 1;
@@ -361,14 +362,14 @@ static void draw_h_line(pane_tex *tex, int y, int xstart, int xend,
         if (xs >= xe) continue;
         uint8_t *row = tex->pixels + (size_t)ty * tex->tex_w * 4 + xs * 4;
         for (int x = xs; x < xe && x < tex->tex_w; x++) {
-            row[0] = fgc.r; row[1] = fgc.g; row[2] = fgc.b; row[3] = 255; row += 4;
+            row[0] = fgc.r; row[1] = fgc.g; row[2] = fgc.b; row[3] = alpha; row += 4;
         }
     }
 }
 
 static void draw_v_line(pane_tex *tex, int x, int ystart, int yend,
                         int x0, int x1, int y0, int y1,
-                        int thickness, rgb8 fgc) {
+                        int thickness, rgb8 fgc, uint8_t alpha) {
     if (ystart > yend) { int t = ystart; ystart = yend; yend = t; }
     if (x < x0) x = x0;
     if (x >= x1) x = x1 - 1;
@@ -381,12 +382,15 @@ static void draw_v_line(pane_tex *tex, int x, int ystart, int yend,
             if (tx < x0 || tx >= x1) continue;
             if (tx < 0 || tx >= tex->tex_w) continue;
             uint8_t *p = tex->pixels + (size_t)y * tex->tex_w * 4 + tx * 4;
-            p[0] = fgc.r; p[1] = fgc.g; p[2] = fgc.b; p[3] = 255;
+            p[0] = fgc.r; p[1] = fgc.g; p[2] = fgc.b; p[3] = alpha;
         }
     }
 }
 
-static void composite_cell(font_ctx *font, pane_tex *tex, int cx, int cy, const VTermScreenCell *cell) {
+static void composite_cell(term_pane *tp, int cx, int cy, const VTermScreenCell *cell) {
+    font_ctx *font = &tp->font;
+    pane_tex *tex = &tp->surface;
+    uint8_t alpha = tp->alpha;
     // Fill background
     int x0 = cx * font->cell_w;
     int y0 = cy * font->cell_h;
@@ -396,7 +400,7 @@ static void composite_cell(font_ctx *font, pane_tex *tex, int cx, int cy, const 
     for (int y=y0; y<y1; y++) {
         uint8_t *row = tex->pixels + (size_t)y * tex->tex_w * 4 + x0 * 4;
         for (int x=x0; x<x1; x++) {
-            row[0]=bgc.r; row[1]=bgc.g; row[2]=bgc.b; row[3]=255; row+=4;
+            row[0]=bgc.r; row[1]=bgc.g; row[2]=bgc.b; row[3]=alpha; row+=4;
         }
     }
     // Foreground glyphs (support wide=1 only; treat wide as '?')
@@ -410,27 +414,27 @@ static void composite_cell(font_ctx *font, pane_tex *tex, int cx, int cy, const 
         int cym = (y0 + y1) / 2; // center y
         switch (cp) {
             case 0x2500: case 0x2501: // ─
-                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc); return;
+                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc, alpha); return;
             case 0x2502: case 0x2503: // │
-                draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+                draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc, alpha); return;
             case 0x250C: // ┌
-                draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, thickness, fgc); return;
+                draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, thickness, fgc, alpha); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, thickness, fgc, alpha); return;
             case 0x2510: // ┐
-                draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, thickness, fgc); return;
+                draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, thickness, fgc, alpha); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, thickness, fgc, alpha); return;
             case 0x2514: // └
-                draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+                draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, thickness, fgc, alpha); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, thickness, fgc, alpha); return;
             case 0x2518: // ┘
-                draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+                draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, thickness, fgc, alpha); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, thickness, fgc, alpha); return;
             case 0x253C: // ┼
-                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc, alpha); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc, alpha); return;
             case 0x252C: // ┬
-                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, thickness, fgc); return;
+                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc, alpha); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, thickness, fgc, alpha); return;
             case 0x2534: // ┴
-                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc, alpha); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, thickness, fgc, alpha); return;
             case 0x251C: // ├
-                draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+                draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, thickness, fgc, alpha); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc, alpha); return;
             case 0x2524: // ┤
-                draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, thickness, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc); return;
+                draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, thickness, fgc, alpha); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, thickness, fgc, alpha); return;
             // Mixed single/double joins: approximate by drawing both segments slightly thicker
             case 0x256B: // ╋ (thick cross)
             case 0x256A: // ╊
@@ -443,32 +447,32 @@ static void composite_cell(font_ctx *font, pane_tex *tex, int cx, int cy, const 
             case 0x2533: // ┳
             case 0x253B: // ┻
             case 0x254B: // ╋
-                { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+                { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc, alpha); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc, alpha); return; }
             case 0x2550: // double ─
-            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc); return; }
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc, alpha); return; }
             case 0x2551: // double │
-            { int t2 = thickness+1; if (t2>3) t2=3; draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc, alpha); return; }
             case 0x2554: // double ┌
-            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, t2, fgc); return; }
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, t2, fgc, alpha); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, t2, fgc, alpha); return; }
             case 0x2557: // double ┐
-            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, t2, fgc); return; }
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, t2, fgc, alpha); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, t2, fgc, alpha); return; }
             case 0x255A: // double └
-            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, t2, fgc, alpha); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, t2, fgc, alpha); return; }
             case 0x255D: // double ┘
-            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, t2, fgc, alpha); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, t2, fgc, alpha); return; }
             case 0x256C: // double ┼
-            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc, alpha); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc, alpha); return; }
             case 0x2566: // double ┬
-            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, t2, fgc); return; }
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc, alpha); draw_v_line(tex, cxm, y0+1, cym, x0, x1, y0, y1, t2, fgc, alpha); return; }
             case 0x2569: // double ┴
-            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, t2, fgc, alpha); draw_v_line(tex, cxm, cym, y1-1, x0, x1, y0, y1, t2, fgc, alpha); return; }
             case 0x2560: // double ├
-            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, x0+1, cxm, x0, x1, y0, y1, t2, fgc, alpha); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc, alpha); return; }
             case 0x2563: // double ┤
-            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, t2, fgc); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc); return; }
+            { int t2 = thickness+1; if (t2>3) t2=3; draw_h_line(tex, cym, cxm, x1-1, x0, x1, y0, y1, t2, fgc, alpha); draw_v_line(tex, cxm, y0+1, y1-1, x0, x1, y0, y1, t2, fgc, alpha); return; }
             default:
                 // Fallback to ASCII-like minimal rendering
-                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc); return;
+                draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc, alpha); return;
         }
     }
     glyph_bitmap *g = get_glyph(font, cp);
@@ -492,7 +496,7 @@ static void composite_cell(font_ctx *font, pane_tex *tex, int cx, int cy, const 
                     p[0] = (uint8_t)((fgc.r * a + p[0]*(255-a))/255);
                     p[1] = (uint8_t)((fgc.g * a + p[1]*(255-a))/255);
                     p[2] = (uint8_t)((fgc.b * a + p[2]*(255-a))/255);
-                    p[3] = 255;
+                    p[3] = alpha;
                 }
             }
         }
@@ -515,7 +519,7 @@ static void rebuild_surface(term_pane *tp) {
         for (int x=0; x<tp->layout.cols; x++) {
             VTermScreenCell cell; memset(&cell,0,sizeof cell);
             vterm_screen_get_cell(tp->vts, (VTermPos){.row=y,.col=x}, &cell);
-            composite_cell(&tp->font, &tp->surface, x, y, &cell);
+            composite_cell(tp, x, y, &cell);
         }
         if (tp->row_hash) tp->row_hash[y] = pane_row_hash(tp, y);
     }
@@ -535,6 +539,7 @@ term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *
     tp->argv_dup = dup_argv(argv);
     // Font
     font_init(&tp->font, font_px > 0 ? font_px : 18);
+    tp->alpha = 255;
     // Adjust cols/rows to pane size
     tp->layout.cols = tp->layout.w / tp->font.cell_w;
     tp->layout.rows = tp->layout.h / tp->font.cell_h;
@@ -573,6 +578,7 @@ term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const ch
     term_pane *tp = calloc(1, sizeof *tp);
     tp->layout = *layout;
     font_init(&tp->font, font_px > 0 ? font_px : 18);
+    tp->alpha = 255;
     tp->use_shell_cmd = 1;
     tp->shell_cmd = strdup(shell_cmd);
     tp->argv_dup = NULL;
@@ -658,7 +664,7 @@ static void update_changed_rows(term_pane *tp) {
             for (int x=0; x<tp->layout.cols; x++) {
                 VTermScreenCell cell; memset(&cell,0,sizeof cell);
                 vterm_screen_get_cell(tp->vts, (VTermPos){.row=y,.col=x}, &cell);
-                composite_cell(&tp->font, &tp->surface, x, y, &cell);
+                composite_cell(tp, x, y, &cell);
             }
             tp->row_hash[y] = h;
             if (run_start < 0) { run_start = y; run_end = y; }
@@ -847,4 +853,10 @@ void term_pane_set_font_px(term_pane *tp, int font_px) {
     free(old.pixels);
     free(tp->row_hash);
     tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
+}
+
+void term_pane_set_alpha(term_pane *tp, uint8_t alpha) {
+    if (!tp) return;
+    tp->alpha = alpha;
+    rebuild_surface(tp);
 }
