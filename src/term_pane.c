@@ -235,7 +235,8 @@ static void ensure_pane_program(void) {
     glGenBuffers(1, &pane_vbo);
 }
 
-static void draw_textured_quad(GLuint tex, int x, int y, int w, int h, int fb_w, int fb_h) {
+static void draw_textured_quad(GLuint tex, int x, int y, int w, int h,
+                               float u1, float v1, int fb_w, int fb_h) {
     ensure_pane_program();
     // Convert to NDC
     float L = (2.0f * x / fb_w) - 1.0f;
@@ -244,11 +245,11 @@ static void draw_textured_quad(GLuint tex, int x, int y, int w, int h, int fb_w,
     float B = 1.0f - (2.0f * (y + h) / fb_h);
     float verts[] = {
         L,B, 0,0,
-        R,B, 1,0,
-        R,T, 1,1,
+        R,B, u1,0,
+        R,T, u1,v1,
         L,B, 0,0,
-        R,T, 1,1,
-        L,T, 0,1
+        R,T, u1,v1,
+        L,T, 0,v1
     };
     glUseProgram(pane_program);
     glActiveTexture(GL_TEXTURE0);
@@ -792,8 +793,13 @@ void term_pane_render(term_pane *tp, int fb_w, int fb_h) {
     tp->surface.dirty_y0 = tp->surface.tex_h;
     tp->surface.dirty_y1 = 0;
     tp->surface.dirty_count = 0;
+    float u1 = 1.f, v1 = 1.f;
+    if (tp->surface.tex_w > 0)
+        u1 = (float)tp->layout.w / (float)tp->surface.tex_w;
+    if (tp->surface.tex_h > 0)
+        v1 = (float)tp->layout.h / (float)tp->surface.tex_h;
     draw_textured_quad(tp->surface.tex, tp->layout.x, tp->layout.y,
-                       tp->surface.tex_w, tp->surface.tex_h, fb_w, fb_h);
+                       tp->layout.w, tp->layout.h, u1, v1, fb_w, fb_h);
 }
 
 void term_pane_send_input(term_pane *tp, const char *buf, size_t len) {
