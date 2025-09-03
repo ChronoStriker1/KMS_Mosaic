@@ -1465,7 +1465,7 @@ int main(int argc, char **argv) {
                 "  --pane-split PCT        Top row height percentage for split layouts (default 50).\n"
                 "  --pane-a \"CMD\"           Command for Pane A (default: btop).\n"
                 "  --pane-b \"CMD\"           Command for Pane B (default: tail -f /var/log/syslog).\n"
-                "  --overlay             Draw panes over video with transparency.\n"
+                "  --overlay             Overlay panes on full-screen video (split 50/50; orientation follows --rotate; --pane-split adjusts).\n"
                 "  --layout M              stack | row | 2x1 | 1x2 | 2over1 | 1over2\n"
                 "  --roles RRR            Slot roles order, e.g. CAB (default CAB).\n"
                 "  --fs-cycle-sec SEC     Fullscreen cycle interval for 'c' key.\n\n"
@@ -1773,20 +1773,31 @@ int main(int argc, char **argv) {
     double fs_next_switch = 0.0;
 
     if (opt.overlay) {
-        int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
-        int col_pct = opt.right_frac_pct ? opt.right_frac_pct : 33; if (col_pct<10) col_pct=10; if (col_pct>90) col_pct=90;
-        int overlay_w = screen_w * col_pct / 100;
-        int htop = screen_h * split_pct / 100; int hbot = screen_h - htop;
+        int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50;
+        if (split_pct < 10) split_pct = 10;
+        if (split_pct > 90) split_pct = 90;
         pane_layout s0 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=screen_h };
-        pane_layout s1 = (pane_layout){ .x=screen_w - overlay_w, .y=screen_h - htop, .w=overlay_w, .h=htop };
-        pane_layout s2 = (pane_layout){ .x=screen_w - overlay_w, .y=0, .w=overlay_w, .h=hbot };
+        pane_layout s1 = {0}, s2 = {0};
+        if (opt.rotation == ROT_0 || opt.rotation == ROT_180) {
+            int wleft = screen_w * split_pct / 100;
+            int wright = screen_w - wleft;
+            s1 = (pane_layout){ .x=0,      .y=0, .w=wleft,  .h=screen_h };
+            s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=screen_h };
+        } else {
+            int htop = screen_h * split_pct / 100;
+            int hbot = screen_h - htop;
+            s1 = (pane_layout){ .x=0, .y=screen_h - htop, .w=screen_w, .h=htop };
+            s2 = (pane_layout){ .x=0, .y=0,              .w=screen_w, .h=hbot };
+        }
         pane_layout slots[3] = { s0, s1, s2 };
         lay_video = slots[perm[0]];
         lay_a     = slots[perm[1]];
         lay_b     = slots[perm[2]];
         if (fullscreen) {
             pane_layout full = (pane_layout){ .x=0,.y=0,.w=screen_w,.h=screen_h };
-            if (fs_pane==0) lay_video = full; else if (fs_pane==1) lay_a=full; else lay_b=full;
+            if (fs_pane==0) lay_video = full;
+            else if (fs_pane==1) lay_a = full;
+            else lay_b = full;
         }
     } else {
         int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2,4=2over1,5=1over2
@@ -2114,7 +2125,26 @@ int main(int argc, char **argv) {
             if (last_pane_split_pct != opt.pane_split_pct) { layout_changed = 1; last_pane_split_pct = opt.pane_split_pct; }
             if (last_perm[0]!=perm[0] || last_perm[1]!=perm[1] || last_perm[2]!=perm[2]) { layout_changed = 1; last_perm[0]=perm[0]; last_perm[1]=perm[1]; last_perm[2]=perm[2]; }
             if (last_fullscreen != (fullscreen?1:0) || last_fs_pane != fs_pane) { layout_changed=1; last_fullscreen = fullscreen?1:0; last_fs_pane = fs_pane; }
-            {
+            if (opt.overlay) {
+                int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
+                pane_layout s0 = (pane_layout){ .x=0, .y=0, .w=screen_w, .h=screen_h };
+                pane_layout s1={0}, s2={0};
+                if (opt.rotation == ROT_0 || opt.rotation == ROT_180) {
+                    int wleft = screen_w * split_pct / 100; int wright = screen_w - wleft;
+                    s1 = (pane_layout){ .x=0,      .y=0, .w=wleft,  .h=screen_h };
+                    s2 = (pane_layout){ .x=wleft, .y=0, .w=wright, .h=screen_h };
+                } else {
+                    int htop = screen_h * split_pct / 100; int hbot = screen_h - htop;
+                    s1 = (pane_layout){ .x=0, .y=screen_h - htop, .w=screen_w, .h=htop };
+                    s2 = (pane_layout){ .x=0, .y=0,              .w=screen_w, .h=hbot };
+                }
+                pane_layout slots[3] = { s0, s1, s2 };
+                lay_video = slots[perm[0]]; lay_a = slots[perm[1]]; lay_b = slots[perm[2]];
+                if (fullscreen) {
+                    pane_layout full = (pane_layout){ .x=0,.y=0,.w=screen_w,.h=screen_h };
+                    if (fs_pane==0) lay_video=full; else if (fs_pane==1) lay_a=full; else lay_b=full;
+                }
+            } else {
                 int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2,4=2over1,5=1over2
                 int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
                 int col_pct = opt.right_frac_pct ? (100 - opt.right_frac_pct) : 50; if (col_pct<20) col_pct=20; if (col_pct>80) col_pct=80;
