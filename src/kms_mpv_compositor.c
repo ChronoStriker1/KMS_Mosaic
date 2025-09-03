@@ -664,7 +664,8 @@ static void draw_border_rect(int x, int y, int w, int h, int thickness, int fb_w
     // Convert to scissor coords (origin bottom-left). Our layout y is bottom-left already.
     int sx = x;
     int sy = fb_h - (y + h);
-    if (sx < 0) sx = 0; if (sy < 0) sy = 0;
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
     // Top edge
     glScissor(sx, sy + h - thickness, w, thickness);
     glClear(GL_COLOR_BUFFER_BIT);
