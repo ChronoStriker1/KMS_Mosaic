@@ -68,9 +68,21 @@ Layouts
 - Pane role assignment (C=video, A, B) is a permutation over the 3 slots and can be rotated/swapped at runtime via r/R/t.
 
 Planned TODOs
+- Refactor the monolithic compositor into separate DRM/GBM, mpv embed, and UI modules. [DRM/GBM split done]
+- Support a variable number of terminal panes rather than the fixed A/B pair.
+- Add a layout option with transparent terminal panes overlaying the video background.
+- The function find_monospace_font and surrounding FreeType initialization code appear in both src/osd.c and src/term_pane.c, leading to duplication and potential drift.
+- The glyph cache inside term_pane.c uses a linear search and grows without bounds, which can slow rendering for diverse Unicode output.
+- Change detection for terminal panes hashes every cell in every row (pane_row_hash), which is O(rows × cols) per frame.
+- term_pane_poll attempts to read from the PTY every frame, even when no data is available.
+- src/kms_mpv_compositor.c (≈2k+ lines) combines DRM setup, mpv integration, input handling, and UI logic, which hinders maintainability.
 - Improve Unicode/box drawing coverage and performance. [in-progress]
 - Make connector/mode selection configurable.
 - Implement atomic modesetting + nonblocking pageflips. [in-progress]
+- Replace linear glyph cache with a hashed LRU to cap memory and speed lookups.
+- Use libvterm damage callbacks instead of hashing every row for change detection.
+- Integrate PTY descriptors into the compositor event loop to avoid per-frame polling.
+
 
 Atomic modesetting (experimental)
 - Enable with `--atomic`. If supported by the GPU/driver, the compositor uses DRM atomic to set the initial mode and flip via the primary plane. Falls back to legacy KMS if unavailable.
