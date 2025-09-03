@@ -28,6 +28,12 @@ Semantic Versioning when version numbers are introduced.
 ### Docs
 - README updated for new flags (`--atomic`, `--atomic-nonblock`, `--gl-finish`), Control Mode border highlight, OSD wrapping, and layout name display.
 
+## [0.3.1] - 2025-09-03
+
+### Added
+- Restored `--mpv-out` to write mpv logs/events to a file or FIFO.
+- Restored dynamic playlist updates via `--playlist-fifo`.
+
 ## [0.3.0] - 2025-09-01
 
 ### Added
