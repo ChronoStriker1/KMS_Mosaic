@@ -1511,7 +1511,7 @@ int main(int argc, char **argv) {
                 "  z             Fullscreen focused pane.\n"
                 "  c             Cycle fullscreen panes.\n"
                 "  o             Toggle OSD visibility.\n"
-                "  ?             Help overlay.\n"
+                "  (Help shown automatically in Control Mode)\n"
                 "  Ctrl+Q        Quit (only active in Control Mode).\n\n",
                 exe);
             return 0;
@@ -1889,11 +1889,10 @@ int main(int argc, char **argv) {
 
     // Set TTY to raw mode for key forwarding
     struct termios rawt; if (tcgetattr(0, &g_oldt)==0) { g_have_oldt = 1; rawt = g_oldt; cfmakeraw(&rawt); tcsetattr(0, TCSANOW, &rawt); atexit(restore_tty); }
-            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, Arrows resize, l/L layouts, r/R rotate roles, t swap focus/next, z fullscreen, n/p next/prev FS, c cycle FS, o OSD, ? help; Ctrl+Q quit.\n");
+            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, Arrows resize, l/L layouts, r/R rotate roles, t swap focus/next, z fullscreen, n/p next/prev FS, c cycle FS, o OSD; Ctrl+Q quit.\n");
     int focus = use_mpv ? 0 : 1; // 0=video, 1=top pane, 2=bottom pane
     bool show_osd = false; // default OSD off
     if (getenv("KMS_MPV_NO_OSD")) show_osd = false;
-    bool show_help = false; // OSD help overlay
     bool ui_control = false; // when true, keystrokes control mosaic instead of panes
 
     bool running = true;
@@ -1971,7 +1970,6 @@ int main(int argc, char **argv) {
                     else if (buf[i]=='p' && fullscreen) { fs_pane = (fs_pane+2)%3; focus = fs_pane; fs_cycle=false; consumed=true; }
                     else if (buf[i]=='c') { fs_cycle = !fs_cycle; if (fs_cycle){ fullscreen=true; fs_pane=focus; fs_next_switch=0.0; } else { fullscreen=false; } consumed=true; }
                     else if (buf[i]=='f') { term_pane_force_rebuild(tp_a); term_pane_force_rebuild(tp_b); consumed=true; }
-                    else if (buf[i]=='?') { show_help = !show_help; consumed=true; }
                 }
                 // While in UI control mode, handle arrow keys for resizing splits
                 if (ui_control) {
@@ -2404,44 +2402,20 @@ int main(int argc, char **argv) {
             }
         }
 
-        // OSD overlay (title, index/total, paused) and help
-        if (!direct_mode && use_mpv && !opt.no_osd && (show_osd || show_help)) {
+        // OSD overlay (title, index/total, paused)
+        if (!direct_mode && use_mpv && !opt.no_osd && show_osd) {
             static osd_ctx *osd = NULL; if (!osd) osd = osd_create(opt.font_px?opt.font_px:20);
-            if (show_help) {
-                const char *help =
-                    "Control Mode\n"
-                    "  Tab: focus cycle C/A/B\n"
-                    "  o: toggle OSD\n"
-                    "  l/L: cycle layouts\n"
-                    "  r/R: rotate roles C/A/B\n"
-                    "  t: swap focused pane with next\n"
-                    "  z: fullscreen focused pane\n"
-                    "  n: next fullscreen pane\n"
-                    "  p: previous fullscreen pane\n"
-                    "  c: cycle fullscreen panes\n"
-                    "  Arrows: resize splits (2x1/1x2/2over1/1over2)\n"
-                    "  f: force pane rebuild\n"
-                    "Always: Ctrl+Q quit\n";
-                osd_set_text(osd, help);
-            } else {
-                int64_t pos=0,count=0; int paused_flag=0; char *title=NULL;
-                mpv_get_property(m.mpv, "playlist-pos", MPV_FORMAT_INT64, &pos);
-                mpv_get_property(m.mpv, "playlist-count", MPV_FORMAT_INT64, &count);
-                mpv_get_property(m.mpv, "pause", MPV_FORMAT_FLAG, &paused_flag);
-                title = mpv_get_property_string(m.mpv, "media-title");
-                const char *layout_name = (opt.layout_mode==0?"stack":
-                                           opt.layout_mode==1?"row":
-                                           opt.layout_mode==2?"2x1":
-                                           opt.layout_mode==3?"1x2":
-                                           opt.layout_mode==4?"2over1":
-                                           opt.layout_mode==5?"1over2":"overlay");
-                char line[512]; snprintf(line,sizeof line, "%s %lld/%lld - %s  |  layout: %s",
-                                          paused_flag?"Paused":"Playing",
-                                          (long long)(pos+1), (long long)count,
-                                          title?title:"(no title)", layout_name);
-                if (title) mpv_free(title);
-                osd_set_text(osd, line);
-            }
+            int64_t pos=0,count=0; int paused_flag=0; char *title=NULL;
+            mpv_get_property(m.mpv, "playlist-pos", MPV_FORMAT_INT64, &pos);
+            mpv_get_property(m.mpv, "playlist-count", MPV_FORMAT_INT64, &count);
+            mpv_get_property(m.mpv, "pause", MPV_FORMAT_FLAG, &paused_flag);
+            title = mpv_get_property_string(m.mpv, "media-title");
+            char line[512]; snprintf(line,sizeof line, "%s %lld/%lld - %s",
+                                      paused_flag?"Paused":"Playing",
+                                      (long long)(pos+1), (long long)count,
+                                      title?title:"(no title)");
+            if (title) mpv_free(title);
+            osd_set_text(osd, line);
             // Draw into logical RT at 16px margin
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             gl_reset_state_2d();
@@ -2451,7 +2425,28 @@ int main(int argc, char **argv) {
         // Control-mode indicator OSD (always visible when active)
         if (!direct_mode && ui_control) {
             static osd_ctx *osdcm = NULL; if (!osdcm) osdcm = osd_create(opt.font_px?opt.font_px:20);
-            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  Arrows resize  l/L layouts  r/R rotate  t swap next  z fullscreen  c cycle  o OSD  ? help");
+            const char *layout_name = (opt.layout_mode==0?"stack":
+                                       opt.layout_mode==1?"row":
+                                       opt.layout_mode==2?"2x1":
+                                       opt.layout_mode==3?"1x2":
+                                       opt.layout_mode==4?"2over1":
+                                       opt.layout_mode==5?"1over2":"overlay");
+            const char *help =
+                "Tab: focus cycle C/A/B\n"
+                "o: toggle OSD\n"
+                "l/L: cycle layouts\n"
+                "r/R: rotate roles C/A/B\n"
+                "t: swap focused pane with next\n"
+                "z: fullscreen focused pane\n"
+                "n: next fullscreen pane\n"
+                "p: previous fullscreen pane\n"
+                "c: cycle fullscreen panes\n"
+                "Arrows: resize splits (2x1/1x2/2over1/1over2)\n"
+                "f: force pane rebuild\n"
+                "Always: Ctrl+Q quit";
+            char cm_text[1024];
+            snprintf(cm_text, sizeof cm_text, "Control Mode (Ctrl+E)  Layout: %s\n%s", layout_name, help);
+            osd_set_text(osdcm, cm_text);
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             gl_reset_state_2d();
             glViewport(0,0, logical_w, logical_h);
