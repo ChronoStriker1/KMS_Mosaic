@@ -1285,14 +1285,14 @@ static const char* default_config_path(void){
     static char buf[512];
     // Prefer Unraid boot config if available
     if (access("/boot/config", F_OK) == 0) {
-        snprintf(buf, sizeof buf, "/boot/config/kms_mpv_compositor.conf");
+        snprintf(buf, sizeof buf, "/boot/config/kms_mosaic.conf");
         return buf;
     }
     const char *xdg = getenv("XDG_CONFIG_HOME");
     const char *home = getenv("HOME");
-    if (xdg && *xdg) { snprintf(buf, sizeof buf, "%s/kms_mpv_compositor.conf", xdg); return buf; }
-    if (home && *home) { snprintf(buf, sizeof buf, "%s/.config/kms_mpv_compositor.conf", home); return buf; }
-    snprintf(buf, sizeof buf, ".kms_mpv_compositor.conf");
+    if (xdg && *xdg) { snprintf(buf, sizeof buf, "%s/kms_mosaic.conf", xdg); return buf; }
+    if (home && *home) { snprintf(buf, sizeof buf, "%s/.config/kms_mosaic.conf", home); return buf; }
+    snprintf(buf, sizeof buf, ".kms_mosaic.conf");
     return buf;
 }
 
@@ -1717,7 +1717,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Diag: GLSL_VERSION=%s\n", glsl?glsl:"?");
         fprintf(stderr, "Diag: GL_VENDOR=%s\n", gl_vendor?gl_vendor:"?");
         fprintf(stderr, "Diag: GL_RENDERER=%s\n", gl_renderer?gl_renderer:"?");
-        const char *bundled = "/usr/local/lib/kms_mpv_compositor";
+        const char *bundled = "/usr/local/lib/kms_mosaic";
         fprintf(stderr, "Diag: Bundled lib dir %s: %s\n", bundled, access(bundled, R_OK)==0?"present":"missing");
         // Exit cleanly after diagnostics
         goto cleanup;
@@ -1997,7 +1997,7 @@ int main(int argc, char **argv) {
                     else if (buf[i]=='p' && fullscreen) { fs_pane = (fs_pane+2)%3; focus = fs_pane; fs_cycle=false; consumed=true; }
                     else if (buf[i]=='c') { fs_cycle = !fs_cycle; if (fs_cycle){ fullscreen=true; fs_pane=focus; fs_next_switch=0.0; } else { fullscreen=false; } consumed=true; }
                     else if (buf[i]=='f') { term_pane_force_rebuild(tp_a); term_pane_force_rebuild(tp_b); consumed=true; }
-                    else if (buf[i]=='s') { const char *p = default_config_path(); save_config(&opt, p); fprintf(stderr, "Saved config to %s\n", p); consumed=true; }
+                    else if (buf[i]=='s') { const char *p = opt.config_file ? opt.config_file : default_config_path(); save_config(&opt, p); fprintf(stderr, "Saved config to %s\n", p); consumed=true; }
                 }
                 // While in UI control mode, handle arrow keys for resizing splits
                 if (ui_control) {
@@ -2562,7 +2562,10 @@ cleanup:
     if (mpv_out) fclose(mpv_out);
     if (playlist_fifo_fd >= 0) close(playlist_fifo_fd);
     if (opt.save_config_file) save_config(&opt, opt.save_config_file);
-    else if (opt.save_config_default) save_config(&opt, default_config_path());
+    else if (opt.save_config_default) {
+        const char *p = opt.config_file ? opt.config_file : default_config_path();
+        save_config(&opt, p);
+    }
     if (d.conn) drmModeFreeConnector(d.conn);
     if (d.res) drmModeFreeResources(d.res);
     if (d.fd >= 0) close(d.fd);
