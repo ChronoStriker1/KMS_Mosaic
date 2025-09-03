@@ -131,7 +131,7 @@ typedef struct {
     // Unified layout mode: stack3, row3, 2x1, 1x2, 2over1, 1over2
     int layout_mode;          // 0=stack3,1=row3,2=2x1,3=1x2,4=2over1,5=1over2
     int fs_cycle_sec;         // fullscreen cycle interval in seconds
-    int roles[3]; bool roles_set; // initial slot roles: 0=video,1=paneA,2=paneB
+    int roles[3]; bool roles_set; // slot index per role: 0=video(C),1=paneA(A),2=paneB(B)
     const char **mpv_opts; int n_mpv_opts; int cap_mpv_opts; // global mpv opts key=val
     const char *config_file; const char *save_config_file; bool save_config_default;
     const char *mpv_out_path;       // file or FIFO for mpv event/log output
@@ -1415,14 +1415,20 @@ int main(int argc, char **argv) {
         }
         else if (!strcmp(argv[i], "--fs-cycle-sec") && i + 1 < argc) { opt.fs_cycle_sec = atoi(argv[++i]); }
         else if (!strcmp(argv[i], "--roles") && i + 1 < argc) {
-            const char *r = argv[++i]; int idx=0;
-            for (const char *p=r; *p && idx<3; ++p){
-                char c=*p;
-                if (c=='C' || c=='c') opt.roles[idx++]=0;
-                else if (c=='A' || c=='a') opt.roles[idx++]=1;
-                else if (c=='B' || c=='b') opt.roles[idx++]=2;
+            // Parse roles string as slot order (e.g. "CAB" means slot0=C, slot1=A, slot2=B)
+            const char *r = argv[++i];
+            int slot = 0; bool used[3] = {false,false,false};
+            for (const char *p = r; *p && slot < 3; ++p) {
+                int role = -1; char c = *p;
+                if (c == 'C' || c == 'c') role = 0;
+                else if (c == 'A' || c == 'a') role = 1;
+                else if (c == 'B' || c == 'b') role = 2;
+                if (role >= 0 && !used[role]) {
+                    opt.roles[role] = slot++;
+                    used[role] = true;
+                }
             }
-            if (idx==3) opt.roles_set=true;
+            if (slot == 3) opt.roles_set = true;
         }
         else if (!strcmp(argv[i], "--loop-file")) opt.loop_file = true;
         else if (!strcmp(argv[i], "--loop")) opt.loop_flag = true;
