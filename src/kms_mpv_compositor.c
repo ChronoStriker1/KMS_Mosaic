@@ -114,6 +114,7 @@ typedef struct {
     bool list_connectors;
     bool no_video;
     bool no_panes;
+    bool overlay;
     bool gl_test;
     bool diag;
     bool loop_file;
@@ -1315,6 +1316,7 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
     if (opt->fs_cycle_sec) fprintf(f, "--fs-cycle-sec %d\n", opt->fs_cycle_sec);
     if (opt->pane_a_cmd) fprintf(f, "--pane-a '%s'\n", opt->pane_a_cmd);
     if (opt->pane_b_cmd) fprintf(f, "--pane-b '%s'\n", opt->pane_b_cmd);
+    if (opt->overlay) fprintf(f, "--overlay\n");
     if (opt->no_video) fprintf(f, "--no-video\n");
     if (opt->loop_file) fprintf(f, "--loop-file\n");
     if (opt->loop_playlist) fprintf(f, "--loop-playlist\n");
@@ -1383,6 +1385,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--list-connectors")) opt.list_connectors = true;
         else if (!strcmp(argv[i], "--no-video")) opt.no_video = true;
         else if (!strcmp(argv[i], "--no-panes")) opt.no_panes = true;
+        else if (!strcmp(argv[i], "--overlay")) opt.overlay = true;
         else if (!strcmp(argv[i], "--diag")) opt.diag = true;
         else if (!strcmp(argv[i], "--gl-test")) opt.gl_test = true;
         else if (!strcmp(argv[i], "--no-config")) opt.no_config = true;
