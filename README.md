@@ -35,6 +35,7 @@ Run
 - `./kms_mosaic --no-config --smooth --loop --video-rotate 270 --panscan 1 --layout 2x1 --video /path/to/movie.mp4`
 - `./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22`
 - `./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle`
+- `./kms_mosaic --playlist-fifo /tmp/mosaic.fifo --mpv-out /tmp/mpv.log`
 - `./kms_mosaic --config /path/profile.conf`
 - `./kms_mosaic --save-config /path/profile.conf`
 - `./kms_mosaic --save-config-default`
@@ -100,12 +101,14 @@ Flags
 - --video-opt K=V: apply mpv option to the most recent --video (repeatable per item).
 - --playlist FILE: load an mpv playlist file (m3u, one path per line).
 - --playlist-extended FILE: custom playlist with per-line options (each line: "path | key=val,key=val").
+- --playlist-fifo FILE: read playlist entries from a FIFO, one path per line.
 - --no-video: disable the video region and use full width for the text panes.
 - --loop-file: loop the current file indefinitely.
 - --loop: shorthand for --loop-file (infinite). Note: if you provide exactly one video and no playlist, looping is assumed by default.
 - --loop-playlist: loop the playlist indefinitely.
 - --shuffle: randomize playlist order (alias: --randomize).
 - --mpv-opt K=V: set global mpv option (repeatable), e.g., --mpv-opt keepaspect=yes.
+- --mpv-out FILE: write mpv logs/events to FILE or FIFO.
 - --font-size PX: terminal font size in pixels (default 18).
 - --right-frac PCT: percent of screen width used by right column (10..80, default 33).
 - --video-frac PCT: percent of screen width for the video region (overrides --right-frac).

@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -133,6 +134,8 @@ typedef struct {
     int roles[3]; bool roles_set; // initial slot roles: 0=video,1=paneA,2=paneB
     const char **mpv_opts; int n_mpv_opts; int cap_mpv_opts; // global mpv opts key=val
     const char *config_file; const char *save_config_file; bool save_config_default;
+    const char *mpv_out_path;       // file or FIFO for mpv event/log output
+    const char *playlist_fifo;      // FIFO to append playlist entries from
 } options_t;
 
 // TTY restore state
@@ -1206,6 +1209,62 @@ static void parse_playlist_ext(options_t *opt, const char *file){
     free(line); fclose(f);
 }
 
+// Append a playlist entry to an mpv instance, optionally with per-line options
+static void mpv_append_line(mpv_handle *mpv, const char *line){
+    if (!mpv || !line) return;
+    char *dup = strdup(line);
+    if (!dup) return;
+    char *p = (char*)trim(dup);
+    if (*p=='#' || *p=='\0') { free(dup); return; }
+    char *bar = strchr(p, '|');
+    char *optstr = NULL;
+    if (bar){ *bar='\0'; optstr = bar+1; }
+    if (!optstr) {
+        const char *cmd[] = {"loadfile", p, "append", NULL};
+        mpv_command_async(mpv, 0, cmd);
+    } else {
+        mpv_node root; memset(&root,0,sizeof(root));
+        root.format = MPV_FORMAT_NODE_ARRAY;
+        root.u.list = malloc(sizeof(*root.u.list));
+        root.u.list->num = 0; root.u.list->values = NULL; root.u.list->keys = NULL;
+        // Helper to push a string node
+        #define PUSH_STR2(str) do{ root.u.list->values = realloc(root.u.list->values, sizeof(mpv_node)*(root.u.list->num+1)); \
+            root.u.list->values[root.u.list->num].format = MPV_FORMAT_STRING; \
+            root.u.list->values[root.u.list->num].u.string = strdup(str); \
+            root.u.list->num++; }while(0)
+        PUSH_STR2("loadfile"); PUSH_STR2(p); PUSH_STR2("append");
+        mpv_node map; memset(&map,0,sizeof(map));
+        map.format = MPV_FORMAT_NODE_MAP; map.u.list = malloc(sizeof(*map.u.list));
+        map.u.list->num=0; map.u.list->values=NULL; map.u.list->keys=NULL;
+        char *opts_dup = strdup(optstr);
+        char *tok = strtok(opts_dup, ",");
+        while (tok){
+            char *kv = (char*)trim(tok);
+            char *eq = strchr(kv,'=');
+            if (eq){
+                *eq='\0';
+                char *key = strdup(trim(kv));
+                char *val = strdup(trim(eq+1));
+                map.u.list->keys = realloc(map.u.list->keys, sizeof(char*)*(map.u.list->num+1));
+                map.u.list->values = realloc(map.u.list->values, sizeof(mpv_node)*(map.u.list->num+1));
+                map.u.list->keys[map.u.list->num] = key;
+                map.u.list->values[map.u.list->num].format = MPV_FORMAT_STRING;
+                map.u.list->values[map.u.list->num].u.string = val;
+                map.u.list->num++;
+            }
+            tok = strtok(NULL, ",");
+        }
+        free(opts_dup);
+        root.u.list->values = realloc(root.u.list->values, sizeof(mpv_node)*(root.u.list->num+1));
+        root.u.list->keys = realloc(root.u.list->keys, sizeof(char*)*(root.u.list->num+1));
+        root.u.list->keys[root.u.list->num] = strdup("options");
+        root.u.list->values[root.u.list->num] = map; root.u.list->num++;
+        mpv_command_node_async(mpv, 0, &root);
+        mpv_free_node_contents(&root);
+    }
+    free(dup);
+}
+
 // Tokenize a config file with simple quoting and comments (#)
 static char** tokenize_file(const char *path, int *argc_out){
     FILE *f = fopen(path, "r"); if(!f) return NULL; char **args=NULL; int n=0, cap=0; int c; int state=0; // 0=ws,1=token,2=single,3=double
@@ -1262,6 +1321,8 @@ static void save_config(const options_t *opt, const char *path){ FILE *f=fopen(p
     for (int i=0;i<opt->n_mpv_opts;i++) fprintf(f, "--mpv-opt '%s'\n", opt->mpv_opts[i]);
     if (opt->playlist_path) fprintf(f, "--playlist '%s'\n", opt->playlist_path);
     if (opt->playlist_ext) fprintf(f, "--playlist-extended '%s'\n", opt->playlist_ext);
+    if (opt->playlist_fifo) fprintf(f, "--playlist-fifo '%s'\n", opt->playlist_fifo);
+    if (opt->mpv_out_path) fprintf(f, "--mpv-out '%s'\n", opt->mpv_out_path);
     for (int i=0;i<opt->video_count;i++){ const video_item *vi=&opt->videos[i]; fprintf(f, "--video '%s'\n", vi->path); for (int k=0;k<vi->nopts;k++) fprintf(f, "--video-opt '%s'\n", vi->opts[k]); }
     fclose(f);
 }
@@ -1278,6 +1339,9 @@ int main(int argc, char **argv) {
     // Always define pane pointers early so cleanup is safe on early exits (e.g., --diag)
     term_pane *tp_a = NULL;
     term_pane *tp_b = NULL;
+    FILE *mpv_out = NULL;
+    int playlist_fifo_fd = -1;
+    char pfifo_buf[1024]; int pfifo_len = 0;
     // Preload config file if specified on CLI, else use default if present
     const char *cfg = NULL; for (int i=1;i<argc;i++){ if (!strcmp(argv[i],"--config") && i+1<argc){ cfg = argv[i+1]; break; } }
     if (!cfg) { const char *def = default_config_path(); if (!opt.no_config && access(def, R_OK)==0) cfg = def; }
@@ -1304,6 +1368,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--config") && i + 1 < argc) opt.config_file = argv[++i];
         else if (!strcmp(argv[i], "--save-config") && i + 1 < argc) opt.save_config_file = argv[++i];
         else if (!strcmp(argv[i], "--playlist-extended") && i + 1 < argc) opt.playlist_ext = argv[++i];
+        else if (!strcmp(argv[i], "--playlist-fifo") && i + 1 < argc) opt.playlist_fifo = argv[++i];
+        else if (!strcmp(argv[i], "--mpv-out") && i + 1 < argc) opt.mpv_out_path = argv[++i];
         else if (!strcmp(argv[i], "--connector") && i + 1 < argc) opt.connector_opt = argv[++i];
         else if (!strcmp(argv[i], "--mode") && i + 1 < argc) parse_mode(argv[++i], &opt.mode_w, &opt.mode_h, &opt.mode_hz);
         else if (!strcmp(argv[i], "--rotate") && i + 1 < argc) opt.rotation = parse_rot(argv[++i]);
@@ -1402,11 +1468,13 @@ int main(int argc, char **argv) {
                 "  --video-opt K=V         Per-video options (repeatable, applies to the last --video).\n"
                 "  --playlist FILE         Load playlist file.\n"
                 "  --playlist-extended F   Extended playlist (path | k=v,k=v per line).\n"
+                "  --playlist-fifo F       FIFO to append playlist entries from.\n"
                 "  --loop-file             Loop current file indefinitely.\n"
                 "  --loop                  Shorthand for --loop-file.\n"
                 "  --loop-playlist         Loop the whole playlist.\n"
                 "  --shuffle               Randomize playlist order.\n"
                 "  --mpv-opt K=V           Global mpv option (repeatable).\n"
+                "  --mpv-out FILE          Write mpv logs/events to FILE or FIFO.\n"
                 "  --video-rotate DEG      Pass-through to mpv video-rotate.\n"
                 "  --panscan VAL           Pass-through to mpv panscan.\n\n"
                 "Config and misc:\n"
@@ -1452,7 +1520,7 @@ int main(int argc, char **argv) {
 
     // If exactly one video file is provided and no playlist,
     // assume --loop should be enabled unless user already set a loop.
-    if (!opt.playlist_path && !opt.playlist_ext) {
+    if (!opt.playlist_path && !opt.playlist_ext && !opt.playlist_fifo) {
         if (opt.video_count == 1 && !opt.loop_file && !opt.loop_flag) {
             opt.loop_flag = true;
         }
@@ -1608,6 +1676,18 @@ int main(int argc, char **argv) {
         if (opt.shuffle) {
             const char *cmd2[] = {"playlist-shuffle", NULL};
             mpv_command_async(m.mpv, 0, cmd2);
+        }
+    }
+
+    if (use_mpv) {
+        if (opt.mpv_out_path) {
+            mpv_out = fopen(opt.mpv_out_path, "w");
+            if (!mpv_out) perror("mpv-out");
+        }
+        if (opt.playlist_fifo) {
+            mkfifo(opt.playlist_fifo, 0666);
+            playlist_fifo_fd = open(opt.playlist_fifo, O_RDONLY | O_NONBLOCK);
+            if (playlist_fifo_fd < 0) perror("playlist-fifo");
         }
     }
 
@@ -1792,14 +1872,17 @@ int main(int argc, char **argv) {
     if (dtest_env && (*dtest_env=='1' || *dtest_env=='y' || *dtest_env=='Y')) direct_test_only = true;
     int frame = 0;
     int mpv_needs_render = 1; // request an initial render
-    struct pollfd pfds[3];
+    struct pollfd pfds[4];
     pfds[0].fd = 0; // stdin for keys
     pfds[0].events = POLLIN;
     pfds[1].fd = use_mpv ? m.wakeup_fd[0] : -1;
     pfds[1].events = POLLIN;
     pfds[2].fd = d.fd; // DRM events (atomic)
     pfds[2].events = POLLIN;
+    pfds[3].fd = playlist_fifo_fd;
+    pfds[3].events = POLLIN;
     int nfds = use_mpv ? 3 : 2;
+    if (playlist_fifo_fd >= 0) nfds++;
     fcntl(0, F_SETFL, O_NONBLOCK);
 
     while (running) {
@@ -1904,22 +1987,48 @@ int main(int argc, char **argv) {
                 if (ev->event_id == MPV_EVENT_LOG_MESSAGE) {
                     mpv_event_log_message *lm = ev->data;
                     fprintf(stderr, "mpv[%s]: %s", lm->prefix, lm->text);
+                    if (mpv_out) { fprintf(mpv_out, "[%s] %s", lm->prefix, lm->text); fflush(mpv_out); }
                 } else if (ev->event_id == MPV_EVENT_START_FILE) {
                     fprintf(stderr, "mpv: START_FILE\n");
+                    if (mpv_out) { fprintf(mpv_out, "START_FILE\n"); fflush(mpv_out); }
                 } else if (ev->event_id == MPV_EVENT_FILE_LOADED) {
                     fprintf(stderr, "mpv: FILE_LOADED\n");
+                    if (mpv_out) { fprintf(mpv_out, "FILE_LOADED\n"); fflush(mpv_out); }
                     mpv_needs_render = 1;
                 } else if (ev->event_id == MPV_EVENT_VIDEO_RECONFIG) {
                     fprintf(stderr, "mpv: VIDEO_RECONFIG\n");
+                    if (mpv_out) { fprintf(mpv_out, "VIDEO_RECONFIG\n"); fflush(mpv_out); }
                     mpv_needs_render = 1;
                 } else if (ev->event_id == MPV_EVENT_END_FILE) {
                     fprintf(stderr, "mpv: END_FILE\n");
+                    if (mpv_out) { fprintf(mpv_out, "END_FILE\n"); fflush(mpv_out); }
                 }
             }
             int flags = mpv_render_context_update(m.mpv_gl);
             if (flags & MPV_RENDER_UPDATE_FRAME) {
                 mpv_needs_render = 1;
                 if (g_debug) fprintf(stderr, "mpv: UPDATE_FRAME\n");
+            }
+        }
+
+        if (playlist_fifo_fd >= 0 && (pfds[3].revents & POLLIN)) {
+            ssize_t r = read(playlist_fifo_fd, pfifo_buf + pfifo_len, sizeof(pfifo_buf) - pfifo_len - 1);
+            if (r > 0) {
+                pfifo_len += (int)r;
+                pfifo_buf[pfifo_len] = '\0';
+                char *start = pfifo_buf;
+                char *nl;
+                while ((nl = strchr(start, '\n')) != NULL) {
+                    *nl = '\0';
+                    mpv_append_line(m.mpv, start);
+                    start = nl + 1;
+                }
+                pfifo_len = (int)(pfifo_buf + pfifo_len - start);
+                memmove(pfifo_buf, start, pfifo_len);
+            } else if (r == 0) {
+                close(playlist_fifo_fd);
+                playlist_fifo_fd = open(opt.playlist_fifo, O_RDONLY | O_NONBLOCK);
+                pfds[3].fd = playlist_fifo_fd;
             }
         }
 
@@ -2297,6 +2406,8 @@ cleanup:
     if (g.dev) gbm_device_destroy(g.dev);
     term_pane_destroy(tp_a);
     term_pane_destroy(tp_b);
+    if (mpv_out) fclose(mpv_out);
+    if (playlist_fifo_fd >= 0) close(playlist_fifo_fd);
     if (opt.save_config_file) save_config(&opt, opt.save_config_file);
     else if (opt.save_config_default) save_config(&opt, default_config_path());
     if (d.conn) drmModeFreeConnector(d.conn);
