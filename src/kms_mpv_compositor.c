@@ -1766,8 +1766,20 @@ int main(int argc, char **argv) {
     static int last_perm[3] = {0,1,2};
     static bool overlay_swap = false; // track A/B order in overlay layout
     static bool last_overlay_swap = false;
-    if (opt.roles_set) { perm[0]=opt.roles[0]; perm[1]=opt.roles[1]; perm[2]=opt.roles[2]; }
-    if (opt.layout_mode == 6) { perm[0]=0; perm[1]=1; perm[2]=2; overlay_swap=false; last_overlay_swap=false; }
+    if (opt.roles_set) {
+        perm[0] = opt.roles[0];
+        perm[1] = opt.roles[1];
+        perm[2] = opt.roles[2];
+        if (opt.layout_mode == 6) {
+            overlay_swap = (opt.roles[1] == 2 && opt.roles[2] == 1);
+            opt.roles[0] = 0;
+        }
+    }
+    if (opt.layout_mode == 6) {
+        perm[0] = 0;
+        if (!opt.roles_set) { perm[1] = 1; perm[2] = 2; overlay_swap = false; }
+        last_overlay_swap = overlay_swap;
+    }
     static int last_font_px_a=-1, last_font_px_b=-1;
     static pane_layout prev_a={0}, prev_b={0};
     static int last_layout_mode=-1;
@@ -1959,7 +1971,13 @@ int main(int argc, char **argv) {
                     else if (buf[i]=='L') { opt.layout_mode = (opt.layout_mode+6)%7; consumed=true; }
                     else if (buf[i]=='t') {
                         if (opt.layout_mode == 6) {
-                            if (focus == 1 || focus == 2) overlay_swap = !overlay_swap;
+                            if (focus == 1 || focus == 2) {
+                                overlay_swap = !overlay_swap;
+                                opt.roles_set = true;
+                                opt.roles[0] = 0;
+                                opt.roles[1] = overlay_swap ? 2 : 1;
+                                opt.roles[2] = overlay_swap ? 1 : 2;
+                            }
                         } else {
                             int next = use_mpv ? (focus + 1) % 3 : (focus == 1 ? 2 : 1);
                             int tmp = perm[focus];
@@ -2136,7 +2154,17 @@ int main(int argc, char **argv) {
         {
             if (opt.layout_mode == 6) {
                 perm[0] = 0;
-                if (last_layout_mode != 6) { perm[1] = 1; perm[2] = 2; overlay_swap = false; last_overlay_swap = false; }
+                if (last_layout_mode != 6) {
+                    if (opt.roles_set) {
+                        perm[1] = opt.roles[1];
+                        perm[2] = opt.roles[2];
+                        overlay_swap = (opt.roles[1] == 2 && opt.roles[2] == 1);
+                        opt.roles[0] = 0;
+                    } else {
+                        perm[1] = 1; perm[2] = 2; overlay_swap = false;
+                    }
+                    last_overlay_swap = overlay_swap;
+                }
             }
             int layout_changed = 0;
             if (last_layout_mode != opt.layout_mode) { layout_changed = 1; last_layout_mode = opt.layout_mode; }
