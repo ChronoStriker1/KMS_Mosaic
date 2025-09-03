@@ -1859,7 +1859,7 @@ int main(int argc, char **argv) {
 
     // Set TTY to raw mode for key forwarding
     struct termios rawt; if (tcgetattr(0, &g_oldt)==0) { g_have_oldt = 1; rawt = g_oldt; cfmakeraw(&rawt); tcsetattr(0, TCSANOW, &rawt); atexit(restore_tty); }
-            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, Arrows resize, l/L layouts, r/R rotate roles, t swap focus/next, z fullscreen, c cycle FS, o OSD, ? help; Ctrl+Q quit.\n");
+            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, Arrows resize, l/L layouts, r/R rotate roles, t swap focus/next, z fullscreen, n/p next/prev FS, c cycle FS, o OSD, ? help; Ctrl+Q quit.\n");
     int focus = use_mpv ? 0 : 1; // 0=video, 1=top pane, 2=bottom pane
     bool show_osd = false; // default OSD off
     if (getenv("KMS_MPV_NO_OSD")) show_osd = false;
@@ -1937,6 +1937,8 @@ int main(int argc, char **argv) {
                     else if (buf[i]=='r') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p1; perm[1]=p2; perm[2]=p0; opt.roles_set=true; opt.roles[0]=perm[0]; opt.roles[1]=perm[1]; opt.roles[2]=perm[2]; consumed=true; }
                     else if (buf[i]=='R') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p2; perm[1]=p0; perm[2]=p1; opt.roles_set=true; opt.roles[0]=perm[0]; opt.roles[1]=perm[1]; opt.roles[2]=perm[2]; consumed=true; }
                     else if (buf[i]=='z') { fullscreen = !fullscreen; if (fullscreen){ fs_pane=focus; fs_cycle=false; } consumed=true; }
+                    else if (buf[i]=='n' && fullscreen) { fs_pane = (fs_pane+1)%3; focus = fs_pane; fs_cycle=false; consumed=true; }
+                    else if (buf[i]=='p' && fullscreen) { fs_pane = (fs_pane+2)%3; focus = fs_pane; fs_cycle=false; consumed=true; }
                     else if (buf[i]=='c') { fs_cycle = !fs_cycle; if (fs_cycle){ fullscreen=true; fs_pane=focus; fs_next_switch=0.0; } else { fullscreen=false; } consumed=true; }
                     else if (buf[i]=='f') { term_pane_force_rebuild(tp_a); term_pane_force_rebuild(tp_b); consumed=true; }
                     else if (buf[i]=='?') { show_help = !show_help; consumed=true; }
@@ -2339,6 +2341,8 @@ int main(int argc, char **argv) {
                     "  r/R: rotate roles C/A/B\n"
                     "  t: swap focused pane with next\n"
                     "  z: fullscreen focused pane\n"
+                    "  n: next fullscreen pane\n"
+                    "  p: previous fullscreen pane\n"
                     "  c: cycle fullscreen panes\n"
                     "  Arrows: resize splits (2x1/1x2/2over1/1over2)\n"
                     "  f: force pane rebuild\n"

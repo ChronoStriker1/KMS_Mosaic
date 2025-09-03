@@ -44,6 +44,11 @@ Semantic Versioning when version numbers are introduced.
 ### Fixed
 - `--roles` flag now correctly assigns panes based on slot order.
 
+## [0.3.4] - 2025-09-07
+
+### Added
+- Control Mode: `n` and `p` keys navigate to next/previous pane when fullscreen.
+
 ## [0.3.0] - 2025-09-01
 
 ### Added
