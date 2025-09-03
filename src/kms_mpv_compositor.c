@@ -1853,7 +1853,7 @@ int main(int argc, char **argv) {
 
     // Set TTY to raw mode for key forwarding
     struct termios rawt; if (tcgetattr(0, &g_oldt)==0) { g_have_oldt = 1; rawt = g_oldt; cfmakeraw(&rawt); tcsetattr(0, TCSANOW, &rawt); atexit(restore_tty); }
-            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, Arrows resize, l/L layouts, r/R rotate roles, t swap A/B, z fullscreen, c cycle FS, o OSD, ? help; Ctrl+Q quit.\n");
+            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, Arrows resize, l/L layouts, r/R rotate roles, t swap focus/next, z fullscreen, c cycle FS, o OSD, ? help; Ctrl+Q quit.\n");
     int focus = use_mpv ? 0 : 1; // 0=video, 1=top pane, 2=bottom pane
     bool show_osd = false; // default OSD off
     if (getenv("KMS_MPV_NO_OSD")) show_osd = false;
@@ -1917,7 +1917,17 @@ int main(int argc, char **argv) {
                 for (ssize_t i=0;i<n;i++) if (ui_control) {
                     if (buf[i]=='l') { opt.layout_mode = (opt.layout_mode+1)%6; consumed=true; }
                     else if (buf[i]=='L') { opt.layout_mode = (opt.layout_mode+5)%6; consumed=true; }
-                    else if (buf[i]=='t') { int tmp = perm[1]; perm[1]=perm[2]; perm[2]=tmp; opt.roles_set=true; opt.roles[0]=perm[0]; opt.roles[1]=perm[1]; opt.roles[2]=perm[2]; consumed=true; }
+                    else if (buf[i]=='t') {
+                        int next = use_mpv ? (focus + 1) % 3 : (focus == 1 ? 2 : 1);
+                        int tmp = perm[focus];
+                        perm[focus] = perm[next];
+                        perm[next] = tmp;
+                        opt.roles_set = true;
+                        opt.roles[0] = perm[0];
+                        opt.roles[1] = perm[1];
+                        opt.roles[2] = perm[2];
+                        consumed = true;
+                    }
                     else if (buf[i]=='r') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p1; perm[1]=p2; perm[2]=p0; opt.roles_set=true; opt.roles[0]=perm[0]; opt.roles[1]=perm[1]; opt.roles[2]=perm[2]; consumed=true; }
                     else if (buf[i]=='R') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p2; perm[1]=p0; perm[2]=p1; opt.roles_set=true; opt.roles[0]=perm[0]; opt.roles[1]=perm[1]; opt.roles[2]=perm[2]; consumed=true; }
                     else if (buf[i]=='z') { fullscreen = !fullscreen; if (fullscreen){ fs_pane=focus; fs_cycle=false; } consumed=true; }
@@ -2321,7 +2331,7 @@ int main(int argc, char **argv) {
                     "  o: toggle OSD\n"
                     "  l/L: cycle layouts\n"
                     "  r/R: rotate roles C/A/B\n"
-                    "  t: swap panes A/B\n"
+                    "  t: swap focused pane with next\n"
                     "  z: fullscreen focused pane\n"
                     "  c: cycle fullscreen panes\n"
                     "  Arrows: resize splits (2x1/1x2/2over1/1over2)\n"
@@ -2351,7 +2361,7 @@ int main(int argc, char **argv) {
         // Control-mode indicator OSD (always visible when active)
         if (!direct_mode && ui_control) {
             static osd_ctx *osdcm = NULL; if (!osdcm) osdcm = osd_create(opt.font_px?opt.font_px:20);
-            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  Arrows resize  l/L layouts  r/R rotate  t swap  z fullscreen  c cycle  o OSD  ? help");
+            osd_set_text(osdcm, "Control Mode (Ctrl+E)  Tab focus  Arrows resize  l/L layouts  r/R rotate  t swap next  z fullscreen  c cycle  o OSD  ? help");
             glBindFramebuffer(GL_FRAMEBUFFER, rt_fbo);
             gl_reset_state_2d();
             glViewport(0,0, logical_w, logical_h);
