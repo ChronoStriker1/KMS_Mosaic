@@ -2036,12 +2036,14 @@ int main(int argc, char **argv) {
                 if (ui_control) { for (ssize_t i=0;i<n;i++) if (buf[i]=='o') { show_osd = !show_osd; consumed=true; } }
                 // Ctrl+P: toggle mpv panscan
                 if (use_mpv) {
-                    for (ssize_t i=0; i<n; i++) {
+                    for (ssize_t i = 0; i < n; i++) {
                         unsigned char ch = (unsigned char)buf[i];
                         if (ch == 0x10) { // Ctrl+P
-                            const char *ps = opt.panscan ? opt.panscan : "1";
-                            const char *c[] = {"cycle-values", "panscan", "0", ps, NULL};
-                            mpv_command_async(m.mpv, 0, c);
+                            double cur = 0.0;
+                            if (mpv_get_property(m.mpv, "panscan", MPV_FORMAT_DOUBLE, &cur) >= 0) {
+                                double target = cur > 0.0 ? 0.0 : (opt.panscan ? atof(opt.panscan) : 1.0);
+                                mpv_set_property(m.mpv, "panscan", MPV_FORMAT_DOUBLE, &target);
+                            }
                             consumed = true;
                             break;
                         }
