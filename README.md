@@ -51,6 +51,7 @@ Run
 - ? (in Control Mode): help overlay
 - f (in Control Mode): force pane surface rebuild (refresh from vterm screen)
 - z (in Control Mode): fullscreen the focused pane
+- n / p (in Control Mode, fullscreen): next / previous fullscreen pane
 - c (in Control Mode): cycle fullscreen panes
 - Arrows (in Control Mode): resize column/row splits (split layouts)
   - The focused pane is outlined with a cyan border while in Control Mode.
