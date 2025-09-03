@@ -1764,8 +1764,10 @@ int main(int argc, char **argv) {
     // Slot-based layout and permutation control: 0=video,1=paneA,2=paneB
     static int perm[3] = {0,1,2};
     static int last_perm[3] = {0,1,2};
+    static bool overlay_swap = false; // track A/B order in overlay layout
+    static bool last_overlay_swap = false;
     if (opt.roles_set) { perm[0]=opt.roles[0]; perm[1]=opt.roles[1]; perm[2]=opt.roles[2]; }
-    if (opt.layout_mode == 6) { perm[0]=0; perm[1]=1; perm[2]=2; }
+    if (opt.layout_mode == 6) { perm[0]=0; perm[1]=1; perm[2]=2; overlay_swap=false; last_overlay_swap=false; }
     static int last_font_px_a=-1, last_font_px_b=-1;
     static pane_layout prev_a={0}, prev_b={0};
     static int last_layout_mode=-1;
@@ -1833,8 +1835,8 @@ int main(int argc, char **argv) {
     pane_layout slots[3] = { s0, s1, s2 };
     if (mode == 6) {
         lay_video = s0;
-        lay_a = s1;
-        lay_b = s2;
+        if (overlay_swap) { lay_a = s2; lay_b = s1; }
+        else { lay_a = s1; lay_b = s2; }
     } else {
         lay_video = slots[perm[0]];
         lay_a     = slots[perm[1]];
@@ -1956,14 +1958,18 @@ int main(int argc, char **argv) {
                     if (buf[i]=='l') { opt.layout_mode = (opt.layout_mode+1)%7; consumed=true; }
                     else if (buf[i]=='L') { opt.layout_mode = (opt.layout_mode+6)%7; consumed=true; }
                     else if (buf[i]=='t') {
-                        int next = use_mpv ? (focus + 1) % 3 : (focus == 1 ? 2 : 1);
-                        int tmp = perm[focus];
-                        perm[focus] = perm[next];
-                        perm[next] = tmp;
-                        opt.roles_set = true;
-                        opt.roles[0] = perm[0];
-                        opt.roles[1] = perm[1];
-                        opt.roles[2] = perm[2];
+                        if (opt.layout_mode == 6) {
+                            if (focus == 1 || focus == 2) overlay_swap = !overlay_swap;
+                        } else {
+                            int next = use_mpv ? (focus + 1) % 3 : (focus == 1 ? 2 : 1);
+                            int tmp = perm[focus];
+                            perm[focus] = perm[next];
+                            perm[next] = tmp;
+                            opt.roles_set = true;
+                            opt.roles[0] = perm[0];
+                            opt.roles[1] = perm[1];
+                            opt.roles[2] = perm[2];
+                        }
                         consumed = true;
                     }
                     else if (buf[i]=='r') { int p0=perm[0],p1=perm[1],p2=perm[2]; perm[0]=p1; perm[1]=p2; perm[2]=p0; opt.roles_set=true; opt.roles[0]=perm[0]; opt.roles[1]=perm[1]; opt.roles[2]=perm[2]; consumed=true; }
@@ -2128,12 +2134,16 @@ int main(int argc, char **argv) {
 
         // Recompute layout based on current rotation/layout/perm
         {
-            if (opt.layout_mode == 6) { perm[0]=0; perm[1]=1; perm[2]=2; }
+            if (opt.layout_mode == 6) {
+                perm[0] = 0;
+                if (last_layout_mode != 6) { perm[1] = 1; perm[2] = 2; overlay_swap = false; last_overlay_swap = false; }
+            }
             int layout_changed = 0;
             if (last_layout_mode != opt.layout_mode) { layout_changed = 1; last_layout_mode = opt.layout_mode; }
             if (last_right_frac_pct != opt.right_frac_pct) { layout_changed = 1; last_right_frac_pct = opt.right_frac_pct; }
             if (last_pane_split_pct != opt.pane_split_pct) { layout_changed = 1; last_pane_split_pct = opt.pane_split_pct; }
             if (last_perm[0]!=perm[0] || last_perm[1]!=perm[1] || last_perm[2]!=perm[2]) { layout_changed = 1; last_perm[0]=perm[0]; last_perm[1]=perm[1]; last_perm[2]=perm[2]; }
+            if (last_overlay_swap != overlay_swap) { layout_changed = 1; last_overlay_swap = overlay_swap; }
             if (last_fullscreen != (fullscreen?1:0) || last_fs_pane != fs_pane) { layout_changed=1; last_fullscreen = fullscreen?1:0; last_fs_pane = fs_pane; }
             int mode = opt.layout_mode; // 0=stack3,1=row3,2=2x1,3=1x2,4=2over1,5=1over2,6=overlay
             int split_pct = opt.pane_split_pct ? opt.pane_split_pct : 50; if (split_pct<10) split_pct=10; if (split_pct>90) split_pct=90;
@@ -2190,8 +2200,8 @@ int main(int argc, char **argv) {
             pane_layout slots[3] = { s0, s1, s2 };
             if (mode == 6) {
                 lay_video = s0;
-                lay_a = s1;
-                lay_b = s2;
+                if (overlay_swap) { lay_a = s2; lay_b = s1; }
+                else { lay_a = s1; lay_b = s2; }
             } else {
                 lay_video = slots[perm[0]]; lay_a = slots[perm[1]]; lay_b = slots[perm[2]];
             }
