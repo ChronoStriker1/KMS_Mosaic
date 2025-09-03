@@ -32,7 +32,7 @@ Run
 - Examples:
 - `./kms_mosaic --video /path/to/video.mp4`
 - `./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90`
-- `./kms_mosaic --no-config --smooth --loop --video-rotate 270 --panscan 1 --layout 2x1 --video /path/to/movie.mp4`
+  - `./kms_mosaic --no-config --smooth --loop-file --video-rotate 270 --panscan 1 --layout 2x1 --video /path/to/movie.mp4`
 - `./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22`
 - `./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle`
 - `./kms_mosaic --config /path/profile.conf`
@@ -72,11 +72,6 @@ Planned TODOs
 - Make connector/mode selection configurable.
 - Implement atomic modesetting + nonblocking pageflips. [in-progress]
 
-Atomic modesetting (experimental)
-- Enable with `--atomic`. If supported by the GPU/driver, the compositor uses DRM atomic to set the initial mode and flip via the primary plane. Falls back to legacy KMS if unavailable.
-- Optional: `--atomic-nonblock` enables event-driven nonblocking atomic flips (default is blocking for maximum robustness).
-- Optional: `--gl-finish` forces `glFinish()` before flips to serialize GPU work on stacks requiring explicit sync.
-
 Notes
 - This program becomes DRM master and will blank fbcon while active.
 - If you see permission errors, run as root or grant DRM access.
@@ -90,8 +85,8 @@ Flags
 - --playlist FILE: load an mpv playlist file (m3u, one path per line).
 - --playlist-extended FILE: custom playlist with per-line options (each line: "path | key=val,key=val").
 - --no-video: disable the video region and use full width for the text panes.
-- --loop-file: loop the current file indefinitely.
-- --loop: shorthand for --loop-file (infinite). Note: if you provide exactly one video and no playlist, looping is assumed by default.
+- --no-osd: disable the on-screen display.
+- --loop-file: loop the current file indefinitely (alias: --loop). Note: if you provide exactly one video and no playlist, looping is assumed by default.
 - --loop-playlist: loop the playlist indefinitely.
 - --shuffle: randomize playlist order (alias: --randomize).
 - --mpv-opt K=V: set global mpv option (repeatable), e.g., --mpv-opt keepaspect=yes.
