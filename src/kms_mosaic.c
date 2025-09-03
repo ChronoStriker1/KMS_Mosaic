@@ -1512,9 +1512,8 @@ int main(int argc, char **argv) {
                 "  c             Cycle fullscreen panes.\n"
                 "  o             Toggle OSD visibility.\n"
                 "  (Help shown automatically in Control Mode)\n"
-                "  Ctrl+Q        Quit (only active in Control Mode).\n\n",
-                "  Ctrl+Q        Quit (only active in Control Mode).\n"
-                "Outside Control Mode (video focus):\n"
+                "  Ctrl+Q        Quit (only active in Control Mode).\n\n"
+                "Always:\n"
                 "  Ctrl+P        Toggle mpv panscan.\n\n",
                 exe);
             return 0;
@@ -1906,7 +1905,7 @@ int main(int argc, char **argv) {
 
     // Set TTY to raw mode for key forwarding
     struct termios rawt; if (tcgetattr(0, &g_oldt)==0) { g_have_oldt = 1; rawt = g_oldt; cfmakeraw(&rawt); tcsetattr(0, TCSANOW, &rawt); atexit(restore_tty); }
-            fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, Arrows resize, l/L layouts, r/R rotate roles, t swap focus/next, z fullscreen, n/p next/prev FS, c cycle FS, o OSD; Ctrl+Q quit.\n");
+    fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus C/A/B, Arrows resize, l/L layouts, r/R rotate roles, t swap focus/next, z fullscreen, n/p next/prev FS, c cycle FS, o OSD; Ctrl+P panscan; Ctrl+Q quit.\n");
     int focus = use_mpv ? 0 : 1; // 0=video, 1=top pane, 2=bottom pane
     bool show_osd = false; // default OSD off
     if (getenv("KMS_MPV_NO_OSD")) show_osd = false;
@@ -2035,8 +2034,8 @@ int main(int argc, char **argv) {
                 }
                 // OSD toggle only in UI control mode
                 if (ui_control) { for (ssize_t i=0;i<n;i++) if (buf[i]=='o') { show_osd = !show_osd; consumed=true; } }
-                // Ctrl+P: toggle mpv panscan when video is focused
-                if (!ui_control && focus==0 && use_mpv) {
+                // Ctrl+P: toggle mpv panscan
+                if (use_mpv) {
                     for (ssize_t i=0; i<n; i++) {
                         unsigned char ch = (unsigned char)buf[i];
                         if (ch == 0x10) { // Ctrl+P
