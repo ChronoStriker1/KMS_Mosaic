@@ -541,9 +541,12 @@ term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *
     // Font
     font_init(&tp->font, font_px > 0 ? font_px : 18);
     tp->alpha = 255;
-    // Adjust cols/rows to pane size
-    tp->layout.cols = tp->layout.w / tp->font.cell_w;
-    tp->layout.rows = tp->layout.h / tp->font.cell_h;
+    // Adjust cols/rows to pane size.  Round up so the backing surface covers
+    // the requested rectangle even when the dimensions are not exact multiples
+    // of the cell size.  This prevents visible gaps when the pane sits next to
+    // other content, such as in portrait layouts.
+    tp->layout.cols = (tp->layout.w + tp->font.cell_w - 1) / tp->font.cell_w;
+    tp->layout.rows = (tp->layout.h + tp->font.cell_h - 1) / tp->font.cell_h;
     if (tp->layout.cols < 10) tp->layout.cols = 10;
     if (tp->layout.rows < 5) tp->layout.rows = 5;
 
@@ -583,8 +586,8 @@ term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const ch
     tp->use_shell_cmd = 1;
     tp->shell_cmd = strdup(shell_cmd);
     tp->argv_dup = NULL;
-    tp->layout.cols = tp->layout.w / tp->font.cell_w;
-    tp->layout.rows = tp->layout.h / tp->font.cell_h;
+    tp->layout.cols = (tp->layout.w + tp->font.cell_w - 1) / tp->font.cell_w;
+    tp->layout.rows = (tp->layout.h + tp->font.cell_h - 1) / tp->font.cell_h;
     if (tp->layout.cols < 10) tp->layout.cols = 10;
     if (tp->layout.rows < 5) tp->layout.rows = 5;
     tp->vt = vterm_new(tp->layout.rows, tp->layout.cols);
@@ -624,8 +627,8 @@ void term_pane_destroy(term_pane *tp) {
 void term_pane_resize(term_pane *tp, const pane_layout *layout) {
     pane_tex old = tp->surface; tp->surface = (pane_tex){0};
     tp->layout = *layout;
-    int cols = tp->layout.w / tp->font.cell_w;
-    int rows = tp->layout.h / tp->font.cell_h;
+    int cols = (tp->layout.w + tp->font.cell_w - 1) / tp->font.cell_w;
+    int rows = (tp->layout.h + tp->font.cell_h - 1) / tp->font.cell_h;
     if (cols < 10) cols = 10;
     if (rows < 5) rows = 5;
     /* Update the stored layout dimensions so subsequent redraw logic knows the
@@ -760,8 +763,8 @@ void term_pane_respawn(term_pane *tp) {
     }
     fcntl(tp->pty_master, F_SETFL, O_NONBLOCK);
     // Reapply size to PTY
-    int cols = tp->layout.w / tp->font.cell_w;
-    int rows = tp->layout.h / tp->font.cell_h;
+    int cols = (tp->layout.w + tp->font.cell_w - 1) / tp->font.cell_w;
+    int rows = (tp->layout.h + tp->font.cell_h - 1) / tp->font.cell_h;
     if (cols < 10) cols = 10;
     if (rows < 5) rows = 5;
     vterm_set_size(tp->vt, rows, cols);
@@ -842,8 +845,8 @@ void term_pane_set_font_px(term_pane *tp, int font_px) {
     font_destroy(&tp->font);
     font_init(&tp->font, font_px);
     // Update grid based on new cell size
-    int cols = tp->layout.w / tp->font.cell_w;
-    int rows = tp->layout.h / tp->font.cell_h;
+    int cols = (tp->layout.w + tp->font.cell_w - 1) / tp->font.cell_w;
+    int rows = (tp->layout.h + tp->font.cell_h - 1) / tp->font.cell_h;
     if (cols < 10) cols = 10;
     if (rows < 5) rows = 5;
     /* Update stored layout dimensions so subsequent logic uses the new grid */
