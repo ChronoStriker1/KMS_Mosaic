@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "term_pane.h"
+#include "font_util.h"
 #include "color.h"
 
 #include <assert.h>
@@ -24,7 +25,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
-// No libvterm callbacks are registered to avoid ABI mismatches.
+#define TERM_PANE_MAX_DIRTY_RANGES 16
 
 typedef struct {
     uint32_t codepoint;
@@ -33,26 +34,30 @@ typedef struct {
 } glyph_bitmap;
 
 typedef struct {
+    uint32_t cp;
+    glyph_bitmap gb;
+    uint64_t last_used;
+    int used;
+} glyph_cache_entry;
+
+typedef struct {
     FT_Library ftlib;
     FT_Face face;
     int px_size;
     int cell_w, cell_h, baseline;
-    // Simple glyph cache
-    struct {
-        uint32_t cp;
-        glyph_bitmap gb;
-        int used;
-    } *cache;
+    // Bounded glyph cache with open addressing and simple LRU eviction.
+    glyph_cache_entry *cache;
     int cache_cap;
     int cache_count;
+    uint64_t cache_tick;
 } font_ctx;
 
 typedef struct {
     GLuint tex;
     int tex_w, tex_h;
     bool dirty;
-    int dirty_y0, dirty_y1; // deprecated single range
-    struct { int y0, y1; } dirty_ranges[4];
+    int dirty_y0, dirty_y1;
+    struct { int y0, y1; } dirty_ranges[TERM_PANE_MAX_DIRTY_RANGES];
     int dirty_count;
     uint8_t *pixels; // RGBA8
 } pane_tex;
@@ -68,9 +73,9 @@ struct term_pane {
     font_ctx font;
     pane_tex surface;
     uint8_t alpha;
-
-    // Row-level change detection
-    uint32_t *row_hash; // length = layout.rows
+    bool pending_full_rebuild;
+    struct { int start_row, end_row; } pending_dirty[TERM_PANE_MAX_DIRTY_RANGES];
+    int pending_dirty_count;
 
     int use_shell_cmd;
     char *shell_cmd;
@@ -82,28 +87,15 @@ static void die(const char *msg) {
     exit(1);
 }
 
-static char* find_monospace_font(void) {
-    FcInit();
-    FcPattern *pat = FcNameParse((const FcChar8*)"monospace");
-    FcConfigSubstitute(NULL, pat, FcMatchPattern);
-    FcDefaultSubstitute(pat);
-    FcResult res;
-    FcPattern *match = FcFontMatch(NULL, pat, &res);
-    FcPatternDestroy(pat);
-    if (!match) return NULL;
-    FcChar8 *file = NULL;
-    if (FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch) {
-        char *out = strdup((const char*)file);
-        FcPatternDestroy(match);
-        return out;
-    }
-    FcPatternDestroy(match);
-    return NULL;
+static void glyph_bitmap_reset(glyph_bitmap *g) {
+    if (!g) return;
+    free(g->bitmap);
+    memset(g, 0, sizeof(*g));
 }
 
 static void font_init(font_ctx *f, int px_size) {
     if (FT_Init_FreeType(&f->ftlib)) die("FT_Init_FreeType");
-    char *path = find_monospace_font();
+    char *path = kms_font_find_monospace();
     if (!path) die("fontconfig monospace not found");
     if (FT_New_Face(f->ftlib, path, 0, &f->face)) die("FT_New_Face");
     free(path);
@@ -114,31 +106,76 @@ static void font_init(font_ctx *f, int px_size) {
     f->cell_w = (f->face->glyph->advance.x + 31) / 64; // 26.6 to int
     f->cell_h = px_size + 2; // add small leading
     f->baseline = (f->face->size->metrics.ascender + 31) / 64;
-    f->cache = NULL; f->cache_cap = 0; f->cache_count = 0;
+    f->cache_cap = 2048;
+    f->cache = calloc((size_t)f->cache_cap, sizeof(*f->cache));
+    f->cache_count = 0;
+    f->cache_tick = 0;
 }
 
 static void font_destroy(font_ctx *f) {
     if (f->cache) {
-        for (int i=0;i<f->cache_count;i++) free(f->cache[i].gb.bitmap);
+        for (int i=0; i<f->cache_cap; i++) {
+            if (f->cache[i].used) glyph_bitmap_reset(&f->cache[i].gb);
+        }
         free(f->cache);
     }
     if (f->face) FT_Done_Face(f->face);
     if (f->ftlib) FT_Done_FreeType(f->ftlib);
 }
 
+static uint32_t glyph_hash(uint32_t cp) {
+    return cp * 2654435761u;
+}
+
+static glyph_cache_entry *find_glyph_slot(font_ctx *f, uint32_t cp, int *empty_idx_out) {
+    if (empty_idx_out) *empty_idx_out = -1;
+    if (!f->cache || f->cache_cap <= 0) return NULL;
+    uint32_t mask = (uint32_t)(f->cache_cap - 1);
+    uint32_t idx = glyph_hash(cp) & mask;
+    for (int probe = 0; probe < f->cache_cap; probe++) {
+        glyph_cache_entry *entry = &f->cache[(idx + (uint32_t)probe) & mask];
+        if (!entry->used) {
+            if (empty_idx_out && *empty_idx_out < 0) {
+                *empty_idx_out = (int)(((idx + (uint32_t)probe) & mask));
+            }
+            return NULL;
+        }
+        if (entry->cp == cp) return entry;
+    }
+    return NULL;
+}
+
+static int find_lru_slot(font_ctx *f) {
+    int lru_idx = 0;
+    uint64_t lru_tick = UINT64_MAX;
+    for (int i = 0; i < f->cache_cap; i++) {
+        glyph_cache_entry *entry = &f->cache[i];
+        if (!entry->used) return i;
+        if (entry->last_used < lru_tick) {
+            lru_tick = entry->last_used;
+            lru_idx = i;
+        }
+    }
+    return lru_idx;
+}
+
 static glyph_bitmap* get_glyph(font_ctx *f, uint32_t cp) {
-    for (int i=0;i<f->cache_count;i++) if (f->cache[i].used && f->cache[i].cp==cp) return &f->cache[i].gb;
+    int empty_idx = -1;
+    glyph_cache_entry *entry = find_glyph_slot(f, cp, &empty_idx);
+    if (entry) {
+        entry->last_used = ++f->cache_tick;
+        return &entry->gb;
+    }
     if (FT_Load_Char(f->face, cp, FT_LOAD_RENDER)) return NULL;
     FT_GlyphSlot slot = f->face->glyph;
-    if (f->cache_count == f->cache_cap) {
-        int nc = f->cache_cap ? f->cache_cap*2 : 256;
-        f->cache = realloc(f->cache, (size_t)nc * sizeof(*f->cache));
-        for (int i=f->cache_cap;i<nc;i++) f->cache[i].used = 0;
-        f->cache_cap = nc;
-    }
-    int idx = f->cache_count++;
-    f->cache[idx].cp = cp; f->cache[idx].used = 1;
-    glyph_bitmap *g = &f->cache[idx].gb;
+    int idx = empty_idx >= 0 ? empty_idx : find_lru_slot(f);
+    entry = &f->cache[idx];
+    if (!entry->used) f->cache_count++;
+    else glyph_bitmap_reset(&entry->gb);
+    entry->cp = cp;
+    entry->used = 1;
+    entry->last_used = ++f->cache_tick;
+    glyph_bitmap *g = &entry->gb;
     g->codepoint = cp;
     g->w = slot->bitmap.width; g->h = slot->bitmap.rows;
     g->bearing_x = slot->bitmap_left; g->bearing_y = slot->bitmap_top;
@@ -167,21 +204,57 @@ static void pane_tex_destroy(pane_tex *t) {
     memset(t, 0, sizeof(*t));
 }
 
-static uint32_t mix_hash(uint32_t h, uint32_t x){ h ^= x + 0x9e3779b9u + (h<<6) + (h>>2); return h; }
-static uint32_t pane_row_hash(term_pane *tp, int y){
-    uint32_t h = 2166136261u; VTermScreenCell cell;
-    for (int x=0; x<tp->layout.cols; x++){
-        memset(&cell,0,sizeof cell);
-        vterm_screen_get_cell(tp->vts, (VTermPos){.row=y,.col=x}, &cell);
-        uint32_t cp = cell.chars[0]; uint32_t fg=0,bg=0;
-        if (cell.fg.type == VTERM_COLOR_INDEXED) fg = cell.fg.indexed.idx;
-        else if (cell.fg.type == VTERM_COLOR_RGB) fg = (cell.fg.rgb.red<<16)|(cell.fg.rgb.green<<8)|cell.fg.rgb.blue;
-        if (cell.bg.type == VTERM_COLOR_INDEXED) bg = cell.bg.indexed.idx;
-        else if (cell.bg.type == VTERM_COLOR_RGB) bg = (cell.bg.rgb.red<<16)|(cell.bg.rgb.green<<8)|cell.bg.rgb.blue;
-        h = mix_hash(h, cp); h = mix_hash(h, fg); h = mix_hash(h, bg);
+static void pane_add_pending_rows(term_pane *tp, int start_row, int end_row) {
+    if (!tp || tp->pending_full_rebuild) return;
+    if (start_row < 0) start_row = 0;
+    if (end_row > tp->layout.rows) end_row = tp->layout.rows;
+    if (start_row >= end_row) return;
+    for (int i = 0; i < tp->pending_dirty_count; i++) {
+        int cur_start = tp->pending_dirty[i].start_row;
+        int cur_end = tp->pending_dirty[i].end_row;
+        if (end_row < cur_start || start_row > cur_end) continue;
+        if (start_row < cur_start) tp->pending_dirty[i].start_row = start_row;
+        if (end_row > cur_end) tp->pending_dirty[i].end_row = end_row;
+        return;
     }
-    return h;
+    if (tp->pending_dirty_count >= TERM_PANE_MAX_DIRTY_RANGES) {
+        tp->pending_full_rebuild = true;
+        tp->pending_dirty_count = 0;
+        return;
+    }
+    tp->pending_dirty[tp->pending_dirty_count].start_row = start_row;
+    tp->pending_dirty[tp->pending_dirty_count].end_row = end_row;
+    tp->pending_dirty_count++;
 }
+
+static int pane_damage_cb(VTermRect rect, void *user) {
+    term_pane *tp = user;
+    pane_add_pending_rows(tp, rect.start_row, rect.end_row);
+    return 1;
+}
+
+static int pane_moverect_cb(VTermRect dest, VTermRect src, void *user) {
+    term_pane *tp = user;
+    pane_add_pending_rows(tp, src.start_row, src.end_row);
+    pane_add_pending_rows(tp, dest.start_row, dest.end_row);
+    return 1;
+}
+
+static int pane_resize_cb(int rows, int cols, void *user) {
+    (void)rows;
+    (void)cols;
+    term_pane *tp = user;
+    if (!tp) return 1;
+    tp->pending_full_rebuild = true;
+    tp->pending_dirty_count = 0;
+    return 1;
+}
+
+static const VTermScreenCallbacks pane_screen_callbacks = {
+    .damage = pane_damage_cb,
+    .moverect = pane_moverect_cb,
+    .resize = pane_resize_cb,
+};
 
 // Very small shader to draw the pane texture
 static GLuint pane_program = 0, pane_vbo = 0;
@@ -505,8 +578,6 @@ static void composite_cell(term_pane *tp, int cx, int cy, const VTermScreenCell 
     // cached glyph owned by font, no free
 }
 
-// No screen damage callbacks are used; we rebuild surfaces on demand.
-
 static void rebuild_surface(term_pane *tp) {
     // Re-render entire screen to CPU buffer
     if (tp->vts) vterm_screen_flush_damage(tp->vts);
@@ -522,8 +593,9 @@ static void rebuild_surface(term_pane *tp) {
             vterm_screen_get_cell(tp->vts, (VTermPos){.row=y,.col=x}, &cell);
             composite_cell(tp, x, y, &cell);
         }
-        if (tp->row_hash) tp->row_hash[y] = pane_row_hash(tp, y);
     }
+    tp->pending_full_rebuild = false;
+    tp->pending_dirty_count = 0;
 }
 
 void term_pane_reset_screen(term_pane *tp, int hard) {
@@ -560,7 +632,7 @@ term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *
     vterm_screen_enable_altscreen(tp->vts, 1);
     vterm_screen_reset(tp->vts, 1);
     vterm_screen_set_damage_merge(tp->vts, VTERM_DAMAGE_SCROLL);
-    // Avoid setting screen callbacks to prevent ABI mismatches; mark dirty on input instead.
+    vterm_screen_set_callbacks(tp->vts, &pane_screen_callbacks, tp);
 
     // PTY child
     tp->child_pid = spawn_pty_argv(argv, &tp->pty_master);
@@ -571,9 +643,8 @@ term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *
     int tex_w = tp->layout.cols * tp->font.cell_w;
     int tex_h = tp->layout.rows * tp->font.cell_h;
     pane_tex_init(&tp->surface, tex_w, tex_h);
-    tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
 
-    // Prime screen empty and populate row hashes so blank lines render
+    // Prime screen empty so blank lines render before the child emits output.
     rebuild_surface(tp);
     return tp;
 }
@@ -597,16 +668,15 @@ term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const ch
     vterm_screen_enable_altscreen(tp->vts, 1);
     vterm_screen_reset(tp->vts, 1);
     vterm_screen_set_damage_merge(tp->vts, VTERM_DAMAGE_SCROLL);
-    // Avoid setting screen callbacks to prevent ABI mismatches; mark dirty on input instead.
+    vterm_screen_set_callbacks(tp->vts, &pane_screen_callbacks, tp);
     tp->child_pid = spawn_pty_shell(shell_cmd, &tp->pty_master);
     fcntl(tp->pty_master, F_SETFL, O_NONBLOCK);
     set_pty_winsize(tp->pty_master, tp->layout.cols, tp->layout.rows);
     int tex_w = tp->layout.cols * tp->font.cell_w;
     int tex_h = tp->layout.rows * tp->font.cell_h;
     pane_tex_init(&tp->surface, tex_w, tex_h);
-    tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
 
-    // Prime screen empty and populate row hashes so blank lines render
+    // Prime screen empty so blank lines render before the child emits output.
     rebuild_surface(tp);
     return tp;
 }
@@ -617,7 +687,6 @@ void term_pane_destroy(term_pane *tp) {
     if (tp->pty_master>=0) close(tp->pty_master);
     pane_tex_destroy(&tp->surface);
     font_destroy(&tp->font);
-    free(tp->row_hash);
     if (tp->vt) vterm_free(tp->vt);
     if (tp->shell_cmd) free(tp->shell_cmd);
     if (tp->argv_dup) free_argv(tp->argv_dup);
@@ -655,8 +724,6 @@ void term_pane_resize(term_pane *tp, const pane_layout *layout) {
     }
     if (old.tex) glDeleteTextures(1, &old.tex);
     free(old.pixels);
-    free(tp->row_hash);
-    tp->row_hash = calloc((size_t)tp->layout.rows, sizeof(uint32_t));
     /* The newly allocated surface may contain uninitialized areas when the
      * pane grows. Re-render the current vterm screen so the texture is fully
      * populated rather than showing transparent regions until the application
@@ -664,51 +731,53 @@ void term_pane_resize(term_pane *tp, const pane_layout *layout) {
     rebuild_surface(tp);
 }
 
-static void update_changed_rows(term_pane *tp) {
-    if (!tp || !tp->vts) return;
-    int run_start = -1, run_end = -1; // current contiguous changed run [start..end]
-    tp->surface.dirty_count = 0;
-    for (int y=0; y<tp->layout.rows; y++) {
-        uint32_t h = pane_row_hash(tp, y);
-        if (h != tp->row_hash[y]) {
-            // Rebuild only this row
-            for (int x=0; x<tp->layout.cols; x++) {
-                VTermScreenCell cell; memset(&cell,0,sizeof cell);
-                vterm_screen_get_cell(tp->vts, (VTermPos){.row=y,.col=x}, &cell);
-                composite_cell(tp, x, y, &cell);
-            }
-            tp->row_hash[y] = h;
-            if (run_start < 0) { run_start = y; run_end = y; }
-            else if (y == run_end + 1) { run_end = y; }
-            else {
-                // close previous run
-                if (tp->surface.dirty_count < 4) {
-                    int y0 = run_start * tp->font.cell_h;
-                    int y1 = (run_end + 1) * tp->font.cell_h;
-                    int idx = tp->surface.dirty_count++;
-                    tp->surface.dirty_ranges[idx].y0 = y0;
-                    tp->surface.dirty_ranges[idx].y1 = y1;
-                }
-                run_start = y; run_end = y;
-            }
-        }
+static void mark_surface_dirty_rows(term_pane *tp, int start_row, int end_row) {
+    if (!tp) return;
+    if (start_row < 0) start_row = 0;
+    if (end_row > tp->layout.rows) end_row = tp->layout.rows;
+    if (start_row >= end_row) return;
+    int y0 = start_row * tp->font.cell_h;
+    int y1 = end_row * tp->font.cell_h;
+    if (tp->surface.dirty_count < TERM_PANE_MAX_DIRTY_RANGES) {
+        int idx = tp->surface.dirty_count++;
+        tp->surface.dirty_ranges[idx].y0 = y0;
+        tp->surface.dirty_ranges[idx].y1 = y1;
+    } else {
+        tp->surface.dirty_count = 1;
+        tp->surface.dirty_ranges[0].y0 = 0;
+        tp->surface.dirty_ranges[0].y1 = tp->surface.tex_h;
     }
-    if (run_start >= 0) {
-        if (tp->surface.dirty_count < 4) {
-            int y0 = run_start * tp->font.cell_h;
-            int y1 = (run_end + 1) * tp->font.cell_h;
-            int idx = tp->surface.dirty_count++;
-            tp->surface.dirty_ranges[idx].y0 = y0;
-            tp->surface.dirty_ranges[idx].y1 = y1;
+    if (y0 < tp->surface.dirty_y0) tp->surface.dirty_y0 = y0;
+    if (y1 > tp->surface.dirty_y1) tp->surface.dirty_y1 = y1;
+}
+
+static void update_damaged_rows(term_pane *tp) {
+    if (!tp || !tp->vts) return;
+    VTermScreenCell *row_cells = calloc((size_t)tp->layout.cols, sizeof(*row_cells));
+    if (!row_cells) {
+        rebuild_surface(tp);
+        return;
+    }
+    tp->surface.dirty_count = 0;
+    tp->surface.dirty_y0 = tp->surface.tex_h;
+    tp->surface.dirty_y1 = 0;
+    for (int i = 0; i < tp->pending_dirty_count; i++) {
+        int start_row = tp->pending_dirty[i].start_row;
+        int end_row = tp->pending_dirty[i].end_row;
+        for (int y = start_row; y < end_row; y++) {
+            for (int x = 0; x < tp->layout.cols; x++) {
+                memset(&row_cells[x], 0, sizeof(row_cells[x]));
+                vterm_screen_get_cell(tp->vts, (VTermPos){.row = y, .col = x}, &row_cells[x]);
+            }
+            for (int x = 0; x < tp->layout.cols; x++) {
+                composite_cell(tp, x, y, &row_cells[x]);
+            }
         }
+        mark_surface_dirty_rows(tp, start_row, end_row);
     }
     tp->surface.dirty = tp->surface.dirty_count > 0;
-    if (tp->surface.dirty) {
-        // Populate legacy single range for compatibility (min/max over ranges)
-        int y0 = tp->surface.tex_h, y1 = 0;
-        for (int i=0;i<tp->surface.dirty_count;i++){ if (tp->surface.dirty_ranges[i].y0 < y0) y0 = tp->surface.dirty_ranges[i].y0; if (tp->surface.dirty_ranges[i].y1 > y1) y1 = tp->surface.dirty_ranges[i].y1; }
-        tp->surface.dirty_y0 = y0; tp->surface.dirty_y1 = y1;
-    }
+    tp->pending_dirty_count = 0;
+    free(row_cells);
 }
 
 bool term_pane_poll(term_pane *tp) {
@@ -730,19 +799,23 @@ bool term_pane_poll(term_pane *tp) {
         }
     }
     if (changed) {
-        // Flush vterm damage and update only the changed rows
+        // Flush libvterm damage callbacks, then redraw only those rows.
         if (tp->vts) vterm_screen_flush_damage(tp->vts);
-        // Initialize dirty bounds to empty; expand in update_changed_rows
-        tp->surface.dirty_y0 = tp->surface.tex_h;
-        tp->surface.dirty_y1 = 0;
-        tp->surface.dirty_count = 0;
-        update_changed_rows(tp);
-        if (tp->surface.dirty_count == 0) {
-            // No row changes detected; nothing to upload
-            tp->surface.dirty = false;
+        if (tp->pending_full_rebuild) {
+            rebuild_surface(tp);
+        } else {
+            update_damaged_rows(tp);
+            if (tp->surface.dirty_count == 0) {
+                tp->surface.dirty = false;
+            }
         }
     }
     return changed;
+}
+
+int term_pane_get_fd(const term_pane *tp) {
+    if (!tp) return -1;
+    return tp->pty_master;
 }
 
 void term_pane_force_rebuild(term_pane *tp) {
@@ -823,7 +896,7 @@ bool term_measure_cell(int font_px, int *cell_w, int *cell_h) {
     if (font_px <= 0) font_px = 18;
     // Initialize a temporary freetype face via fontconfig monospace
     if (FT_Init_FreeType(&f.ftlib)) return false;
-    char *path = find_monospace_font();
+    char *path = kms_font_find_monospace();
     if (!path) { FT_Done_FreeType(f.ftlib); return false; }
     if (FT_New_Face(f.ftlib, path, 0, &f.face)) { free(path); FT_Done_FreeType(f.ftlib); return false; }
     free(path);
@@ -873,8 +946,6 @@ void term_pane_set_font_px(term_pane *tp, int font_px) {
     }
     if (old.tex) glDeleteTextures(1, &old.tex);
     free(old.pixels);
-    free(tp->row_hash);
-    tp->row_hash = calloc((size_t)rows, sizeof(uint32_t));
     /* After changing font metrics, the pane surface is reallocated.  Ensure
      * it reflects the current screen contents so the background is fully
      * drawn with the new dimensions. */

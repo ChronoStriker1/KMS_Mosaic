@@ -74,17 +74,12 @@ Layouts
 Planned TODOs
 - Refactor the monolithic compositor into separate DRM/GBM, mpv embed, and UI modules. [DRM/GBM split done]
 - Support a variable number of terminal panes rather than the fixed A/B pair.
-- The function find_monospace_font and surrounding FreeType initialization code appear in both src/osd.c and src/term_pane.c, leading to duplication and potential drift.
-- The glyph cache inside term_pane.c uses a linear search and grows without bounds, which can slow rendering for diverse Unicode output.
-- Change detection for terminal panes hashes every cell in every row (pane_row_hash), which is O(rows × cols) per frame.
-- term_pane_poll attempts to read from the PTY every frame, even when no data is available.
+- The glyph cache inside term_pane.c is bounded now, but it still uses a simple in-memory policy and could be tuned further for heavy Unicode workloads.
+- Terminal panes now use libvterm damage callbacks, but scroll-heavy workloads should still be profiled on real hardware.
 - src/kms_mosaic.c (≈2k+ lines) combines DRM setup, mpv integration, input handling, and UI logic, which hinders maintainability.
 - Improve Unicode/box drawing coverage and performance. [in-progress]
 - Make connector/mode selection configurable.
 - Implement atomic modesetting + nonblocking pageflips. [in-progress]
-- Replace linear glyph cache with a hashed LRU to cap memory and speed lookups.
-- Use libvterm damage callbacks instead of hashing every row for change detection.
-- Integrate PTY descriptors into the compositor event loop to avoid per-frame polling.
 
 
 Atomic modesetting (experimental)
@@ -95,6 +90,7 @@ Atomic modesetting (experimental)
 Notes
 - This program becomes DRM master and will blank fbcon while active.
 - If you see permission errors, run as root or grant DRM access.
+- Fontconfig monospace lookup lives in `src/font_util.c` and is shared by the OSD and terminal panes.
 
 Flags
 - --connector ID|NAME: choose output (e.g., 42 or HDMI-A-1, DP-1). Default: first connected.

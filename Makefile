@@ -8,7 +8,7 @@ PKGS = libdrm gbm egl glesv2 mpv vterm freetype2 fontconfig
 PKG_CFLAGS := $(shell pkg-config --cflags $(PKGS))
 PKG_LIBS   := $(shell pkg-config --libs   $(PKGS))
 
-SRC = src/kms_mosaic.c src/term_pane.c src/osd.c
+SRC = src/kms_mosaic.c src/app.c src/options.c src/layout.c src/media.c src/display.c src/render_gl.c src/panes.c src/runtime.c src/frame.c src/ui.c src/term_pane.c src/osd.c src/font_util.c
 BIN = kms_mosaic
 
 all: $(BIN)

@@ -1,0 +1,517 @@
+#define _GNU_SOURCE
+#include "options.h"
+
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+void parse_mode(const char *s, int *w, int *h, int *hz) {
+    if (!s) {
+        *w = *h = *hz = 0;
+        return;
+    }
+    int tw = 0, th = 0, thz = 0;
+    if (sscanf(s, "%dx%d@%d", &tw, &th, &thz) >= 2) {
+        *w = tw;
+        *h = th;
+        *hz = thz;
+    }
+}
+
+rotation_t parse_rot(const char *s) {
+    if (!s) return ROT_0;
+    int v = atoi(s);
+    switch (v) {
+        case 0: return ROT_0;
+        case 90: return ROT_90;
+        case 180: return ROT_180;
+        case 270: return ROT_270;
+        default: return ROT_0;
+    }
+}
+
+int parse_layout_mode(const char *s) {
+    if (!s) return -1;
+    if (!strcmp(s, "stack") || !strcmp(s, "stack3")) return 0;
+    if (!strcmp(s, "row") || !strcmp(s, "row3")) return 1;
+    if (!strcmp(s, "2x1")) return 2;
+    if (!strcmp(s, "1x2")) return 3;
+    if (!strcmp(s, "2over1")) return 4;
+    if (!strcmp(s, "1over2")) return 5;
+    if (!strcmp(s, "overlay")) return 6;
+    return -1;
+}
+
+const char *layout_mode_name(int mode) {
+    switch (mode) {
+        case 0: return "stack";
+        case 1: return "row";
+        case 2: return "2x1";
+        case 3: return "1x2";
+        case 4: return "2over1";
+        case 5: return "1over2";
+        case 6: return "overlay";
+        default: return "stack";
+    }
+}
+
+bool parse_roles_string(const char *s, int roles[3]) {
+    if (!s || !roles) return false;
+    int parsed[3] = {0, 1, 2};
+    bool used[3] = {false, false, false};
+    int slot = 0;
+    for (const char *p = s; *p && slot < 3; ++p) {
+        int role = -1;
+        char c = *p;
+        if (c == 'C' || c == 'c') role = 0;
+        else if (c == 'A' || c == 'a') role = 1;
+        else if (c == 'B' || c == 'b') role = 2;
+        if (role >= 0 && !used[role]) {
+            parsed[role] = slot++;
+            used[role] = true;
+        }
+    }
+    if (slot != 3) return false;
+    roles[0] = parsed[0];
+    roles[1] = parsed[1];
+    roles[2] = parsed[2];
+    return true;
+}
+
+void push_video(options_t *opt, const char *path) {
+    if (opt->video_count == opt->video_cap) {
+        int ncap = opt->video_cap ? opt->video_cap * 2 : 8;
+        opt->videos = realloc(opt->videos, (size_t)ncap * sizeof(video_item));
+        memset(opt->videos + opt->video_cap, 0, (size_t)(ncap - opt->video_cap) * sizeof(video_item));
+        opt->video_cap = ncap;
+    }
+    video_item *vi = &opt->videos[opt->video_count++];
+    memset(vi, 0, sizeof(*vi));
+    vi->path = path;
+    opt->video_path = path;
+}
+
+void push_video_opt(video_item *vi, const char *kv) {
+    if (!vi) return;
+    if (vi->nopts == vi->cap) {
+        int ncap = vi->cap ? vi->cap * 2 : 8;
+        vi->opts = realloc(vi->opts, (size_t)ncap * sizeof(char *));
+        vi->cap = ncap;
+    }
+    vi->opts[vi->nopts++] = kv;
+}
+
+const char *trim(char *s) {
+    if (!s) return s;
+    while (isspace((unsigned char)*s)) s++;
+    char *e = s + strlen(s);
+    while (e > s && isspace((unsigned char)e[-1])) *--e = '\0';
+    return s;
+}
+
+void parse_playlist_ext(options_t *opt, const char *file) {
+    FILE *f = fopen(file, "r");
+    if (!f) {
+        perror("playlist-ext open");
+        return;
+    }
+    char *line = NULL;
+    size_t cap = 0;
+    ssize_t n;
+    while ((n = getline(&line, &cap, f)) != -1) {
+        if (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[n - 1] = '\0';
+        char *p = (char *)trim(line);
+        if (*p == '#' || *p == '\0') continue;
+        char *bar = strchr(p, '|');
+        char *path = p;
+        char *optstr = NULL;
+        if (bar) {
+            *bar = '\0';
+            optstr = bar + 1;
+        }
+        push_video(opt, strdup(trim(path)));
+        if (optstr) {
+            video_item *vi = &opt->videos[opt->video_count - 1];
+            char *opts_dup = strdup(optstr);
+            char *tok = strtok(opts_dup, ",");
+            while (tok) {
+                push_video_opt(vi, strdup(trim(tok)));
+                tok = strtok(NULL, ",");
+            }
+            free(opts_dup);
+        }
+    }
+    free(line);
+    fclose(f);
+}
+
+void mpv_append_line(mpv_handle *mpv, const char *line) {
+    if (!mpv || !line) return;
+    char *dup = strdup(line);
+    if (!dup) return;
+    char *p = (char *)trim(dup);
+    if (*p == '#' || *p == '\0') {
+        free(dup);
+        return;
+    }
+    char *bar = strchr(p, '|');
+    char *optstr = NULL;
+    if (bar) {
+        *bar = '\0';
+        optstr = bar + 1;
+    }
+    if (!optstr) {
+        const char *cmd[] = {"loadfile", p, "append", NULL};
+        mpv_command_async(mpv, 0, cmd);
+    } else {
+        mpv_node root;
+        memset(&root, 0, sizeof(root));
+        root.format = MPV_FORMAT_NODE_ARRAY;
+        root.u.list = malloc(sizeof(*root.u.list));
+        root.u.list->num = 0;
+        root.u.list->values = NULL;
+        root.u.list->keys = NULL;
+#define PUSH_STR_NODE(str) do { \
+    root.u.list->values = realloc(root.u.list->values, sizeof(mpv_node) * (root.u.list->num + 1)); \
+    root.u.list->values[root.u.list->num].format = MPV_FORMAT_STRING; \
+    root.u.list->values[root.u.list->num].u.string = strdup(str); \
+    root.u.list->num++; \
+} while (0)
+        PUSH_STR_NODE("loadfile");
+        PUSH_STR_NODE(p);
+        PUSH_STR_NODE("append");
+#undef PUSH_STR_NODE
+        mpv_node map;
+        memset(&map, 0, sizeof(map));
+        map.format = MPV_FORMAT_NODE_MAP;
+        map.u.list = malloc(sizeof(*map.u.list));
+        map.u.list->num = 0;
+        map.u.list->values = NULL;
+        map.u.list->keys = NULL;
+        char *opts_dup = strdup(optstr);
+        char *tok = strtok(opts_dup, ",");
+        while (tok) {
+            char *kv = (char *)trim(tok);
+            char *eq = strchr(kv, '=');
+            if (eq) {
+                *eq = '\0';
+                char *key = strdup(trim(kv));
+                char *val = strdup(trim(eq + 1));
+                map.u.list->keys = realloc(map.u.list->keys, sizeof(char *) * (map.u.list->num + 1));
+                map.u.list->values = realloc(map.u.list->values, sizeof(mpv_node) * (map.u.list->num + 1));
+                map.u.list->keys[map.u.list->num] = key;
+                map.u.list->values[map.u.list->num].format = MPV_FORMAT_STRING;
+                map.u.list->values[map.u.list->num].u.string = val;
+                map.u.list->num++;
+            }
+            tok = strtok(NULL, ",");
+        }
+        free(opts_dup);
+        root.u.list->values = realloc(root.u.list->values, sizeof(mpv_node) * (root.u.list->num + 1));
+        root.u.list->keys = realloc(root.u.list->keys, sizeof(char *) * (root.u.list->num + 1));
+        root.u.list->keys[root.u.list->num] = strdup("options");
+        root.u.list->values[root.u.list->num] = map;
+        root.u.list->num++;
+        mpv_command_node_async(mpv, 0, &root);
+        mpv_free_node_contents(&root);
+    }
+    free(dup);
+}
+
+char **tokenize_file(const char *path, int *argc_out) {
+    FILE *f = fopen(path, "r");
+    if (!f) return NULL;
+    char **args = NULL;
+    int n = 0, cap = 0, c;
+    int state = 0;
+    char buf[4096];
+    int bi = 0;
+    while ((c = fgetc(f)) != EOF) {
+        if (state == 0) {
+            if (c == '#') {
+                while (c != EOF && c != '\n') c = fgetc(f);
+                if (c == EOF) break;
+                continue;
+            }
+            if (c == '\'') state = 2;
+            else if (c == '"') state = 3;
+            else if (c == '\n' || c == ' ' || c == '\t' || c == '\r') continue;
+            else {
+                if (bi < (int)sizeof(buf) - 1) buf[bi++] = (char)c;
+                state = 1;
+            }
+        } else if (state == 1) {
+            if (c == '\n' || c == ' ' || c == '\t' || c == '\r') {
+                buf[bi] = '\0';
+                if (n == cap) {
+                    cap = cap ? cap * 2 : 16;
+                    args = realloc(args, (size_t)cap * sizeof(char *));
+                }
+                args[n++] = strdup(buf);
+                bi = 0;
+                state = 0;
+            } else if (c == '\'') state = 2;
+            else if (c == '"') state = 3;
+            else if (bi < (int)sizeof(buf) - 1) buf[bi++] = (char)c;
+        } else if (state == 2) {
+            if (c == '\'') state = 1;
+            else if (bi < (int)sizeof(buf) - 1) buf[bi++] = (char)c;
+        } else if (state == 3) {
+            if (c == '"') state = 1;
+            else if (bi < (int)sizeof(buf) - 1) buf[bi++] = (char)c;
+        }
+    }
+    if (bi > 0) {
+        buf[bi] = '\0';
+        if (n == cap) {
+            cap = cap ? cap * 2 : 16;
+            args = realloc(args, (size_t)cap * sizeof(char *));
+        }
+        args[n++] = strdup(buf);
+    }
+    fclose(f);
+    *argc_out = n;
+    return args;
+}
+
+static void print_usage(const char *exe) {
+    fprintf(stderr,
+        "KMS Mosaic - tiled video + terminal panes (Linux KMS console)\n\n"
+        "Usage:\n"
+        "  %s [options] [video...]\n\n"
+        "Core options:\n"
+        "  --connector ID|NAME     Select DRM output (e.g. 42, HDMI-A-1, DP-1). Default: first connected.\n"
+        "  --mode WxH[@Hz]         Mode like 1920x1080@60. Default: preferred.\n"
+        "  --rotate 0|90|180|270   Presentation rotation (affects layout orientation).\n"
+        "  --font-size PX          Terminal font pixel size (default 18).\n"
+        "  --right-frac PCT        Right column width percentage (default 33).\n"
+        "  --video-frac PCT        Override: video width percentage.\n"
+        "  --pane-split PCT        Top row height percentage for split layouts (default 50).\n"
+        "  --pane-a \"CMD\"           Command for Pane A (default: btop).\n"
+        "  --pane-b \"CMD\"           Command for Pane B (default: tail -F /var/log/syslog -n 500).\n"
+        "  --layout M              stack | row | 2x1 | 1x2 | 2over1 | 1over2 | overlay\n"
+        "  --roles RRR             Slot roles order, e.g. CAB (default CAB).\n"
+        "  --fs-cycle-sec SEC      Fullscreen cycle interval for 'c' key.\n\n"
+        "Display/KMS:\n"
+        "  --atomic                Use DRM atomic modesetting (experimental; falls back on failure).\n"
+        "  --atomic-nonblock       Use nonblocking atomic flips (event-driven).\n"
+        "  --gl-finish             Call glFinish() before flips (serialize GPU).\n\n"
+        "Video/playlist:\n"
+        "  --video PATH            Add a video (repeatable). Bare args are treated as --video.\n"
+        "  --video-opt K=V         Per-video options (repeatable, applies to the last --video).\n"
+        "  --playlist FILE         Load playlist file.\n"
+        "  --playlist-extended F   Extended playlist (path | k=v,k=v per line).\n"
+        "  --playlist-fifo F       FIFO to append playlist entries from.\n"
+        "  --loop-file             Loop current file indefinitely.\n"
+        "  --loop                  Shorthand for --loop-file.\n"
+        "  --loop-playlist         Loop the whole playlist.\n"
+        "  --shuffle               Randomize playlist order.\n"
+        "  --mpv-opt K=V           Global mpv option (repeatable).\n"
+        "  --mpv-out FILE          Write mpv logs/events to FILE or FIFO.\n"
+        "  --video-rotate DEG      Pass-through to mpv video-rotate.\n"
+        "  --panscan VAL           Pass-through to mpv panscan.\n\n"
+        "Config and misc:\n"
+        "  --config FILE           Load options from file (supports quotes and # comments).\n"
+        "  --save-config FILE      Save current options to file.\n"
+        "  --save-config-default   Save to the default config path.\n"
+        "  --no-config             Do not auto-load default config.\n"
+        "  --list-connectors       Print connectors/modes and exit.\n"
+        "  --no-video              Disable the video pane.\n"
+        "  --no-panes              Disable terminal panes.\n"
+        "  --smooth                Apply a sensible playback preset.\n"
+        "  --gl-test               Render a diagnostic GL gradient and exit.\n"
+        "  --diag                  Print GL/driver diagnostics and exit.\n"
+        "  --debug                 Verbose logging.\n\n"
+        "Defaults and notes:\n"
+        "  - OSD is off by default (toggle in Control Mode with 'o').\n"
+        "  - If a single video is provided (no playlist), --loop is assumed.\n"
+        "  - Controls are gated behind Control Mode so panes and video receive keys normally.\n\n"
+        "Controls (toggle Control Mode with Ctrl+E):\n"
+        "  Tab           Cycle focus C/A/B (video/paneA/paneB).\n"
+        "  l / L         Cycle layouts forward/back.\n"
+        "  r / R         Rotate roles among C/A/B (and reverse).\n"
+        "  t             Swap panes A and B.\n"
+        "  z             Fullscreen focused pane.\n"
+        "  c             Cycle fullscreen panes.\n"
+        "  o             Toggle OSD visibility.\n"
+        "  (Help shown automatically in Control Mode)\n"
+        "  Ctrl+Q        Quit (only active in Control Mode).\n\n"
+        "Always:\n"
+        "  Ctrl+P        Toggle mpv panscan.\n\n",
+        exe);
+}
+
+int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
+    const char *cfg = NULL;
+    for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--config") && i + 1 < argc) {
+            cfg = argv[i + 1];
+            break;
+        }
+    }
+    if (!cfg) {
+        const char *def = default_config_path();
+        if (!opt->no_config && access(def, R_OK) == 0) cfg = def;
+    }
+
+    char **merged = NULL;
+    int margc = 0;
+    if (cfg) {
+        int cargc = 0;
+        char **cargv = tokenize_file(cfg, &cargc);
+        merged = malloc(sizeof(char *) * (size_t)(1 + cargc + argc));
+        merged[margc++] = argv[0];
+        for (int i = 0; i < cargc; ++i) merged[margc++] = cargv[i];
+        for (int i = 1; i < argc; ++i) {
+            if (!strcmp(argv[i], "--config") && i + 1 < argc) {
+                ++i;
+                continue;
+            }
+            merged[margc++] = argv[i];
+        }
+        argv = merged;
+        argc = margc;
+    }
+
+    for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--video") && i + 1 < argc) {
+            push_video(opt, argv[++i]);
+        } else if (!strcmp(argv[i], "--video-opt") && i + 1 < argc) {
+            if (opt->video_count > 0) push_video_opt(&opt->videos[opt->video_count - 1], argv[++i]);
+            else {
+                if (opt->n_mpv_opts == opt->cap_mpv_opts) {
+                    int nc = opt->cap_mpv_opts ? opt->cap_mpv_opts * 2 : 8;
+                    opt->mpv_opts = realloc(opt->mpv_opts, (size_t)nc * sizeof(char *));
+                    opt->cap_mpv_opts = nc;
+                }
+                opt->mpv_opts[opt->n_mpv_opts++] = argv[++i];
+            }
+        } else if (!strcmp(argv[i], "--playlist") && i + 1 < argc) opt->playlist_path = argv[++i];
+        else if (!strcmp(argv[i], "--config") && i + 1 < argc) opt->config_file = argv[++i];
+        else if (!strcmp(argv[i], "--save-config") && i + 1 < argc) opt->save_config_file = argv[++i];
+        else if (!strcmp(argv[i], "--playlist-extended") && i + 1 < argc) opt->playlist_ext = argv[++i];
+        else if (!strcmp(argv[i], "--playlist-fifo") && i + 1 < argc) opt->playlist_fifo = argv[++i];
+        else if (!strcmp(argv[i], "--mpv-out") && i + 1 < argc) opt->mpv_out_path = argv[++i];
+        else if (!strcmp(argv[i], "--connector") && i + 1 < argc) opt->connector_opt = argv[++i];
+        else if (!strcmp(argv[i], "--mode") && i + 1 < argc) parse_mode(argv[++i], &opt->mode_w, &opt->mode_h, &opt->mode_hz);
+        else if (!strcmp(argv[i], "--rotate") && i + 1 < argc) opt->rotation = parse_rot(argv[++i]);
+        else if (!strcmp(argv[i], "--font-size") && i + 1 < argc) opt->font_px = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--right-frac") && i + 1 < argc) opt->right_frac_pct = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--video-frac") && i + 1 < argc) opt->video_frac_pct = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--pane-split") && i + 1 < argc) opt->pane_split_pct = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--pane-a") && i + 1 < argc) opt->pane_a_cmd = argv[++i];
+        else if (!strcmp(argv[i], "--pane-b") && i + 1 < argc) opt->pane_b_cmd = argv[++i];
+        else if (!strcmp(argv[i], "--list-connectors")) opt->list_connectors = true;
+        else if (!strcmp(argv[i], "--no-video")) opt->no_video = true;
+        else if (!strcmp(argv[i], "--no-panes")) opt->no_panes = true;
+        else if (!strcmp(argv[i], "--diag")) opt->diag = true;
+        else if (!strcmp(argv[i], "--gl-test")) opt->gl_test = true;
+        else if (!strcmp(argv[i], "--no-config")) opt->no_config = true;
+        else if (!strcmp(argv[i], "--smooth")) opt->smooth = true;
+        else if (!strcmp(argv[i], "--layout") && i + 1 < argc) {
+            int mode = parse_layout_mode(argv[++i]);
+            if (mode >= 0) opt->layout_mode = mode;
+        } else if ((!strcmp(argv[i], "--landscape-layout") || !strcmp(argv[i], "--portrait-layout")) && i + 1 < argc) {
+            int mode = parse_layout_mode(argv[++i]);
+            if (mode >= 0) opt->layout_mode = mode;
+        } else if (!strcmp(argv[i], "--fs-cycle-sec") && i + 1 < argc) opt->fs_cycle_sec = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--roles") && i + 1 < argc) opt->roles_set = parse_roles_string(argv[++i], opt->roles);
+        else if (!strcmp(argv[i], "--loop-file")) opt->loop_file = true;
+        else if (!strcmp(argv[i], "--loop")) opt->loop_flag = true;
+        else if (!strcmp(argv[i], "--loop-playlist")) opt->loop_playlist = true;
+        else if (!strcmp(argv[i], "--shuffle") || !strcmp(argv[i], "--randomize")) opt->shuffle = true;
+        else if (!strcmp(argv[i], "--no-osd")) opt->no_osd = true;
+        else if (!strcmp(argv[i], "--atomic")) opt->use_atomic = true;
+        else if (!strcmp(argv[i], "--atomic-nonblock")) { opt->use_atomic = true; opt->atomic_nonblock = true; }
+        else if (!strcmp(argv[i], "--gl-finish")) opt->gl_finish = true;
+        else if (!strcmp(argv[i], "--mpv-opt") && i + 1 < argc) {
+            if (opt->n_mpv_opts == opt->cap_mpv_opts) {
+                int nc = opt->cap_mpv_opts ? opt->cap_mpv_opts * 2 : 8;
+                opt->mpv_opts = realloc(opt->mpv_opts, (size_t)nc * sizeof(char *));
+                opt->cap_mpv_opts = nc;
+            }
+            opt->mpv_opts[opt->n_mpv_opts++] = argv[++i];
+        } else if (!strcmp(argv[i], "--save-config-default")) opt->save_config_default = true;
+        else if (!strcmp(argv[i], "--debug")) *debug = 1;
+        else if (!strcmp(argv[i], "--video-rotate") && i + 1 < argc) opt->video_rotate = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--panscan") && i + 1 < argc) opt->panscan = argv[++i];
+        else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            print_usage(argv[0]);
+            return 1;
+        } else if (argv[i][0] != '-') {
+            push_video(opt, argv[i]);
+        } else {
+            fprintf(stderr, "Warning: unknown option '%s' (ignored). Use --help for usage.\n", argv[i]);
+        }
+    }
+
+    if (opt->playlist_ext) parse_playlist_ext(opt, opt->playlist_ext);
+    if (!opt->loop_playlist && (opt->playlist_path || opt->playlist_ext || opt->playlist_fifo)) opt->loop_playlist = true;
+    if (!opt->playlist_path && !opt->playlist_ext && !opt->playlist_fifo) {
+        if (opt->video_count == 1 && !opt->loop_file && !opt->loop_flag) opt->loop_flag = true;
+    }
+    return 0;
+}
+
+const char *default_config_path(void) {
+    static char buf[512];
+    if (access("/boot/config", F_OK) == 0) {
+        snprintf(buf, sizeof(buf), "/boot/config/kms_mosaic.conf");
+        return buf;
+    }
+    const char *xdg = getenv("XDG_CONFIG_HOME");
+    const char *home = getenv("HOME");
+    if (xdg && *xdg) {
+        snprintf(buf, sizeof(buf), "%s/kms_mosaic.conf", xdg);
+        return buf;
+    }
+    if (home && *home) {
+        snprintf(buf, sizeof(buf), "%s/.config/kms_mosaic.conf", home);
+        return buf;
+    }
+    snprintf(buf, sizeof(buf), ".kms_mosaic.conf");
+    return buf;
+}
+
+void save_config(const options_t *opt, const char *path) {
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        perror("save-config");
+        return;
+    }
+    if (opt->connector_opt) fprintf(f, "--connector '%s'\n", opt->connector_opt);
+    if (opt->mode_w || opt->mode_h) fprintf(f, "--mode %dx%d@%d\n", opt->mode_w, opt->mode_h, opt->mode_hz);
+    if (opt->rotation) fprintf(f, "--rotate %d\n", (int)opt->rotation);
+    if (opt->font_px) fprintf(f, "--font-size %d\n", opt->font_px);
+    const char *lay_str = layout_mode_name(opt->layout_mode);
+    fprintf(f, "--layout %s\n", lay_str);
+    if (opt->video_frac_pct) fprintf(f, "--video-frac %d\n", opt->video_frac_pct);
+    else if (opt->right_frac_pct) fprintf(f, "--right-frac %d\n", opt->right_frac_pct);
+    if (opt->pane_split_pct) fprintf(f, "--pane-split %d\n", opt->pane_split_pct);
+    if (opt->roles_set) {
+        fprintf(f, "--roles %c%c%c\n",
+                opt->roles[0] == 0 ? 'C' : opt->roles[0] == 1 ? 'A' : 'B',
+                opt->roles[1] == 0 ? 'C' : opt->roles[1] == 1 ? 'A' : 'B',
+                opt->roles[2] == 0 ? 'C' : opt->roles[2] == 1 ? 'A' : 'B');
+    }
+    if (opt->fs_cycle_sec) fprintf(f, "--fs-cycle-sec %d\n", opt->fs_cycle_sec);
+    if (opt->pane_a_cmd) fprintf(f, "--pane-a '%s'\n", opt->pane_a_cmd);
+    if (opt->pane_b_cmd) fprintf(f, "--pane-b '%s'\n", opt->pane_b_cmd);
+    if (opt->no_video) fprintf(f, "--no-video\n");
+    if (opt->loop_file) fprintf(f, "--loop-file\n");
+    if (opt->loop_playlist) fprintf(f, "--loop-playlist\n");
+    if (opt->shuffle) fprintf(f, "--shuffle\n");
+    for (int i = 0; i < opt->n_mpv_opts; i++) fprintf(f, "--mpv-opt '%s'\n", opt->mpv_opts[i]);
+    if (opt->playlist_path) fprintf(f, "--playlist '%s'\n", opt->playlist_path);
+    if (opt->playlist_ext) fprintf(f, "--playlist-extended '%s'\n", opt->playlist_ext);
+    if (opt->playlist_fifo) fprintf(f, "--playlist-fifo '%s'\n", opt->playlist_fifo);
+    if (opt->mpv_out_path) fprintf(f, "--mpv-out '%s'\n", opt->mpv_out_path);
+    for (int i = 0; i < opt->video_count; i++) {
+        const video_item *vi = &opt->videos[i];
+        fprintf(f, "--video '%s'\n", vi->path);
+        for (int k = 0; k < vi->nopts; k++) fprintf(f, "--video-opt '%s'\n", vi->opts[k]);
+    }
+    fclose(f);
+}

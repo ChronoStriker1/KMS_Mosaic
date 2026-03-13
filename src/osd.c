@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "osd.h"
+#include "font_util.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -30,25 +31,9 @@ static void die_local(const char *msg) {
     exit(1);
 }
 
-static char* find_monospace_font(void) {
-    FcInit();
-    FcPattern *pat = FcNameParse((const FcChar8*)"monospace");
-    FcConfigSubstitute(NULL, pat, FcMatchPattern);
-    FcDefaultSubstitute(pat);
-    FcResult res; FcPattern *match = FcFontMatch(NULL, pat, &res); FcPatternDestroy(pat);
-    if (!match) return NULL;
-    FcChar8 *file = NULL;
-    if (FcPatternGetString(match, FC_FILE, 0, &file) == FcResultMatch) {
-        char *out = strdup((const char*)file);
-        FcPatternDestroy(match);
-        return out;
-    }
-    FcPatternDestroy(match); return NULL;
-}
-
 static void font_init(font_ctx *f, int px_size) {
     if (FT_Init_FreeType(&f->ftlib)) die_local("FT_Init_FreeType");
-    char *path = find_monospace_font();
+    char *path = kms_font_find_monospace();
     if (!path) die_local("fontconfig monospace not found");
     if (FT_New_Face(f->ftlib, path, 0, &f->face)) die_local("FT_New_Face");
     free(path);
