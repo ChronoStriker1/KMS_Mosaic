@@ -4,12 +4,8 @@ KMS Mosaic
 Direct-to-KMS video + terminal compositor for the Linux console.
 
 It uses DRM/KMS + GBM + EGL/GLES2 for scanout, libmpv for video rendering, and
-libvterm for terminal panes. The current product model is still a fixed
-three-slot mosaic:
-
-- Slot C: video
-- Slot A: terminal pane A
-- Slot B: terminal pane B
+libvterm for terminal panes. The compositor keeps one video slot plus a
+configurable list of terminal panes.
 
 The runtime is modular now. The old single-file compositor has been split into:
 
@@ -37,7 +33,7 @@ Implemented:
 - Indexed pane-array plumbing through `app`, `frame`, and `panes` instead of separate A/B argument chains
 - Slot-indexed layout output through `layout`, `app`, and `frame` instead of named `video` / `pane_a` / `pane_b` layout fields
 - Indexed pane pollfd handling through `runtime` instead of dedicated pane-A/pane-B poll slots
-- User-facing variable terminal pane counts up to four panes
+- User-facing variable terminal pane counts
 - Runtime pane, scene, UI, and pollfd storage now allocates from the configured pane count instead of fixed-cap live buffers
 - Option parsing and layout output now allocate pane/role storage dynamically, including generic `--pane N "CMD"` support
 - DRM atomic modesetting with optional nonblocking flips
@@ -46,9 +42,9 @@ Implemented:
 
 Still not implemented:
 
-- Truly unbounded pane counts end-to-end; legacy named pane shortcuts are still documented around the first four panes
-- Generalized pane-role naming beyond the legacy A/B plus numeric extension model
-- Full removal of the remaining legacy first-four-pane shortcuts from the config/UI surface
+- Richer layout families for very large pane counts
+- More polished naming/help text for panes beyond the legacy A/B/C/D shortcuts
+- Further terminal rendering/performance tuning under heavy Unicode and scroll load
 
 Build
 -----
@@ -105,7 +101,7 @@ Defaults:
 - Pane A default command: `btop --utf-force`
 - Pane B default command: `tail -F /var/log/syslog -n 500`
   - Fallbacks: `journalctl -f`, then `/var/log/messages`
-- Supported pane count range: `1` to `4`
+- Supported pane count range: `1+` via `--pane-count N`
 - Single-video runs auto-enable loop mode unless a playlist is in use
 
 Controls
@@ -188,7 +184,6 @@ Roadmap
 
 High-value remaining work:
 
-- Remove the remaining first-four-pane shortcut assumptions from help/config/UI and treat all panes uniformly
-- Replace the remaining bounded config/layout slot arrays with fully dynamic storage
+- Add more intentional layouts for higher pane counts instead of relying mostly on split-and-tile behavior
 - Keep tightening terminal performance under heavy Unicode and scroll loads
-- Simplify the remaining legacy role/label compatibility paths in config and UI
+- Simplify pane naming/help text so higher-count configurations read more naturally in the UI and saved configs
