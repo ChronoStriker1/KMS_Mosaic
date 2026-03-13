@@ -64,25 +64,35 @@ bundle_one() {
   [ ! -e "$so" ] && return 0
   if exclude_lib "$so"; then return 0; fi
   local base="$(basename "$so")"
-  if [ ! -e "$LIBDIR/$base" ]; then
-    cp -L "$so" "$LIBDIR/$base" || true
-    # Recurse into this library's deps
-    if command -v ldd >/dev/null 2>&1; then
-      ldd "$LIBDIR/$base" | while read -r line; do
-        dep="$(echo "$line" | awk '/=>/ {print $3} !/=>/ {print $1}')"
-        [ "$dep" = "not" ] && dep=""
-        bundle_one "$dep"
-      done
-    fi
-  fi
+  cp -L "$so" "$LIBDIR/$base" || true
 }
 
 if command -v ldd >/dev/null 2>&1; then
   echo "Bundling shared libraries recursively into $LIBDIR"
-  ldd ./kms_mosaic | while read -r line; do
+  declare -A seen=()
+  queue=()
+  while read -r line; do
     so="$(echo "$line" | awk '/=>/ {print $3} !/=>/ {print $1}')"
     [ "$so" = "not" ] && so=""
+    [ -n "$so" ] && queue+=("$so")
+  done < <(ldd ./kms_mosaic)
+
+  idx=0
+  while [ "$idx" -lt "${#queue[@]}" ]; do
+    so="${queue[$idx]}"
+    idx=$((idx + 1))
+    [ -z "$so" ] && continue
+    [ ! -e "$so" ] && continue
+    if exclude_lib "$so"; then continue; fi
+    if [ -n "${seen[$so]:-}" ]; then continue; fi
+    seen["$so"]=1
+    if ! file -b "$so" | grep -q 'ELF'; then continue; fi
     bundle_one "$so"
+    while read -r line; do
+      dep="$(echo "$line" | awk '/=>/ {print $3} !/=>/ {print $1}')"
+      [ "$dep" = "not" ] && dep=""
+      [ -n "$dep" ] && queue+=("$dep")
+    done < <(timeout 5s ldd "$so" 2>/dev/null || true)
   done
 fi
 

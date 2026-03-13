@@ -22,6 +22,7 @@ void term_pane_resize(term_pane *tp, const pane_layout *layout);
 
 // Pump PTY -> libvterm; returns true if screen content changed
 bool term_pane_poll(term_pane *tp);
+int term_pane_get_fd(const term_pane *tp);
 
 // Render cached screen to OpenGL (upload texture when dirty)
 void term_pane_render(term_pane *tp, int fb_w, int fb_h);
