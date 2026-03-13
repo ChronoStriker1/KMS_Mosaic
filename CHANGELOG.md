@@ -20,12 +20,12 @@
   the layout/app/frame path.
 - Replaced dedicated pane-A/pane-B runtime poll slots with indexed pane pollfd
   handling.
-- Added user-facing support for configuring and running up to four terminal panes,
-  with new `--pane-count`, `--pane-c`, and `--pane-d` options plus generalized
-  multi-pane layout tiling.
+- Added user-facing support for configuring variable terminal pane counts, with
+  `--pane-count`, legacy `--pane-a`..`--pane-d` shortcuts, generic `--pane N`
+  options, and generalized multi-pane layout tiling.
 - Replaced fixed-cap live runtime buffers for panes, scene storage, UI role state,
   and pollfds with allocations sized from the configured pane count.
 - Replaced fixed-cap option/layout pane and role storage with dynamic allocations,
-  and added generic `--pane N "CMD"` configuration support.
+  including generic `--pane N "CMD"` configuration support.
 - Updated the README and project guidance docs to reflect the current modular
   architecture, build path, and remaining roadmap.
