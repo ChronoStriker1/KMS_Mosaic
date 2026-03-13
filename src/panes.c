@@ -1,13 +1,38 @@
 #include "panes.h"
 
+#include <stdint.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
-void panes_init_runtime(pane_runtime *panes) {
+term_pane *panes_get_term(const pane_runtime *panes, int slot) {
+    if (!panes || slot < 0 || slot >= panes->count) return NULL;
+    return panes->tp[slot];
+}
+
+bool panes_init_runtime(pane_runtime *panes, int pane_count) {
     memset(panes, 0, sizeof(*panes));
-    panes->last_font_px_a = -1;
-    panes->last_font_px_b = -1;
+    panes->count = pane_count;
+    panes->tp = calloc((size_t)pane_count, sizeof(*panes->tp));
+    panes->last_font_px = malloc((size_t)pane_count * sizeof(*panes->last_font_px));
+    panes->prev = calloc((size_t)pane_count, sizeof(*panes->prev));
+    if (!panes->tp || !panes->last_font_px || !panes->prev) {
+        panes_destroy(panes);
+        return false;
+    }
+    for (int i = 0; i < pane_count; ++i) panes->last_font_px[i] = -1;
+    return true;
+}
+
+static const char *panes_slot_name(int slot) {
+    switch (slot) {
+        case PANE_SLOT_A: return "A";
+        case PANE_SLOT_B: return "B";
+        case PANE_SLOT_C: return "C";
+        case PANE_SLOT_D: return "D";
+        default: return "?";
+    }
 }
 
 static int panes_fit_font_px(int requested, const pane_layout *lay, int min_cols, int min_rows,
@@ -36,90 +61,101 @@ static int panes_fit_font_px(int requested, const pane_layout *lay, int min_cols
     return font_px;
 }
 
-void panes_compute_font_sizes(const options_t *opt, const pane_layout *lay_a, const pane_layout *lay_b,
-                              int *font_px_a, int *font_px_b) {
-    int cell_w = 0;
-    int cell_h = 0;
-    *font_px_a = panes_fit_font_px(opt->font_px ? opt->font_px : 18, lay_a, 80, 24, &cell_w, &cell_h);
-    *font_px_b = panes_fit_font_px(opt->font_px ? opt->font_px : *font_px_a, lay_b, 60, 20, &cell_w, &cell_h);
+void panes_compute_font_sizes(const options_t *opt, const pane_layout *layouts,
+                              int pane_count, int *font_sizes) {
+    int base_font = opt->font_px ? opt->font_px : 18;
+
+    for (int i = 0; i < pane_count; ++i) {
+        int cell_w = 0;
+        int cell_h = 0;
+        int requested = (i == 0) ? base_font : font_sizes[i - 1];
+        int min_cols = (i == 0) ? 80 : (i == 1 ? 60 : 50);
+        int min_rows = (i == 0) ? 24 : (i == 1 ? 20 : 16);
+        font_sizes[i] = panes_fit_font_px(requested, &layouts[i], min_cols, min_rows, &cell_w, &cell_h);
+    }
 }
 
-void panes_create(pane_runtime *panes, const options_t *opt, const pane_layout *lay_a, const pane_layout *lay_b, bool debug) {
-    int font_px_a = 0;
-    int font_px_b = 0;
-    int cell_w_a = 8;
-    int cell_h_a = 16;
-    panes_compute_font_sizes(opt, lay_a, lay_b, &font_px_a, &font_px_b);
-    term_measure_cell(font_px_a, &cell_w_a, &cell_h_a);
-    if (debug) {
-        fprintf(stderr, "Pane A min 80x24 -> using font_px=%d (cell=%dx%d), pane_px=%dx%d gives ~%dx%d chars\n",
-                font_px_a, cell_w_a, cell_h_a, lay_a->w, lay_a->h, lay_a->w / cell_w_a, lay_a->h / cell_h_a);
-    }
-    if (opt->pane_a_cmd) panes->tp_a = term_pane_create_cmd(lay_a, font_px_a, opt->pane_a_cmd);
-    else {
-        char *argv_a[] = { "btop", "--utf-force", NULL };
-        panes->tp_a = term_pane_create(lay_a, font_px_a, "btop", argv_a);
-    }
-    if (opt->pane_b_cmd) panes->tp_b = term_pane_create_cmd(lay_b, font_px_b, opt->pane_b_cmd);
-    else {
-        char *argv_b[6];
-        const char *cmd_b = NULL;
-        if (access("/var/log/syslog", R_OK) == 0) {
-            cmd_b = "tail";
-            argv_b[0] = "tail"; argv_b[1] = "-F"; argv_b[2] = "/var/log/syslog"; argv_b[3] = "-n"; argv_b[4] = "500"; argv_b[5] = NULL;
-        } else if (access("/usr/bin/journalctl", X_OK) == 0) {
-            cmd_b = "journalctl";
-            argv_b[0] = "journalctl"; argv_b[1] = "-f"; argv_b[2] = NULL; argv_b[3] = NULL; argv_b[4] = NULL; argv_b[5] = NULL;
-        } else {
-            cmd_b = "tail";
-            argv_b[0] = "tail"; argv_b[1] = "-F"; argv_b[2] = "/var/log/messages"; argv_b[3] = "-n"; argv_b[4] = "500"; argv_b[5] = NULL;
+void panes_create(pane_runtime *panes, const options_t *opt, const pane_layout *layouts, bool debug) {
+    int *font_sizes = calloc((size_t)panes->count, sizeof(*font_sizes));
+    if (!font_sizes) return;
+    panes->count = opt->pane_count;
+
+    panes_compute_font_sizes(opt, layouts, panes->count, font_sizes);
+    for (int i = 0; i < panes->count; ++i) {
+        int cell_w = 8;
+        int cell_h = 16;
+        term_measure_cell(font_sizes[i], &cell_w, &cell_h);
+        if (debug) {
+            fprintf(stderr, "Pane %s using font_px=%d (cell=%dx%d), pane_px=%dx%d gives ~%dx%d chars\n",
+                    panes_slot_name(i), font_sizes[i], cell_w, cell_h,
+                    layouts[i].w, layouts[i].h, layouts[i].w / cell_w, layouts[i].h / cell_h);
         }
-        panes->tp_b = term_pane_create(lay_b, font_px_b, cmd_b, argv_b);
+
+        if (opt->pane_cmds[i]) {
+            panes->tp[i] = term_pane_create_cmd(&layouts[i], font_sizes[i], opt->pane_cmds[i]);
+        } else if (i == PANE_SLOT_A) {
+            char *argv_a[] = { "btop", "--utf-force", NULL };
+            panes->tp[i] = term_pane_create(&layouts[i], font_sizes[i], "btop", argv_a);
+        } else if (i == PANE_SLOT_B) {
+            char *argv_b[6];
+            const char *cmd_b = NULL;
+            if (access("/var/log/syslog", R_OK) == 0) {
+                cmd_b = "tail";
+                argv_b[0] = "tail"; argv_b[1] = "-F"; argv_b[2] = "/var/log/syslog"; argv_b[3] = "-n"; argv_b[4] = "500"; argv_b[5] = NULL;
+            } else if (access("/usr/bin/journalctl", X_OK) == 0) {
+                cmd_b = "journalctl";
+                argv_b[0] = "journalctl"; argv_b[1] = "-f"; argv_b[2] = NULL; argv_b[3] = NULL; argv_b[4] = NULL; argv_b[5] = NULL;
+            } else {
+                cmd_b = "tail";
+                argv_b[0] = "tail"; argv_b[1] = "-F"; argv_b[2] = "/var/log/messages"; argv_b[3] = "-n"; argv_b[4] = "500"; argv_b[5] = NULL;
+            }
+            panes->tp[i] = term_pane_create(&layouts[i], font_sizes[i], cmd_b, argv_b);
+        } else {
+            char *argv_top[] = { "btop", "--utf-force", NULL };
+            panes->tp[i] = term_pane_create(&layouts[i], font_sizes[i], "btop", argv_top);
+        }
+
+        panes->last_font_px[i] = font_sizes[i];
+        panes->prev[i] = layouts[i];
     }
-    panes->last_font_px_a = font_px_a;
-    panes->last_font_px_b = font_px_b;
-    panes->prev_a = *lay_a;
-    panes->prev_b = *lay_b;
+    free(font_sizes);
     panes_apply_layout_mode_alpha(opt, panes);
 }
 
 void panes_apply_layout_mode_alpha(const options_t *opt, pane_runtime *panes) {
-    if (!panes->tp_a || !panes->tp_b) return;
-    if (opt->layout_mode == 6) {
-        term_pane_set_alpha(panes->tp_a, 192);
-        term_pane_set_alpha(panes->tp_b, 192);
-    } else {
-        term_pane_set_alpha(panes->tp_a, 255);
-        term_pane_set_alpha(panes->tp_b, 255);
+    uint8_t alpha = (opt->layout_mode == 6) ? 192 : 255;
+    for (int i = 0; i < panes->count; ++i) {
+        if (panes->tp[i]) term_pane_set_alpha(panes->tp[i], alpha);
     }
 }
 
-void panes_sync_layout(pane_runtime *panes, const pane_layout *lay_a, const pane_layout *lay_b,
-                       int font_px_a, int font_px_b) {
-    if (panes->last_font_px_a != font_px_a) {
-        term_pane_set_font_px(panes->tp_a, font_px_a);
-        panes->last_font_px_a = font_px_a;
-    }
-    if (panes->prev_a.x != lay_a->x || panes->prev_a.y != lay_a->y ||
-        panes->prev_a.w != lay_a->w || panes->prev_a.h != lay_a->h) {
-        term_pane_resize(panes->tp_a, lay_a);
-        panes->prev_a = *lay_a;
-    }
-    if (panes->last_font_px_b != font_px_b) {
-        term_pane_set_font_px(panes->tp_b, font_px_b);
-        panes->last_font_px_b = font_px_b;
-    }
-    if (panes->prev_b.x != lay_b->x || panes->prev_b.y != lay_b->y ||
-        panes->prev_b.w != lay_b->w || panes->prev_b.h != lay_b->h) {
-        term_pane_resize(panes->tp_b, lay_b);
-        panes->prev_b = *lay_b;
+void panes_sync_layout(pane_runtime *panes, const pane_layout *layouts,
+                       int pane_count, const int *font_sizes) {
+    panes->count = pane_count;
+    for (int i = 0; i < pane_count; ++i) {
+        if (!panes->tp[i]) continue;
+        if (panes->last_font_px[i] != font_sizes[i]) {
+            term_pane_set_font_px(panes->tp[i], font_sizes[i]);
+            panes->last_font_px[i] = font_sizes[i];
+        }
+        if (panes->prev[i].x != layouts[i].x || panes->prev[i].y != layouts[i].y ||
+            panes->prev[i].w != layouts[i].w || panes->prev[i].h != layouts[i].h) {
+            term_pane_resize(panes->tp[i], &layouts[i]);
+            panes->prev[i] = layouts[i];
+        }
     }
 }
 
 void panes_destroy(pane_runtime *panes) {
     if (!panes) return;
-    term_pane_destroy(panes->tp_a);
-    term_pane_destroy(panes->tp_b);
-    panes->tp_a = NULL;
-    panes->tp_b = NULL;
+    for (int i = 0; i < panes->count; ++i) {
+        term_pane_destroy(panes->tp[i]);
+    }
+    free(panes->tp);
+    free(panes->last_font_px);
+    free(panes->prev);
+    panes->tp = NULL;
+    panes->last_font_px = NULL;
+    panes->prev = NULL;
+    panes->count = 0;
 }

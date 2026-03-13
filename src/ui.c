@@ -78,40 +78,112 @@ static void ui_mpv_send_keys(mpv_handle *mpv, const char *buf, ssize_t n) {
     }
 }
 
-void ui_state_init(ui_state *ui, const options_t *opt, bool use_mpv) {
+enum {
+    UI_SLOT_VIDEO = 0
+};
+
+static int ui_role_count(int pane_count) {
+    return KMS_MOSAIC_SLOT_PANE_BASE + pane_count;
+}
+
+static int ui_focus_count(bool use_mpv, int pane_count) {
+    return pane_count + (use_mpv ? 1 : 0);
+}
+
+static int ui_next_focus(int focus, bool use_mpv, int pane_count) {
+    if (!use_mpv && pane_count > 0) {
+        int pane_focus = focus < 1 ? 1 : focus;
+        return ((pane_focus - 1 + 1) % pane_count) + 1;
+    }
+    int count = ui_focus_count(use_mpv, pane_count);
+    return count > 0 ? (focus + 1) % count : focus;
+}
+
+static term_pane *ui_focus_term(term_pane *const *panes, int pane_count, int focus) {
+    int pane_index = focus - 1;
+    if (pane_index < 0 || pane_index >= pane_count) return NULL;
+    return panes[pane_index];
+}
+
+static void ui_roles_from_perm(options_t *opt, const ui_state *ui) {
+    opt->roles_set = true;
+    for (int i = 0; i < ui->role_count; ++i) opt->roles[i] = ui->perm[i];
+}
+
+static void ui_rotate_perm(ui_state *ui, int pane_count, int delta) {
+    int role_count = ui_role_count(pane_count);
+    int *rotated = calloc((size_t)role_count, sizeof(*rotated));
+    if (!rotated) return;
+
+    if (delta < 0) {
+        delta = role_count - ((-delta) % role_count);
+    }
+    delta %= role_count;
+    for (int i = 0; i < role_count; ++i) {
+        rotated[i] = ui->perm[(i + delta) % role_count];
+    }
+    for (int i = 0; i < role_count; ++i) ui->perm[i] = rotated[i];
+    free(rotated);
+}
+
+static bool ui_is_pane_focus(int focus, int pane_count) {
+    return focus > UI_SLOT_VIDEO && focus <= pane_count;
+}
+
+bool ui_state_init(ui_state *ui, const options_t *opt, bool use_mpv) {
     memset(ui, 0, sizeof(*ui));
+    ui->role_count = ui_role_count(opt->pane_count);
+    ui->perm = calloc((size_t)ui->role_count, sizeof(*ui->perm));
+    ui->last_perm = calloc((size_t)ui->role_count, sizeof(*ui->last_perm));
+    if (!ui->perm || !ui->last_perm) {
+        ui_state_destroy(ui);
+        return false;
+    }
     ui->focus = use_mpv ? 0 : 1;
     ui->show_osd = false;
-    ui->perm[0] = 0; ui->perm[1] = 1; ui->perm[2] = 2;
-    ui->last_perm[0] = 0; ui->last_perm[1] = 1; ui->last_perm[2] = 2;
+    for (int i = 0; i < ui->role_count; ++i) {
+        ui->perm[i] = i;
+        ui->last_perm[i] = i;
+    }
     ui->last_layout_mode = -1;
     ui->last_right_frac_pct = -1;
     ui->last_pane_split_pct = -1;
     if (opt->roles_set) {
-        ui->perm[0] = opt->roles[0];
-        ui->perm[1] = opt->roles[1];
-        ui->perm[2] = opt->roles[2];
-        if (opt->layout_mode == 6) ui->overlay_swap = (opt->roles[1] == 2 && opt->roles[2] == 1);
+        for (int i = 0; i < ui->role_count; ++i) ui->perm[i] = opt->roles[i];
+        if (opt->layout_mode == 6 && opt->pane_count == 2) ui->overlay_swap = (opt->roles[1] == 2 && opt->roles[2] == 1);
     }
     if (opt->layout_mode == 6) {
-        ui->perm[0] = 0;
-        if (!opt->roles_set) { ui->perm[1] = 1; ui->perm[2] = 2; ui->overlay_swap = false; }
+        ui->perm[UI_SLOT_VIDEO] = KMS_MOSAIC_SLOT_VIDEO;
+        if (!opt->roles_set) {
+            for (int i = 1; i < ui->role_count; ++i) ui->perm[i] = i;
+            ui->overlay_swap = false;
+        }
         ui->last_overlay_swap = ui->overlay_swap;
     }
+    return true;
 }
 
-void ui_update_fs_cycle(ui_state *ui, int fs_cycle_sec, double now_sec) {
+void ui_state_destroy(ui_state *ui) {
+    if (!ui) return;
+    free(ui->perm);
+    free(ui->last_perm);
+    ui->perm = NULL;
+    ui->last_perm = NULL;
+    ui->role_count = 0;
+}
+
+void ui_update_fs_cycle(ui_state *ui, int pane_count, int fs_cycle_sec, double now_sec) {
     if (!ui->fs_cycle) return;
     if (ui->fs_next_switch == 0.0) ui->fs_next_switch = now_sec + (fs_cycle_sec > 0 ? fs_cycle_sec : 5);
     else if (now_sec >= ui->fs_next_switch) {
-        ui->fs_pane = (ui->fs_pane + 1) % 3;
+        ui->fs_pane = (ui->fs_pane + 1) % ui_role_count(pane_count);
         ui->fs_next_switch = now_sec + (fs_cycle_sec > 0 ? fs_cycle_sec : 5);
         ui->fullscreen = true;
     }
 }
 
 bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
-                     bool use_mpv, term_pane *tp_a, term_pane *tp_b,
+                     bool use_mpv, term_pane *const *panes, int pane_count,
                      mpv_handle *mpv, bool *running, bool debug) {
     for (ssize_t i = 0; i < n; i++) {
         unsigned char ch = (unsigned char)buf[i];
@@ -122,7 +194,7 @@ bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
     bool consumed = false;
     if (ui->ui_control) {
         for (ssize_t i = 0; i < n; i++) if (buf[i] == '\t') {
-            ui->focus = use_mpv ? (ui->focus + 1) % 3 : (ui->focus == 1 ? 2 : 1);
+            ui->focus = ui_next_focus(ui->focus, use_mpv, pane_count);
             consumed = true;
         }
     }
@@ -130,51 +202,51 @@ bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
         if (buf[i] == 'l') { opt->layout_mode = (opt->layout_mode + 1) % 7; consumed = true; }
         else if (buf[i] == 'L') { opt->layout_mode = (opt->layout_mode + 6) % 7; consumed = true; }
         else if (buf[i] == 't') {
-            if (opt->layout_mode == 6) {
-                if (ui->focus == 1 || ui->focus == 2) {
+            if (opt->layout_mode == 6 && pane_count == 2) {
+                if (ui_is_pane_focus(ui->focus, pane_count)) {
                     ui->overlay_swap = !ui->overlay_swap;
                     opt->roles_set = true;
-                    opt->roles[0] = 0;
+                    opt->roles[0] = KMS_MOSAIC_SLOT_VIDEO;
                     opt->roles[1] = ui->overlay_swap ? 2 : 1;
                     opt->roles[2] = ui->overlay_swap ? 1 : 2;
                 }
             } else {
-                int next = use_mpv ? (ui->focus + 1) % 3 : (ui->focus == 1 ? 2 : 1);
+                int next = ui_next_focus(ui->focus, use_mpv, pane_count);
                 int tmp = ui->perm[ui->focus];
                 ui->perm[ui->focus] = ui->perm[next];
                 ui->perm[next] = tmp;
-                opt->roles_set = true;
-                opt->roles[0] = ui->perm[0];
-                opt->roles[1] = ui->perm[1];
-                opt->roles[2] = ui->perm[2];
+                ui_roles_from_perm(opt, ui);
             }
             consumed = true;
         } else if (buf[i] == 'r') {
-            int p0 = ui->perm[0], p1 = ui->perm[1], p2 = ui->perm[2];
-            ui->perm[0] = p1; ui->perm[1] = p2; ui->perm[2] = p0;
-            opt->roles_set = true; opt->roles[0] = ui->perm[0]; opt->roles[1] = ui->perm[1]; opt->roles[2] = ui->perm[2];
+            ui_rotate_perm(ui, pane_count, 1);
+            ui_roles_from_perm(opt, ui);
             consumed = true;
         } else if (buf[i] == 'R') {
-            int p0 = ui->perm[0], p1 = ui->perm[1], p2 = ui->perm[2];
-            ui->perm[0] = p2; ui->perm[1] = p0; ui->perm[2] = p1;
-            opt->roles_set = true; opt->roles[0] = ui->perm[0]; opt->roles[1] = ui->perm[1]; opt->roles[2] = ui->perm[2];
+            ui_rotate_perm(ui, pane_count, -1);
+            ui_roles_from_perm(opt, ui);
             consumed = true;
         } else if (buf[i] == 'z') {
             ui->fullscreen = !ui->fullscreen;
             if (ui->fullscreen) { ui->fs_pane = ui->focus; ui->fs_cycle = false; }
             consumed = true;
         } else if (buf[i] == 'n' && ui->fullscreen) {
-            ui->fs_pane = (ui->fs_pane + 1) % 3; ui->focus = ui->fs_pane; ui->fs_cycle = false; consumed = true;
+            ui->fs_pane = (ui->fs_pane + 1) % ui_role_count(pane_count);
+            ui->focus = ui->fs_pane;
+            ui->fs_cycle = false;
+            consumed = true;
         } else if (buf[i] == 'p' && ui->fullscreen) {
-            ui->fs_pane = (ui->fs_pane + 2) % 3; ui->focus = ui->fs_pane; ui->fs_cycle = false; consumed = true;
+            ui->fs_pane = (ui->fs_pane + ui_role_count(pane_count) - 1) % ui_role_count(pane_count);
+            ui->focus = ui->fs_pane;
+            ui->fs_cycle = false;
+            consumed = true;
         } else if (buf[i] == 'c') {
             ui->fs_cycle = !ui->fs_cycle;
             if (ui->fs_cycle) { ui->fullscreen = true; ui->fs_pane = ui->focus; ui->fs_next_switch = 0.0; }
             else ui->fullscreen = false;
             consumed = true;
         } else if (buf[i] == 'f') {
-            if (tp_a) term_pane_force_rebuild(tp_a);
-            if (tp_b) term_pane_force_rebuild(tp_b);
+            for (int p = 0; p < pane_count; ++p) if (panes[p]) term_pane_force_rebuild(panes[p]);
             consumed = true;
         } else if (buf[i] == 's') {
             const char *p = opt->config_file ? opt->config_file : default_config_path();
@@ -225,9 +297,9 @@ bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
     }
 
     if (!consumed && !ui->ui_control) {
-        if (ui->focus == 1 && tp_a) term_pane_send_input(tp_a, buf, (size_t)n);
-        else if (ui->focus == 2 && tp_b) term_pane_send_input(tp_b, buf, (size_t)n);
-        else if (ui->focus == 0 && mpv) ui_mpv_send_keys(mpv, buf, n);
+        term_pane *focused = ui_focus_term(panes, pane_count, ui->focus);
+        if (focused) term_pane_send_input(focused, buf, (size_t)n);
+        else if (ui->focus == UI_SLOT_VIDEO && mpv) ui_mpv_send_keys(mpv, buf, n);
     }
 
     if (debug) fprintf(stderr, "Input: focus=%d ui_control=%d consumed=%d bytes=%zd\n", ui->focus, ui->ui_control ? 1 : 0, consumed ? 1 : 0, n);

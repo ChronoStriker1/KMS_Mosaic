@@ -1,178 +1,194 @@
-KMS Mosaic — Tiled Video + Terminal Panes (KMS/GBM/EGL)
+KMS Mosaic
+==========
 
-Overview
-- Single-binary KMS compositor for the Linux console (no X/Wayland).
-- Uses DRM/KMS + GBM + EGL/GLES2 to present directly to the display.
-- Embeds libmpv (render API) to draw video; embeds libvterm for terminal panes.
-- Dynamically tiles three panes (“mosaic”): Pane C (Video), Pane A (btop), Pane B (syslog tail via `tail -F /var/log/syslog -n 500`).
+Direct-to-KMS video + terminal compositor for the Linux console.
 
-Why this approach
-- Only one DRM master can drive a KMS display at a time. This compositor provides
-  a video pane + text panes without X/Wayland by compositing all panes in a single
-  scanout surface.
+It uses DRM/KMS + GBM + EGL/GLES2 for scanout, libmpv for video rendering, and
+libvterm for terminal panes. The current product model is still a fixed
+three-slot mosaic:
 
-Dependencies (build-time)
-- libdrm (drm, drm_mode), gbm
-- EGL + OpenGL ES 2.0
-- libmpv (>= 0.33 with render_gl API)
-- libvterm (terminal emulation)
-- FreeType + Fontconfig (text rendering)
-- pkg-config, a C compiler
+- Slot C: video
+- Slot A: terminal pane A
+- Slot B: terminal pane B
 
-On Unraid, install the above in your build container or dev environment.
+The runtime is modular now. The old single-file compositor has been split into:
+
+- `src/kms_mosaic.c`: process entrypoint and signal wiring
+- `src/app.c`: application lifecycle, startup, loop, cleanup
+- `src/display.c`: DRM/GBM/EGL setup and page flips
+- `src/media.c`: libmpv setup, wakeups, playlist FIFO handling
+- `src/render_gl.c`: GL render-target and blit helpers
+- `src/frame.c`: per-frame composition and presentation
+- `src/panes.c`: terminal-pane creation, font sizing, layout sync
+- `src/layout.c`: geometric layout computation
+- `src/options.c`: CLI/config parsing and config save path
+- `src/runtime.c`: pollfd/runtime state helpers
+- `src/ui.c`: control-mode and input handling
+- `src/term_pane.c`: libvterm terminal emulation and texture updates
+
+Status
+------
+
+Implemented:
+
+- Event-driven PTY polling through the compositor `poll(2)` loop
+- Bounded hash-backed terminal glyph cache
+- libvterm damage callbacks for pane redraw tracking
+- Indexed pane-array plumbing through `app`, `frame`, and `panes` instead of separate A/B argument chains
+- Slot-indexed layout output through `layout`, `app`, and `frame` instead of named `video` / `pane_a` / `pane_b` layout fields
+- Indexed pane pollfd handling through `runtime` instead of dedicated pane-A/pane-B poll slots
+- User-facing variable terminal pane counts up to four panes
+- Runtime pane, scene, UI, and pollfd storage now allocates from the configured pane count instead of fixed-cap live buffers
+- Option parsing and layout output now allocate pane/role storage dynamically, including generic `--pane N "CMD"` support
+- DRM atomic modesetting with optional nonblocking flips
+- Containerized Linux build path from macOS and other non-Linux hosts
+- Unraid deployment workflow using the existing userscript launcher
+
+Still not implemented:
+
+- Truly unbounded pane counts end-to-end; legacy named pane shortcuts are still documented around the first four panes
+- Generalized pane-role naming beyond the legacy A/B plus numeric extension model
+- Full removal of the remaining legacy first-four-pane shortcuts from the config/UI surface
 
 Build
-- make
+-----
+
+Native build on Linux:
+
+```sh
+make
+```
+
+Required development packages:
+
+- `libdrm`
+- `gbm`
+- `egl`
+- `glesv2`
+- `libmpv`
+- `libvterm`
+- `freetype2`
+- `fontconfig`
+- `pkg-config`
+- C toolchain
+
+Preferred validation/build path on macOS or other non-Linux hosts:
+
+```sh
+scripts/macos_build_pkg.sh
+```
+
+That path builds inside Docker and produces a Linux binary plus a Slackware-style
+package under `dist/`.
 
 Run
-- Switch to an unused VT/TTY. Stop any services occupying DRM (X/Wayland).
-- Binary name:
-- `kms_mosaic`
-- Examples:
-- `./kms_mosaic --video /path/to/video.mp4`
-- `./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90`
-- `./kms_mosaic --no-config --smooth --loop --video-rotate 270 --panscan 1 --layout 2x1 --video /path/to/movie.mp4`
-- `./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22`
-- `./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle`
-- `./kms_mosaic --playlist-fifo /tmp/mosaic.fifo --mpv-out /tmp/mpv.log`
-- `./kms_mosaic --config /path/profile.conf`
-- `./kms_mosaic --save-config /path/profile.conf`
-- `./kms_mosaic --save-config-default`
-- `./kms_mosaic --layout overlay /path/to/video.mp4`
+---
 
--Controls
-- Ctrl+Q: quit compositor (always active)
-- Ctrl+E: toggle Control Mode. While active, compositor consumes layout/role keys.
-- Ctrl+P: toggle mpv panscan on/off.
-- Tab (in Control Mode): cycle focus among C/A/B (video, pane A, pane B)
-- l / L (in Control Mode): cycle layouts forward/back
-- t (in Control Mode): swap focused pane with the next pane
-- r / R (in Control Mode): rotate roles among (C video, A, B) / reverse
-- o (in Control Mode): toggle OSD on/off (default off)
-- Help text is shown automatically while in Control Mode
-- f (in Control Mode): force pane surface rebuild (refresh from vterm screen)
-- s (in Control Mode): save current configuration to the config path
-- z (in Control Mode): fullscreen the focused pane
-- n / p (in Control Mode, fullscreen): next / previous fullscreen pane
-- c (in Control Mode): cycle fullscreen panes
-- Arrows (in Control Mode): resize column/row splits (split layouts)
-  - The focused pane is outlined with a cyan border while in Control Mode.
-- Outside Control Mode: all keys go to the focused pane; when focus is video, keys are forwarded to mpv (space/pause, n/p next/prev, arrows, ASCII)
-  - Video focus key support: ASCII, Space/Enter/Tab, arrows, Home/End, PgUp/PgDn, Ins/Del, F1–F12, Esc, Backspace; plus fallbacks for space (pause), n/p (next/prev)
+Examples:
 
+```sh
+./kms_mosaic --video /path/to/video.mp4
+./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90
+./kms_mosaic --no-config --smooth --loop --video-rotate 270 --panscan 1 --layout 2x1 --video /path/to/movie.mp4
+./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22
+./kms_mosaic --pane-count 4 --pane-c "htop" --pane-d "watch sensors"
+./kms_mosaic --pane-count 6 --pane 5 "watch -n1 sensors" --pane 6 "iftop"
+./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle
+./kms_mosaic --playlist-fifo /tmp/mosaic.fifo --mpv-out /tmp/mpv.log
+./kms_mosaic --config /path/profile.conf
+./kms_mosaic --save-config-default
+./kms_mosaic --layout overlay /path/to/video.mp4
+```
+
+Defaults:
+
+- Pane A default command: `btop --utf-force`
+- Pane B default command: `tail -F /var/log/syslog -n 500`
+  - Fallbacks: `journalctl -f`, then `/var/log/messages`
+- Supported pane count range: `1` to `4`
+- Single-video runs auto-enable loop mode unless a playlist is in use
+
+Controls
+--------
+
+- `Ctrl+E`: toggle Control Mode
+- `Ctrl+Q`: quit while in Control Mode
+- `Ctrl+P`: toggle mpv panscan
+- `Tab`: cycle focus among the video slot and all active pane slots while in Control Mode
+- `l` / `L`: cycle layouts
+- `r` / `R`: rotate role assignment across the active slots
+- `t`: swap focused pane with the next slot
+- `o`: toggle OSD
+- `f`: force pane surface rebuild
+- `s`: save current config
+- `z`: fullscreen focused pane
+- `n` / `p`: next / previous fullscreen pane
+- `c`: cycle fullscreen panes
+- arrow keys: resize split layouts while in Control Mode
+
+Outside Control Mode, input is forwarded to the focused target. For video focus,
+the compositor forwards common keys to mpv.
 
 Layouts
-- stack: 3 rows in 1 column
-- row: 1 row in 3 columns
-  - 2x1: left column split into two rows, right column full height
-  - 1x2: left column full height, right column split into two rows
-  - 2over1: top row split into two columns, bottom row full width
-  - 1over2: top row full width, bottom row split into two columns
-  - overlay: video full-screen with both panes overlaid; split orientation follows `--rotate` and `--pane-split` sets the percentage. Panes are alpha-blended so the video remains visible beneath.
-- Pane role assignment (C=video, A, B) is a permutation over the 3 slots and can be rotated/swapped at runtime via r/R/t.
+-------
 
-Planned TODOs
-- Refactor the monolithic compositor into separate DRM/GBM, mpv embed, and UI modules. [DRM/GBM split done]
-- Support a variable number of terminal panes rather than the fixed A/B pair.
-- The glyph cache inside term_pane.c is bounded now, but it still uses a simple in-memory policy and could be tuned further for heavy Unicode workloads.
-- Terminal panes now use libvterm damage callbacks, but scroll-heavy workloads should still be profiled on real hardware.
-- src/kms_mosaic.c (≈2k+ lines) combines DRM setup, mpv integration, input handling, and UI logic, which hinders maintainability.
-- Improve Unicode/box drawing coverage and performance. [in-progress]
-- Make connector/mode selection configurable.
-- Implement atomic modesetting + nonblocking pageflips. [in-progress]
+- `stack`: three rows
+- `row`: three columns
+- `2x1`: left column split, right full-height
+- `1x2`: left full-height, right column split
+- `2over1`: top row split, bottom full-width
+- `1over2`: top full-width, bottom row split
+- `overlay`: full-screen video with both panes alpha-blended on top
 
+Atomic modesetting
+------------------
 
-Atomic modesetting (experimental)
-- Enable with `--atomic`. If supported by the GPU/driver, the compositor uses DRM atomic to set the initial mode and flip via the primary plane. Falls back to legacy KMS if unavailable.
-- Optional: `--atomic-nonblock` enables event-driven nonblocking atomic flips (default is blocking for maximum robustness).
-- Optional: `--gl-finish` forces `glFinish()` before flips to serialize GPU work on stacks requiring explicit sync.
+- `--atomic`: enable DRM atomic modesetting
+- `--atomic-nonblock`: enable nonblocking atomic flips
+- `--gl-finish`: force `glFinish()` before flips
 
-Notes
-- This program becomes DRM master and will blank fbcon while active.
-- If you see permission errors, run as root or grant DRM access.
-- Fontconfig monospace lookup lives in `src/font_util.c` and is shared by the OSD and terminal panes.
+If atomic init fails, the compositor falls back to legacy KMS.
 
-Flags
-- --connector ID|NAME: choose output (e.g., 42 or HDMI-A-1, DP-1). Default: first connected.
-- --mode WxH[@Hz]: choose resolution/refresh (e.g., 1080x1920@60). Default: preferred.
-- --rotate 0|90|180|270: rotate presentation. For portrait HD, use --mode 1080x1920@60 --rotate 90.
-- --video PATH: path to media file for the left pane. Optional.
-- --video-opt K=V: apply mpv option to the most recent --video (repeatable per item).
-- --playlist FILE: load an mpv playlist file (m3u, one path per line).
-- --playlist-extended FILE: custom playlist with per-line options (each line: "path | key=val,key=val").
-- --playlist-fifo FILE: read playlist entries from a FIFO, one path per line.
-- --no-video: disable the video region and use full width for the text panes.
-- --loop-file: loop the current file indefinitely.
-- --loop: shorthand for --loop-file (infinite). Note: if you provide exactly one video and no playlist, looping is assumed by default.
-- --loop-playlist: loop the playlist indefinitely (default when a playlist is provided).
-- --shuffle: randomize playlist order (alias: --randomize).
-- --mpv-opt K=V: set global mpv option (repeatable), e.g., --mpv-opt keepaspect=yes.
-- --mpv-out FILE: write mpv logs/events to FILE or FIFO.
-- --font-size PX: terminal font size in pixels (default 18).
-- --right-frac PCT: percent of screen width used by right column (10..80, default 33).
-- --video-frac PCT: percent of screen width for the video region (overrides --right-frac).
-- --pane-split PCT: percent of right column height for top pane (10..90, default 50).
-- --pane-a "CMD": shell command for top-right pane (default: btop).
-- --pane-b "CMD": shell command for bottom-right pane (default: tail -F /var/log/syslog -n 500,
-   falling back to journalctl -f or tail -F /var/log/messages -n 500 if unavailable).
-- --list-connectors: print connectors and first 8 modes then exit.
-- --config FILE: load flags from a config file (supports quotes, comments with #).
-- --save-config FILE: write the current configuration as flags to a file.
- - --save-config-default: write the configuration to the config file (default path or given via --config).
- - --atomic: use DRM atomic modesetting (falls back to legacy automatically).
- - --atomic-nonblock: use nonblocking atomic flips (event-driven).
- - --gl-finish: call `glFinish()` before flips (serialize GPU if needed).
+Configuration
+-------------
 
-- --no-config: do not auto-load the default config
-- --smooth: balanced playback preset (display-resample, no interp, linear tscale, early-flush, no shader cache)
-- --layout stack|row|2x1|1x2|2over1|1over2|overlay: select tiling mode
-- --roles RRR: initial slot roles (permutation of CAB)
-- --fs-cycle-sec SEC: fullscreen cycle interval for 'c' key
+Default config path:
 
-Runtime focus and input
-- Focus targets: C=video, A=btop (by default), B=syslog (by default). Use Tab in Control Mode to select.
-- Outside Control Mode, keypresses go to the focused target. This keeps underlying programs (btop, shell, mpv) fully interactive.
+- Unraid: `/boot/config/kms_mosaic.conf`
+- Elsewhere: `$XDG_CONFIG_HOME/kms_mosaic.conf`
+- Fallback: `~/.config/kms_mosaic.conf`
 
-OSD
-- Default off for a clean display. Toggle in Control Mode with 'o'.
-- Long OSD lines wrap automatically to the viewport width.
-- The current layout is shown in Control Mode, not in the OSD.
-
-Behavioral defaults
-- Single-video auto-loop: if only one file is given and no playlist, looping is enabled automatically.
+Config files use the same CLI flags as the command line and support quoting plus
+`#` comments.
 
 Debugging
-- Enable verbose logging: set `KMS_MPV_DEBUG=1` to print layout changes, mpv events, and GL checkpoints.
-- Isolate GL state issues: set `KMS_MPV_DISABLE=1` to skip mpv and render only panes/OSD; set `KMS_MPV_DIRECT_TEST=1` to draw diagnostic color frames.
-- If panes go black while video is fine, it may be stale GL state (e.g., scissor) left by mpv. The compositor now resets GL state before drawing panes and OSD.
-- If video renders upside down, set `KMS_MPV_FLIPY=1` to flip the mpv framebuffer vertically.
+---------
 
-Default config path
-- On Unraid: `/boot/config/kms_mosaic.conf` (persistent across reboots)
-- Elsewhere: `$XDG_CONFIG_HOME/kms_mosaic.conf` or `~/.config/kms_mosaic.conf`
+- `KMS_MPV_DEBUG=1`: verbose logs
+- `KMS_MPV_DIRECT=1`: direct mpv-to-default-FB path
+- `KMS_MPV_DIRECT_FBO=1`: direct mode via an intermediate FBO
+- `KMS_MPV_DIRECT_TEST=1`: diagnostic direct-mode red frame path
+- `KMS_MPV_FLIPY=1`: flip mpv direct rendering vertically
 
-Unraid build
-- Recommended: build inside a Slackware 15 container, then install the resulting .txz on Unraid.
-- Direct host build requires dev toolchain and libraries (libdrm, mesa-gbm/EGL/GLES2, libmpv, libvterm, freetype, fontconfig).
+Unraid notes
+------------
 
-Steps (containerized)
-- Ensure Docker is enabled on Unraid.
-- From this repo root:
-  - scripts/docker_slackware_build.sh  # builds binary and .txz package
-  - The package appears under `dist/` as `kms_mosaic-<ver>-x86_64-1.txz`.
-  - Install on Unraid host: `installpkg dist/kms_mosaic-<ver>-x86_64-1.txz`
+The current deployment workflow has been validated against an Unraid host started
+via the existing userscript launcher.
 
-Steps (host build)
-- Install dev tools (e.g., via NerdTools/DevTools): `gcc`, `make`, `pkg-config`.
-- Install libraries: `libdrm`, `mesa` (EGL/GLES2/gbm), `libmpv`, `libvterm`, `freetype`, `fontconfig`.
-- Build: `make`
-- Optional: create Slackware package: `scripts/make_slackpkg.sh`
+Important operational note:
 
-macOS build + package
-- Prerequisite: Docker Desktop for Mac installed and running.
-- From this repo root:
-  - scripts/macos_build_pkg.sh
-  - This launches an Ubuntu container, installs build deps, compiles the Linux binary, and creates a Slackware-style `.txz` (without `makepkg`).
-  - Result: `dist/kms_mosaic-<date>-x86_64-1.txz`
-- Install on Unraid: copy the `.txz` to your server and run `installpkg`.
-- Note: If you prefer a Slackware build environment, set `BASE_IMAGE=slackware:15.0` before running and ensure the image exists locally.
+- Stop and start must be sequential.
+- Do not use a parallel stop/start restart pattern.
+- Prefer `pkill -x kms_mosaic.bin`, wait briefly, then launch the userscript.
+- A very fast restart can still lose DRM master and fail with `drmModeAtomicCommit (modeset): Permission denied`; a delayed second restart has been sufficient on the current Unraid host.
+
+Roadmap
+-------
+
+High-value remaining work:
+
+- Remove the remaining first-four-pane shortcut assumptions from help/config/UI and treat all panes uniformly
+- Replace the remaining bounded config/layout slot arrays with fully dynamic storage
+- Keep tightening terminal performance under heavy Unicode and scroll loads
+- Simplify the remaining legacy role/label compatibility paths in config and UI
