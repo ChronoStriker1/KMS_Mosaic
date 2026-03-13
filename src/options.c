@@ -57,27 +57,84 @@ const char *layout_mode_name(int mode) {
     }
 }
 
-bool parse_roles_string(const char *s, int roles[3]) {
+bool parse_roles_string(const char *s, int *roles, int role_count) {
     if (!s || !roles) return false;
-    int parsed[3] = {0, 1, 2};
-    bool used[3] = {false, false, false};
+    int *parsed = calloc((size_t)role_count, sizeof(*parsed));
+    bool *used = calloc((size_t)role_count, sizeof(*used));
     int slot = 0;
-    for (const char *p = s; *p && slot < 3; ++p) {
+    if (!parsed || !used || role_count < 1) {
+        free(parsed);
+        free(used);
+        return false;
+    }
+    for (int i = 0; i < role_count; ++i) parsed[i] = i;
+    for (const char *p = s; *p && slot < role_count; ++p) {
         int role = -1;
         char c = *p;
-        if (c == 'C' || c == 'c') role = 0;
-        else if (c == 'A' || c == 'a') role = 1;
-        else if (c == 'B' || c == 'b') role = 2;
+        if (c == 'C' || c == 'c') role = KMS_MOSAIC_SLOT_VIDEO;
+        else if (c == 'A' || c == 'a' || c == '1') role = KMS_MOSAIC_SLOT_PANE_A;
+        else if (c == 'B' || c == 'b' || c == '2') role = KMS_MOSAIC_SLOT_PANE_B;
+        else if (c == 'D' || c == 'd' || c == '3') role = KMS_MOSAIC_SLOT_PANE_C;
+        else if (c == 'E' || c == 'e' || c == '4') role = KMS_MOSAIC_SLOT_PANE_D;
+        else if (c >= '0' && c <= '9') role = c - '0';
+        if (role < 0 || role >= role_count) continue;
         if (role >= 0 && !used[role]) {
             parsed[role] = slot++;
             used[role] = true;
         }
     }
-    if (slot != 3) return false;
-    roles[0] = parsed[0];
-    roles[1] = parsed[1];
-    roles[2] = parsed[2];
+    if (slot != role_count) {
+        free(parsed);
+        free(used);
+        return false;
+    }
+    for (int i = 0; i < role_count; ++i) roles[i] = parsed[i];
+    free(parsed);
+    free(used);
     return true;
+}
+
+static char options_role_char(int role, int role_count) {
+    if (role == KMS_MOSAIC_SLOT_VIDEO) return 'C';
+    if (role_count <= 3) {
+        if (role == KMS_MOSAIC_SLOT_PANE_A) return 'A';
+        if (role == KMS_MOSAIC_SLOT_PANE_B) return 'B';
+    }
+    if (role >= 0 && role <= 9) return (char)('0' + role);
+    return '?';
+}
+
+static int options_role_count(const options_t *opt) {
+    return KMS_MOSAIC_SLOT_PANE_BASE + opt->pane_count;
+}
+
+static bool options_ensure_role_capacity(options_t *opt, int role_count) {
+    if (opt->role_cap >= role_count) return true;
+    int old_cap = opt->role_cap;
+    int *next = realloc(opt->roles, (size_t)role_count * sizeof(*next));
+    if (!next) return false;
+    opt->roles = next;
+    opt->role_cap = role_count;
+    for (int i = old_cap; i < role_count; ++i) opt->roles[i] = i;
+    return true;
+}
+
+static bool options_ensure_pane_capacity(options_t *opt, int pane_count) {
+    if (opt->pane_cap >= pane_count) return true;
+    int old_cap = opt->pane_cap;
+    const char **next = realloc(opt->pane_cmds, (size_t)pane_count * sizeof(*next));
+    if (!next) return false;
+    opt->pane_cmds = next;
+    opt->pane_cap = pane_count;
+    for (int i = old_cap; i < pane_count; ++i) opt->pane_cmds[i] = NULL;
+    return true;
+}
+
+static void options_sync_pane_cmds(options_t *opt) {
+    if (opt->pane_cap > 0) opt->pane_cmds[0] = opt->pane_a_cmd;
+    if (opt->pane_cap > 1) opt->pane_cmds[1] = opt->pane_b_cmd;
+    if (opt->pane_cap > 2) opt->pane_cmds[2] = opt->pane_c_cmd;
+    if (opt->pane_cap > 3) opt->pane_cmds[3] = opt->pane_d_cmd;
 }
 
 void push_video(options_t *opt, const char *path) {
@@ -289,10 +346,14 @@ static void print_usage(const char *exe) {
         "  --right-frac PCT        Right column width percentage (default 33).\n"
         "  --video-frac PCT        Override: video width percentage.\n"
         "  --pane-split PCT        Top row height percentage for split layouts (default 50).\n"
+        "  --pane-count N          Number of terminal panes to create (default %d).\n"
         "  --pane-a \"CMD\"           Command for Pane A (default: btop).\n"
         "  --pane-b \"CMD\"           Command for Pane B (default: tail -F /var/log/syslog -n 500).\n"
+        "  --pane-c \"CMD\"           Command for Pane C.\n"
+        "  --pane-d \"CMD\"           Command for Pane D.\n"
+        "  --pane N \"CMD\"           Command for pane index N (1-based).\n"
         "  --layout M              stack | row | 2x1 | 1x2 | 2over1 | 1over2 | overlay\n"
-        "  --roles RRR             Slot roles order, e.g. CAB (default CAB).\n"
+        "  --roles ORDER           Slot roles order; legacy CAB or numeric strings like 01234.\n"
         "  --fs-cycle-sec SEC      Fullscreen cycle interval for 'c' key.\n\n"
         "Display/KMS:\n"
         "  --atomic                Use DRM atomic modesetting (experimental; falls back on failure).\n"
@@ -329,10 +390,10 @@ static void print_usage(const char *exe) {
         "  - If a single video is provided (no playlist), --loop is assumed.\n"
         "  - Controls are gated behind Control Mode so panes and video receive keys normally.\n\n"
         "Controls (toggle Control Mode with Ctrl+E):\n"
-        "  Tab           Cycle focus C/A/B (video/paneA/paneB).\n"
+        "  Tab           Cycle focus among the video and pane slots.\n"
         "  l / L         Cycle layouts forward/back.\n"
-        "  r / R         Rotate roles among C/A/B (and reverse).\n"
-        "  t             Swap panes A and B.\n"
+        "  r / R         Rotate slot roles (and reverse).\n"
+        "  t             Swap the focused slot with the next slot.\n"
         "  z             Fullscreen focused pane.\n"
         "  c             Cycle fullscreen panes.\n"
         "  o             Toggle OSD visibility.\n"
@@ -340,10 +401,17 @@ static void print_usage(const char *exe) {
         "  Ctrl+Q        Quit (only active in Control Mode).\n\n"
         "Always:\n"
         "  Ctrl+P        Toggle mpv panscan.\n\n",
-        exe);
+        exe, KMS_MOSAIC_DEFAULT_PANE_COUNT);
 }
 
 int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
+    opt->pane_count = KMS_MOSAIC_DEFAULT_PANE_COUNT;
+    const char *roles_arg = NULL;
+    if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+        !options_ensure_role_capacity(opt, options_role_count(opt))) {
+        fprintf(stderr, "Failed to allocate option storage.\n");
+        return 1;
+    }
     const char *cfg = NULL;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--config") && i + 1 < argc) {
@@ -401,8 +469,45 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
         else if (!strcmp(argv[i], "--right-frac") && i + 1 < argc) opt->right_frac_pct = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--video-frac") && i + 1 < argc) opt->video_frac_pct = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--pane-split") && i + 1 < argc) opt->pane_split_pct = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--pane-a") && i + 1 < argc) opt->pane_a_cmd = argv[++i];
-        else if (!strcmp(argv[i], "--pane-b") && i + 1 < argc) opt->pane_b_cmd = argv[++i];
+        else if (!strcmp(argv[i], "--pane-a") && i + 1 < argc) {
+            opt->pane_a_cmd = argv[++i];
+            opt->pane_cmds[0] = opt->pane_a_cmd;
+        }
+        else if (!strcmp(argv[i], "--pane-b") && i + 1 < argc) {
+            opt->pane_b_cmd = argv[++i];
+            opt->pane_cmds[1] = opt->pane_b_cmd;
+        }
+        else if (!strcmp(argv[i], "--pane-c") && i + 1 < argc) {
+            opt->pane_c_cmd = argv[++i];
+            opt->pane_cmds[2] = opt->pane_c_cmd;
+        }
+        else if (!strcmp(argv[i], "--pane-d") && i + 1 < argc) {
+            opt->pane_d_cmd = argv[++i];
+            opt->pane_cmds[3] = opt->pane_d_cmd;
+        }
+        else if (!strcmp(argv[i], "--pane-count") && i + 1 < argc) {
+            opt->pane_count = atoi(argv[++i]);
+            if (opt->pane_count < 1) opt->pane_count = 1;
+            if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                fprintf(stderr, "Failed to allocate pane storage.\n");
+                return 1;
+            }
+            options_sync_pane_cmds(opt);
+        }
+        else if (!strcmp(argv[i], "--pane") && i + 2 < argc) {
+            int pane_index = atoi(argv[++i]) - 1;
+            const char *pane_cmd = argv[++i];
+            if (pane_index >= 0) {
+                if (pane_index + 1 > opt->pane_count) opt->pane_count = pane_index + 1;
+                if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                    !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                    fprintf(stderr, "Failed to allocate pane storage.\n");
+                    return 1;
+                }
+                opt->pane_cmds[pane_index] = pane_cmd;
+            }
+        }
         else if (!strcmp(argv[i], "--list-connectors")) opt->list_connectors = true;
         else if (!strcmp(argv[i], "--no-video")) opt->no_video = true;
         else if (!strcmp(argv[i], "--no-panes")) opt->no_panes = true;
@@ -417,7 +522,7 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
             int mode = parse_layout_mode(argv[++i]);
             if (mode >= 0) opt->layout_mode = mode;
         } else if (!strcmp(argv[i], "--fs-cycle-sec") && i + 1 < argc) opt->fs_cycle_sec = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "--roles") && i + 1 < argc) opt->roles_set = parse_roles_string(argv[++i], opt->roles);
+        else if (!strcmp(argv[i], "--roles") && i + 1 < argc) roles_arg = argv[++i];
         else if (!strcmp(argv[i], "--loop-file")) opt->loop_file = true;
         else if (!strcmp(argv[i], "--loop")) opt->loop_flag = true;
         else if (!strcmp(argv[i], "--loop-playlist")) opt->loop_playlist = true;
@@ -452,6 +557,16 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
     if (!opt->playlist_path && !opt->playlist_ext && !opt->playlist_fifo) {
         if (opt->video_count == 1 && !opt->loop_file && !opt->loop_flag) opt->loop_flag = true;
     }
+    if (opt->pane_count < 1) opt->pane_count = 1;
+    if (opt->pane_d_cmd && opt->pane_count < 4) opt->pane_count = 4;
+    else if (opt->pane_c_cmd && opt->pane_count < 3) opt->pane_count = 3;
+    if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+        !options_ensure_role_capacity(opt, options_role_count(opt))) {
+        fprintf(stderr, "Failed to allocate pane storage.\n");
+        return 1;
+    }
+    if (roles_arg) opt->roles_set = parse_roles_string(roles_arg, opt->roles, options_role_count(opt));
+    options_sync_pane_cmds(opt);
     return 0;
 }
 
@@ -491,14 +606,21 @@ void save_config(const options_t *opt, const char *path) {
     else if (opt->right_frac_pct) fprintf(f, "--right-frac %d\n", opt->right_frac_pct);
     if (opt->pane_split_pct) fprintf(f, "--pane-split %d\n", opt->pane_split_pct);
     if (opt->roles_set) {
-        fprintf(f, "--roles %c%c%c\n",
-                opt->roles[0] == 0 ? 'C' : opt->roles[0] == 1 ? 'A' : 'B',
-                opt->roles[1] == 0 ? 'C' : opt->roles[1] == 1 ? 'A' : 'B',
-                opt->roles[2] == 0 ? 'C' : opt->roles[2] == 1 ? 'A' : 'B');
+        int role_count = options_role_count(opt);
+        fprintf(f, "--roles ");
+        for (int i = 0; i < role_count; ++i) fputc(options_role_char(opt->roles[i], role_count), f);
+        fputc('\n', f);
     }
     if (opt->fs_cycle_sec) fprintf(f, "--fs-cycle-sec %d\n", opt->fs_cycle_sec);
-    if (opt->pane_a_cmd) fprintf(f, "--pane-a '%s'\n", opt->pane_a_cmd);
-    if (opt->pane_b_cmd) fprintf(f, "--pane-b '%s'\n", opt->pane_b_cmd);
+    if (opt->pane_count != KMS_MOSAIC_DEFAULT_PANE_COUNT) fprintf(f, "--pane-count %d\n", opt->pane_count);
+    for (int i = 0; i < opt->pane_count; ++i) {
+        if (!opt->pane_cmds[i]) continue;
+        if (i == 0) fprintf(f, "--pane-a '%s'\n", opt->pane_cmds[i]);
+        else if (i == 1) fprintf(f, "--pane-b '%s'\n", opt->pane_cmds[i]);
+        else if (i == 2) fprintf(f, "--pane-c '%s'\n", opt->pane_cmds[i]);
+        else if (i == 3) fprintf(f, "--pane-d '%s'\n", opt->pane_cmds[i]);
+        else fprintf(f, "--pane %d '%s'\n", i + 1, opt->pane_cmds[i]);
+    }
     if (opt->no_video) fprintf(f, "--no-video\n");
     if (opt->loop_file) fprintf(f, "--loop-file\n");
     if (opt->loop_playlist) fprintf(f, "--loop-playlist\n");
@@ -514,4 +636,14 @@ void save_config(const options_t *opt, const char *path) {
         for (int k = 0; k < vi->nopts; k++) fprintf(f, "--video-opt '%s'\n", vi->opts[k]);
     }
     fclose(f);
+}
+
+void options_destroy(options_t *opt) {
+    if (!opt) return;
+    free(opt->pane_cmds);
+    free(opt->roles);
+    opt->pane_cmds = NULL;
+    opt->roles = NULL;
+    opt->pane_cap = 0;
+    opt->role_cap = 0;
 }

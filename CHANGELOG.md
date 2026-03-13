@@ -1,61 +1,31 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+## Unreleased
 
-The format is based on Keep a Changelog, and this project aims to follow
-Semantic Versioning when version numbers are introduced.
-
-## [0.2.0] - 2025-08-30
-
-### Added
-- DRM atomic modesetting support with full plane updates; opt-in via `--atomic` (falls back automatically if unsupported).
-- Optional nonblocking atomic flips via `--atomic-nonblock` (event-driven path).
-- Optional GL pacing with `--gl-finish` to serialize GPU work before flips.
-- Framebuffer creation prefers AddFB2 with modifiers (raw ioctl), falls back to AddFB2, then legacy AddFB.
-- Control Mode visual border highlight around the focused pane.
-- OSD line wrapping for long strings and status line includes current layout (stack/row/2x1/1x2).
-- Terminal panes update incrementally: per-row hashing + partial `glTexSubImage2D` uploads.
-- Extended Unicode box-drawing coverage (double/mixed line variants).
-
-### Changed
-- Removed pane-rect expansion logic so single-pane row/column always fills the computed slot after rotation/layout; rely on font auto-fit instead.
-
-### Fixed
-- C11 compatibility (removed GNU `typeof`, addressed misleading-indentation warnings).
-- Improved reliability of atomic flips (blocking by default; nonblocking optional).
-- Rotation/layout visual updates now apply consistently.
-
-### Docs
-- README updated for new flags (`--atomic`, `--atomic-nonblock`, `--gl-finish`), Control Mode border highlight, OSD wrapping, and layout name display.
-
-## [0.3.1] - 2025-09-03
-
-### Added
-- Restored `--mpv-out` to write mpv logs/events to a file or FIFO.
-- Restored dynamic playlist updates via `--playlist-fifo`.
-
-## [0.3.2] - 2025-09-05
-
-### Fixed
-- Corrected default mpv framebuffer orientation so video is no longer upside down; set `KMS_MPV_FLIPY=1` to flip if needed.
-
-## [0.3.3] - 2025-09-06
-
-### Fixed
-- `--roles` flag now correctly assigns panes based on slot order.
-
-## [0.3.4] - 2025-09-07
-
-### Added
-- Control Mode: `n` and `p` keys navigate to next/previous pane when fullscreen.
-
-## [0.3.0] - 2025-09-01
-
-### Added
-- Layout options `2over1` and `1over2` for asymmetric row/column splits.
-- Fullscreen pane toggle (`z`) and cycling (`c`) with configurable interval via `--fs-cycle-sec`.
-- `--roles` flag to persist pane role assignments.
-
-### Fixed
-- Restored video playback by correcting mpv framebuffer orientation.
-
+- Split the former monolithic compositor into dedicated app, display, media,
+  render, frame, pane, layout, options, runtime, and UI modules.
+- Changed pane A's default command to `btop --utf-force`.
+- Moved PTY handling into the main `poll(2)` loop instead of reading panes every frame.
+- Added a bounded hash-backed terminal glyph cache.
+- Switched terminal redraw tracking to libvterm damage callbacks.
+- Fixed the containerized package build path so it completes reliably on macOS/Docker.
+- Documented the Unraid restart requirement that stop/start must be sequential.
+- Converted internal terminal-pane runtime storage from explicit `tp_a` / `tp_b`
+  fields to indexed pane slots as groundwork for variable pane counts.
+- Converted role, focus, fullscreen, and layout-permutation bookkeeping to shared
+  slot-count constants instead of hardcoded three-entry arrays.
+- Replaced the main app/frame/pane A/B argument chains with indexed pane-layout
+  and pane-font arrays to reduce two-pane coupling in the render path.
+- Replaced named layout-role output fields with slot-indexed layout arrays through
+  the layout/app/frame path.
+- Replaced dedicated pane-A/pane-B runtime poll slots with indexed pane pollfd
+  handling.
+- Added user-facing support for configuring and running up to four terminal panes,
+  with new `--pane-count`, `--pane-c`, and `--pane-d` options plus generalized
+  multi-pane layout tiling.
+- Replaced fixed-cap live runtime buffers for panes, scene storage, UI role state,
+  and pollfds with allocations sized from the configured pane count.
+- Replaced fixed-cap option/layout pane and role storage with dynamic allocations,
+  and added generic `--pane N "CMD"` configuration support.
+- Updated the README and project guidance docs to reflect the current modular
+  architecture, build path, and remaining roadmap.

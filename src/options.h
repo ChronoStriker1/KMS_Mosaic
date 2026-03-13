@@ -7,6 +7,16 @@
 
 typedef enum { ROT_0 = 0, ROT_90 = 90, ROT_180 = 180, ROT_270 = 270 } rotation_t;
 
+enum {
+    KMS_MOSAIC_DEFAULT_PANE_COUNT = 2,
+    KMS_MOSAIC_SLOT_VIDEO = 0,
+    KMS_MOSAIC_SLOT_PANE_BASE = 1,
+    KMS_MOSAIC_SLOT_PANE_A = KMS_MOSAIC_SLOT_PANE_BASE + 0,
+    KMS_MOSAIC_SLOT_PANE_B = KMS_MOSAIC_SLOT_PANE_BASE + 1,
+    KMS_MOSAIC_SLOT_PANE_C = KMS_MOSAIC_SLOT_PANE_BASE + 2,
+    KMS_MOSAIC_SLOT_PANE_D = KMS_MOSAIC_SLOT_PANE_BASE + 3
+};
+
 typedef struct {
     const char *path;
     const char **opts;
@@ -29,8 +39,13 @@ typedef struct {
     int right_frac_pct;
     int pane_split_pct;
     int video_frac_pct;
+    const char **pane_cmds;
+    int pane_cap;
     const char *pane_a_cmd;
     const char *pane_b_cmd;
+    const char *pane_c_cmd;
+    const char *pane_d_cmd;
+    int pane_count;
     bool list_connectors;
     bool no_video;
     bool no_panes;
@@ -50,7 +65,8 @@ typedef struct {
     bool use_atomic;
     int layout_mode;
     int fs_cycle_sec;
-    int roles[3];
+    int *roles;
+    int role_cap;
     bool roles_set;
     const char **mpv_opts;
     int n_mpv_opts;
@@ -66,7 +82,7 @@ void parse_mode(const char *s, int *w, int *h, int *hz);
 rotation_t parse_rot(const char *s);
 int parse_layout_mode(const char *s);
 const char *layout_mode_name(int mode);
-bool parse_roles_string(const char *s, int roles[3]);
+bool parse_roles_string(const char *s, int *roles, int role_count);
 void push_video(options_t *opt, const char *path);
 void push_video_opt(video_item *vi, const char *kv);
 const char *trim(char *s);
@@ -74,6 +90,7 @@ void parse_playlist_ext(options_t *opt, const char *file);
 void mpv_append_line(mpv_handle *mpv, const char *line);
 char **tokenize_file(const char *path, int *argc_out);
 int options_parse_cli(options_t *opt, int argc, char **argv, int *debug);
+void options_destroy(options_t *opt);
 const char *default_config_path(void);
 void save_config(const options_t *opt, const char *path);
 

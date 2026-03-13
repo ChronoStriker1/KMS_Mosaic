@@ -13,8 +13,9 @@ typedef struct {
     int focus;
     bool show_osd;
     bool ui_control;
-    int perm[3];
-    int last_perm[3];
+    int role_count;
+    int *perm;
+    int *last_perm;
     bool overlay_swap;
     bool last_overlay_swap;
     int last_layout_mode;
@@ -29,10 +30,11 @@ typedef struct {
     double fs_next_switch;
 } ui_state;
 
-void ui_state_init(ui_state *ui, const options_t *opt, bool use_mpv);
-void ui_update_fs_cycle(ui_state *ui, int fs_cycle_sec, double now_sec);
+bool ui_state_init(ui_state *ui, const options_t *opt, bool use_mpv);
+void ui_state_destroy(ui_state *ui);
+void ui_update_fs_cycle(ui_state *ui, int pane_count, int fs_cycle_sec, double now_sec);
 bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
-                     bool use_mpv, term_pane *tp_a, term_pane *tp_b,
+                     bool use_mpv, term_pane *const *panes, int pane_count,
                      mpv_handle *mpv, bool *running, bool debug);
 
 #endif

@@ -13,11 +13,14 @@
 
 void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, media_ctx *m,
                   drm_ctx *d, gbm_ctx *g, egl_ctx *e, pane_runtime *panes, ui_state *ui,
-                  const pane_layout *lay_video,
-                  const pane_layout *lay_a, const pane_layout *lay_b, int logical_w,
+                  const pane_layout *slot_layouts,
+                  const pane_layout *pane_layouts, int pane_count,
+                  int logical_w,
                   int logical_h, int fb_w, int fb_h, int screen_w, int screen_h,
-                  int font_px_a, int font_px_b, bool use_mpv, bool pane_a_ready,
-                  bool pane_b_ready, bool debug) {
+                  const int *pane_font_px, bool use_mpv,
+                  const bool *pane_ready, bool debug) {
+    const pane_layout *lay_video = &slot_layouts[KMS_MOSAIC_SLOT_VIDEO];
+
     if (rt->direct_mode && (rt->direct_test_only || !use_mpv)) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glDisable(GL_SCISSOR_TEST);
@@ -164,27 +167,30 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
             glBindFramebuffer(GL_FRAMEBUFFER, rg->rt_fbo);
             render_gl_reset_state_2d();
             glEnable(GL_SCISSOR_TEST);
-            glScissor(lay_a->x, logical_h - (lay_a->y + lay_a->h), lay_a->w, lay_a->h);
-            glClearColor(0.05f, 0.10f, 0.20f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
-            glScissor(lay_b->x, logical_h - (lay_b->y + lay_b->h), lay_b->w, lay_b->h);
-            glClearColor(0.05f, 0.20f, 0.10f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
+            for (int i = 0; i < pane_count; ++i) {
+                float shade = 0.08f + 0.06f * (float)(i % 4);
+                glScissor(pane_layouts[i].x,
+                          logical_h - (pane_layouts[i].y + pane_layouts[i].h),
+                          pane_layouts[i].w, pane_layouts[i].h);
+                glClearColor(0.05f, 0.08f + shade, 0.12f + shade, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
             glDisable(GL_SCISSOR_TEST);
         }
-        panes_sync_layout(panes, lay_a, lay_b, font_px_a, font_px_b);
+        panes_sync_layout(panes, pane_layouts, pane_count, pane_font_px);
         if (ui->layout_reinit_countdown > 0) ui->layout_reinit_countdown--;
-        if (pane_a_ready) (void)term_pane_poll(panes->tp_a);
-        if (pane_b_ready) (void)term_pane_poll(panes->tp_b);
-        if (!ui->fullscreen || ui->fs_pane == 1) {
-            term_pane_render(panes->tp_a, screen_w, screen_h);
-            if (debug) fprintf(stderr, "Pane A draw at %d,%d %dx%d\n", lay_a->x, lay_a->y, lay_a->w, lay_a->h);
-            render_gl_check(debug, "after term_pane_render A");
-        }
-        if (!ui->fullscreen || ui->fs_pane == 2) {
-            term_pane_render(panes->tp_b, screen_w, screen_h);
-            if (debug) fprintf(stderr, "Pane B draw at %d,%d %dx%d\n", lay_b->x, lay_b->y, lay_b->w, lay_b->h);
-            render_gl_check(debug, "after term_pane_render B");
+        for (int i = 0; i < pane_count; ++i) {
+            term_pane *tp = panes_get_term(panes, i);
+            if (!tp) continue;
+            if (pane_ready[i]) (void)term_pane_poll(tp);
+            if (!ui->fullscreen || ui->fs_pane == i + 1) {
+                term_pane_render(tp, screen_w, screen_h);
+                if (debug) {
+                    fprintf(stderr, "Pane %d draw at %d,%d %dx%d\n", i + 1,
+                            pane_layouts[i].x, pane_layouts[i].y, pane_layouts[i].w, pane_layouts[i].h);
+                }
+                render_gl_check(debug, "after term_pane_render");
+            }
         }
     }
 
@@ -216,10 +222,10 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         if (!osdcm) osdcm = osd_create(opt->font_px ? opt->font_px : 20);
         const char *layout_name = layout_mode_name(opt->layout_mode);
         const char *help =
-            "Tab: focus cycle C/A/B\n"
+            "Tab: focus cycle video/panes\n"
             "o: toggle OSD\n"
             "l/L: cycle layouts\n"
-            "r/R: rotate roles C/A/B\n"
+            "r/R: rotate roles\n"
             "t: swap focused pane with next\n"
             "z: fullscreen focused pane\n"
             "n: next fullscreen pane\n"
@@ -237,9 +243,19 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         osd_draw(osdcm, 16, 48, logical_w, logical_h);
         int bx = 0, by = 0, bw = 0, bh = 0;
         int thickness = 4;
-        if (ui->focus == 0) { bx = lay_video->x; by = lay_video->y; bw = lay_video->w; bh = lay_video->h; }
-        else if (ui->focus == 1) { bx = lay_a->x; by = lay_a->y; bw = lay_a->w; bh = lay_a->h; }
-        else { bx = lay_b->x; by = lay_b->y; bw = lay_b->w; bh = lay_b->h; }
+        const pane_layout **focus_layouts = calloc((size_t)(KMS_MOSAIC_SLOT_PANE_BASE + pane_count), sizeof(*focus_layouts));
+        if (!focus_layouts) return;
+        focus_layouts[KMS_MOSAIC_SLOT_VIDEO] = &slot_layouts[KMS_MOSAIC_SLOT_VIDEO];
+        for (int i = 0; i < pane_count; ++i) focus_layouts[KMS_MOSAIC_SLOT_PANE_BASE + i] = &pane_layouts[i];
+        int focus_slot = ui->focus;
+        if (focus_slot < 0 || focus_slot >= KMS_MOSAIC_SLOT_PANE_BASE + pane_count || !focus_layouts[focus_slot]) {
+            focus_slot = KMS_MOSAIC_SLOT_VIDEO;
+        }
+        bx = focus_layouts[focus_slot]->x;
+        by = focus_layouts[focus_slot]->y;
+        bw = focus_layouts[focus_slot]->w;
+        bh = focus_layouts[focus_slot]->h;
+        free(focus_layouts);
         render_gl_draw_border_rect(bx, by, bw, bh, thickness, logical_w, logical_h, 0.1f, 0.9f, 0.95f, 1.0f);
     }
 
