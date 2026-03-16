@@ -4,6 +4,7 @@ The role of this file is to describe common mistakes and confusion points that a
 
 ## Surprises / gotchas
 - Restarting `kms_mosaic` on the Unraid host is sensitive to stop/start ordering. Do not stop and start in parallel. `pkill -f` can also match the remote shell command line and race badly. Use an exact-name stop like `pkill -x kms_mosaic.bin`, wait briefly, then start the userscript.
+- The active config file is now watched at runtime. A change triggers an in-process self-reexec with the original argv, so touching the config is enough to reload it and the PID stays the same.
 - Even with the correct sequential flow, a fast restart can still hit `drmModeAtomicCommit (modeset): Permission denied` on the Unraid host. If that happens, wait a few seconds and start it again.
 - The containerized packaging path is the most reliable validation route on non-Linux hosts. If you need a Linux build locally, prefer `scripts/macos_build_pkg.sh` over the host `make` path.
 - The repository architecture described in older docs may be stale. The current compositor is already split across `app`, `display`, `media`, `render_gl`, `frame`, `panes`, `layout`, `options`, `runtime`, and `ui` modules.

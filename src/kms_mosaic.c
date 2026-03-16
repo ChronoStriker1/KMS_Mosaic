@@ -48,5 +48,12 @@ int main(int argc, char **argv) {
     if (getenv("KMS_MPV_DEBUG")) g_debug = 1;
     setenv("mesa_glthread", "false", 0);
     setenv("MESA_GLTHREAD", "0", 0);
-    return app_run(argc, argv, &g_debug, &g_stop);
+    for (;;) {
+        int rc = app_run(argc, argv, &g_debug, &g_stop);
+        if (rc != APP_RUN_RELOAD) return rc;
+        fprintf(stderr, "Reloading after config change...\n");
+        execv(argv[0], argv);
+        perror("execv");
+        return 1;
+    }
 }

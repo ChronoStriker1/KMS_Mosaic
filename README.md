@@ -28,6 +28,7 @@ Status
 Implemented:
 
 - Event-driven PTY polling through the compositor `poll(2)` loop
+- Automatic config-file reload by self-reexec when the active config file changes
 - Bounded hash-backed terminal glyph cache
 - libvterm damage callbacks for pane redraw tracking
 - Indexed pane-array plumbing through `app`, `frame`, and `panes` instead of separate A/B argument chains
@@ -156,6 +157,11 @@ Default config path:
 
 Config files use the same CLI flags as the command line and support quoting plus
 `#` comments.
+
+When the active config file changes on disk, the running process detects the
+mtime change and reloads by re-execing itself with the original command-line
+arguments. That keeps the launch path stable while applying the updated config
+without needing an external restart.
 
 Debugging
 ---------

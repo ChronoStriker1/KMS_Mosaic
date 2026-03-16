@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <termios.h>
 #include <unistd.h>
@@ -44,6 +45,15 @@ typedef struct {
     pane_layout *pane_layouts;
 } app_scene;
 
+typedef struct {
+    const char *path;
+    struct timespec last_mtime;
+    off_t last_size;
+    double next_check_sec;
+    bool enabled;
+    bool exists;
+} config_watch;
+
 static bool app_scene_init(app_scene *scene, int pane_count) {
     memset(scene, 0, sizeof(*scene));
     scene->pane_count = pane_count;
@@ -71,6 +81,60 @@ static void restore_tty(void) {
 static void app_die(const char *msg) {
     perror(msg);
     exit(1);
+}
+
+static double app_now_sec(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+static const char *app_config_watch_path(const options_t *opt) {
+    if (!opt || opt->no_config) return NULL;
+    if (opt->config_file && *opt->config_file) return opt->config_file;
+    return default_config_path();
+}
+
+static void app_config_watch_init(config_watch *watch, const options_t *opt) {
+    memset(watch, 0, sizeof(*watch));
+    watch->path = app_config_watch_path(opt);
+    watch->enabled = watch->path && *watch->path;
+    watch->next_check_sec = app_now_sec() + 1.0;
+    if (!watch->enabled) return;
+
+    struct stat st;
+    if (stat(watch->path, &st) == 0) {
+        watch->exists = true;
+        watch->last_mtime = st.st_mtim;
+        watch->last_size = st.st_size;
+    }
+}
+
+static bool app_config_watch_poll(config_watch *watch) {
+    if (!watch || !watch->enabled) return false;
+
+    double now_sec = app_now_sec();
+    if (now_sec < watch->next_check_sec) return false;
+    watch->next_check_sec = now_sec + 1.0;
+
+    struct stat st;
+    bool exists = stat(watch->path, &st) == 0;
+    if (!exists) {
+        bool changed = watch->exists;
+        watch->exists = false;
+        memset(&watch->last_mtime, 0, sizeof(watch->last_mtime));
+        watch->last_size = 0;
+        return changed;
+    }
+
+    bool changed = !watch->exists ||
+                   watch->last_size != st.st_size ||
+                   watch->last_mtime.tv_sec != st.st_mtim.tv_sec ||
+                   watch->last_mtime.tv_nsec != st.st_mtim.tv_nsec;
+    watch->exists = true;
+    watch->last_mtime = st.st_mtim;
+    watch->last_size = st.st_size;
+    return changed;
 }
 
 static int app_list_connectors(const drm_ctx *d) {
@@ -324,6 +388,7 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     app_scene scene = {0};
     ui_state ui = {0};
     runtime_state rt = {0};
+    config_watch cfg_watch = {0};
     char pfifo_buf[1024];
     int pfifo_len = 0;
     int rc = 0;
@@ -371,6 +436,7 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus video/panes, Arrows resize, l/L layouts, r/R rotate roles, t swap focus/next, z fullscreen, n/p next/prev FS, c cycle FS, o OSD; Ctrl+P panscan; Ctrl+Q quit.\n");
 
     if (!runtime_init(&rt, &opt, use_mpv, &m, d.fd)) app_die("runtime_init");
+    app_config_watch_init(&cfg_watch, &opt);
 
     while (rt.running) {
         if (*stop_flag) {
@@ -381,6 +447,11 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
         if (!app_poll_runtime(&rt, &opt, &panes)) app_die("poll");
         if (!app_handle_input_ready(&rt, &ui, &opt, use_mpv, &panes, &m, *debug)) break;
         app_handle_runtime_events(&rt, &ui, &opt, &m, &d, pfifo_buf, &pfifo_len, use_mpv, *debug);
+        if (app_config_watch_poll(&cfg_watch)) {
+            fprintf(stderr, "Config file changed: %s\n", cfg_watch.path);
+            rc = APP_RUN_RELOAD;
+            break;
+        }
 
         bool *pane_ready = calloc((size_t)scene.pane_count, sizeof(*pane_ready));
         if (!pane_ready) app_die("calloc pane_ready");
