@@ -5,6 +5,8 @@
 - Split the former monolithic compositor into dedicated app, display, media,
   render, frame, pane, layout, options, runtime, and UI modules.
 - Changed pane A's default command to `btop --utf-force`.
+- Added automatic config-file reload by detecting config mtime changes and
+  re-execing the process with the original arguments.
 - Moved PTY handling into the main `poll(2)` loop instead of reading panes every frame.
 - Added a bounded hash-backed terminal glyph cache.
 - Switched terminal redraw tracking to libvterm damage callbacks.
