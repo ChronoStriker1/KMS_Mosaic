@@ -1,5 +1,4 @@
-Menu="OtherSettings"
-Type="xmenu"
+Menu="Utilities"
 Title="KMS Mosaic"
 Icon="desktop"
 ---
@@ -11,6 +10,7 @@ $web_service = $cfg['WEB_SERVICE'] ?? 'enable';
 $web_port = $cfg['WEB_PORT'] ?? '8788';
 $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
 $service_script = "/usr/local/emhttp/plugins/{$plugin}/scripts/kms_mosaic-service";
+$web_wrapper = "/usr/local/bin/kms_mosaic_web";
 $initial_status = [
   'service' => $service,
   'web_service' => $web_service,
@@ -29,6 +29,21 @@ if (is_string($service_status_raw) && trim($service_status_raw) !== '') {
   }
 }
 $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+$embedded_html = '';
+$embedded_payload_json = 'null';
+$embedded_cmd = escapeshellcmd($web_wrapper) . ' --config ' . escapeshellarg($config_path) . ' --print-html 2>/dev/null';
+$embedded_html_raw = @shell_exec($embedded_cmd);
+if (is_string($embedded_html_raw) && trim($embedded_html_raw) !== '') {
+  $embedded_html = $embedded_html_raw;
+}
+$embedded_payload_cmd = escapeshellcmd($web_wrapper) . ' --config ' . escapeshellarg($config_path) . ' --dump-state 2>/dev/null';
+$embedded_payload_raw = @shell_exec($embedded_payload_cmd);
+if (is_string($embedded_payload_raw) && trim($embedded_payload_raw) !== '') {
+  $decoded_payload = json_decode($embedded_payload_raw, true);
+  if (is_array($decoded_payload)) {
+    $embedded_payload_json = json_encode($decoded_payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+  }
+}
 ?>
 <style>
   .kms-page {
@@ -57,6 +72,11 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     padding: 16px;
     display: grid;
     gap: 14px;
+  }
+  .kms-page code {
+    background: rgba(0, 0, 0, 0.05);
+    padding: 1px 5px;
+    border-radius: 5px;
   }
   .kms-service-grid {
     display: grid;
@@ -116,6 +136,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   }
   .kms-status.ok { color: #1a7b2b; }
   .kms-status.bad { color: #ba3b2a; }
+  .kms-status.pending { color: #5b6470; }
   .kms-meta {
     font-size: 12px;
     color: var(--color-text-light, #666);
@@ -158,13 +179,11 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
       </div>
 
       <div class="kms-service-meta">
-        <div id="kmsStatus" class="kms-status <?=!empty($initial_status['kms_running']) ? 'ok' : 'bad';?>">
-          kms_mosaic: <?=!empty($initial_status['kms_running']) ? 'running' : 'stopped';?> | preview service: <?=!empty($initial_status['web_running']) ? 'running' : 'stopped';?>
+        <div id="kmsStatus" class="kms-status pending">
+          Checking service state…
         </div>
         <div id="kmsMeta" class="kms-meta">
-          Config: <?=htmlspecialchars((string)($initial_status['config_path'] ?? $config_path));?>
-          <?php if (!empty($initial_status['kms_pid'])): ?> | kms pid: <?=htmlspecialchars((string)$initial_status['kms_pid']);?><?php endif; ?>
-          <?php if (!empty($initial_status['web_pid'])): ?> | preview pid: <?=htmlspecialchars((string)$initial_status['web_pid']);?><?php endif; ?>
+          Refreshing live service status and editor state.
         </div>
       </div>
 
@@ -212,8 +231,11 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
 <script>
 const kmsActionUrl = '/plugins/kms.mosaic/include/actions.php';
 const kmsInitialStatus = <?=$initial_status_json ?: '{}';?>;
+const kmsEmbeddedHtml = <?=json_encode($embedded_html, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);?>;
+const kmsEmbeddedInitialPayload = <?=$embedded_payload_json;?>;
 let kmsEmbeddedLoaded = false;
 let kmsEmbeddedStylesInstalled = false;
+let kmsEmbeddedLoadPromise = null;
 
 function kmsEmbeddedUrl(action) {
   return `${kmsActionUrl}?action=${encodeURIComponent(action)}`;
@@ -253,28 +275,12 @@ function kmsEmbeddedOverrides() {
       position: static;
       top: auto;
     }
-    #kmsUiMount .app-header {
-      padding: 0 0 12px;
-      border-bottom: 1px solid var(--box_border, rgba(0,0,0,.12));
-      background: transparent;
-    }
-    #kmsUiMount .app-name {
-      font-size: 16px;
-      letter-spacing: normal;
-      text-transform: none;
-      color: #202225;
-    }
-    #kmsUiMount .config-path {
-      color: #6b7280;
-      letter-spacing: normal;
-      text-transform: none;
-      font-size: 12px;
-    }
+    #kmsUiMount .app-header { display: none !important; }
     #kmsUiMount .panel-body > div,
     #kmsUiMount details.advanced-block {
       border-radius: 8px;
-      background: rgba(255,255,255,.08);
-      border: 1px solid rgba(0,0,0,.08);
+      background: #ffffff;
+      border: 1px solid rgba(0,0,0,.09);
     }
     #kmsUiMount,
     #kmsUiMount label,
@@ -314,19 +320,23 @@ function kmsEmbeddedOverrides() {
     #kmsUiMount button.secondary,
     #kmsUiMount .playlist-target-btn,
     #kmsUiMount .playlist-mini-btn {
-      background: #f5f5f5 !important;
+      background: #f7f7f8 !important;
       color: #202225 !important;
       border-color: rgba(0,0,0,.18) !important;
     }
     #kmsUiMount .playlist-target-btn.active {
       background: #e9eef5 !important;
       border-color: #8ca0ba !important;
+      color: #1d3048 !important;
     }
     #kmsUiMount .stage {
-      padding-top: 6px;
+      padding: 0 0 16px;
     }
     #kmsUiMount .preview-wrap {
       margin-inline: auto;
+      background: #111 !important;
+      border-color: rgba(0,0,0,.22) !important;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.03), 0 3px 10px rgba(0,0,0,.10) !important;
     }
     #kmsUiMount .preview-stage {
       display: grid;
@@ -342,7 +352,7 @@ function kmsEmbeddedOverrides() {
     #kmsUiMount .preview-stage::after {
       content: attr(data-preview-status);
       display: none;
-      color: #c7d0db;
+      color: #dfe6ee;
       font-size: 12px;
       letter-spacing: 0.04em;
       text-transform: uppercase;
@@ -357,6 +367,60 @@ function kmsEmbeddedOverrides() {
     #kmsUiMount .section-title {
       color: var(--color-text, #222);
       letter-spacing: 0.02em;
+    }
+    #kmsUiMount .studio-board {
+      background:
+        linear-gradient(180deg, #f7f3ee, #ede8e1) !important;
+      border-color: rgba(0,0,0,.10) !important;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.55) !important;
+    }
+    #kmsUiMount .studio-board::before {
+      background-image:
+        linear-gradient(rgba(0,0,0,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,0,0,0.04) 1px, transparent 1px) !important;
+      background-size: 28px 28px !important;
+    }
+    #kmsUiMount .studio-card {
+      border-color: rgba(0,0,0,.12) !important;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.5), 0 6px 14px rgba(0,0,0,.08) !important;
+    }
+    #kmsUiMount .studio-card.video {
+      background: linear-gradient(145deg, #d78861, #c66e42) !important;
+      color: #1f130d !important;
+    }
+    #kmsUiMount .studio-card.terminal {
+      background: linear-gradient(145deg, #e4ece7, #d8e1dc) !important;
+      color: #142019 !important;
+    }
+    #kmsUiMount .studio-card:hover,
+    #kmsUiMount .studio-card.selected,
+    #kmsUiMount .studio-card.drop-target {
+      border-color: rgba(181,83,47,.52) !important;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.55), 0 0 0 2px rgba(181,83,47,.15), 0 8px 16px rgba(0,0,0,.10) !important;
+    }
+    #kmsUiMount .studio-tag,
+    #kmsUiMount .studio-split-btn {
+      background: rgba(255,255,255,.6) !important;
+      border-color: rgba(0,0,0,.12) !important;
+      color: inherit !important;
+    }
+    #kmsUiMount .studio-inspector,
+    #kmsUiMount .pane-item,
+    #kmsUiMount .playlist-item,
+    #kmsUiMount .playlist-bulk,
+    #kmsUiMount .suggestion-btn {
+      background: #fbfbfc !important;
+      border-color: rgba(0,0,0,.09) !important;
+      box-shadow: none !important;
+    }
+    #kmsUiMount .playlist-thumb {
+      background: linear-gradient(140deg, rgba(0,0,0,0.03), transparent), #f1f3f5 !important;
+      border-color: rgba(0,0,0,.10) !important;
+    }
+    #kmsUiMount #rawConfig {
+      background: #f8f8fa !important;
+      color: #1f2328 !important;
+      border-color: rgba(0,0,0,.12) !important;
     }
     @media (max-width: 1200px) {
       #kmsUiMount .shell {
@@ -399,7 +463,7 @@ function kmsUpdateStatus(data) {
   const webOk = !!data.web_running;
   el.className = `kms-status ${kmsOk ? 'ok' : 'bad'}`;
   el.textContent = `kms_mosaic: ${kmsOk ? 'running' : 'stopped'} | preview service: ${webOk ? 'running' : 'stopped'}`;
-  meta.textContent = `Config: ${data.config_path || ''}${data.kms_pid ? ' | kms pid: ' + data.kms_pid : ''}${data.web_pid ? ' | preview pid: ' + data.web_pid : ''}`;
+  meta.textContent = `${data.kms_pid ? 'kms pid: ' + data.kms_pid : 'kms pid: —'}${data.web_pid ? ' | preview pid: ' + data.web_pid : ' | preview pid: —'}`;
 }
 
 async function kmsPost(action, extra = {}, jsonBody = false) {
@@ -467,32 +531,45 @@ async function kmsControl(action) {
 
 async function kmsEnsureEmbeddedLoaded() {
   if (kmsEmbeddedLoaded) return;
+  if (kmsEmbeddedLoadPromise) return kmsEmbeddedLoadPromise;
   const mount = document.getElementById('kmsUiMount');
-  try {
-    const response = await fetch(kmsEmbeddedUrl('backend_html'));
-    const html = await response.text();
-    if (!response.ok) throw new Error(html || 'Unable to load editor');
-    const rewritten = kmsRewriteBackendHtml(html);
-    const doc = new DOMParser().parseFromString(rewritten, 'text/html');
-    kmsInstallEmbeddedStyles(doc);
-    const scripts = Array.from(doc.querySelectorAll('script')).map((script) => script.textContent || '');
-    doc.querySelectorAll('script').forEach((script) => script.remove());
-    mount.className = '';
-    mount.innerHTML = doc.body.innerHTML;
-    scripts.forEach((text) => {
-      const script = document.createElement('script');
-      script.textContent = text;
-      mount.appendChild(script);
-    });
-    kmsEmbeddedLoaded = true;
-  } catch (err) {
-    mount.className = 'kms-ui-error';
-    mount.textContent = err.message || 'Unable to load editor.';
-  }
+  kmsEmbeddedLoadPromise = (async () => {
+    try {
+      if (!kmsEmbeddedHtml) throw new Error('Embedded editor payload is empty');
+      const rewritten = kmsRewriteBackendHtml(kmsEmbeddedHtml)
+        .replace(
+          'document.getElementById("configPath").textContent = `Config: ${configPath}`;',
+          'const configPathNode = document.getElementById("configPath"); if (configPathNode) configPathNode.textContent = `Config: ${configPath}`;'
+        )
+        .replace(
+          'loadState().catch(err => setStatus(err.message, true));',
+          'if (window.__kmsEmbeddedInitialPayload) { fillForm(window.__kmsEmbeddedInitialPayload.state, window.__kmsEmbeddedInitialPayload.config_path, window.__kmsEmbeddedInitialPayload.raw_config); scheduleLivePreview(); setStatus(`Loaded ${window.__kmsEmbeddedInitialPayload.config_path}`, false, true); } else { loadState().catch(err => setStatus(err.message, true)); }'
+        );
+      const doc = new DOMParser().parseFromString(rewritten, 'text/html');
+      kmsInstallEmbeddedStyles(doc);
+      const scripts = Array.from(doc.querySelectorAll('script')).map((script) => script.textContent || '');
+      doc.querySelectorAll('script').forEach((script) => script.remove());
+      mount.className = '';
+      mount.innerHTML = doc.body.innerHTML;
+      window.__kmsEmbeddedInitialPayload = kmsEmbeddedInitialPayload;
+      scripts.forEach((text) => {
+        const script = document.createElement('script');
+        script.textContent = text;
+        mount.appendChild(script);
+      });
+      kmsEmbeddedLoaded = true;
+    } catch (err) {
+      mount.className = 'kms-ui-error';
+      mount.textContent = err.message || 'Unable to load editor.';
+      throw err;
+    } finally {
+      kmsEmbeddedLoadPromise = null;
+    }
+  })();
+  return kmsEmbeddedLoadPromise;
 }
 
 $(function() {
-  kmsUpdateStatus(kmsInitialStatus);
   kmsEnsureEmbeddedLoaded();
   kmsRefreshStatus();
 });
