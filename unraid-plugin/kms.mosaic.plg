@@ -3,7 +3,7 @@
   name="kms.mosaic"
   author="OpenAI / chronostriker1"
   version="2026.03.17"
-  launch="Utilities/KMS Mosaic"
+  launch="Settings/KMSMosaic"
   pluginURL="https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/unraid-plugin/kms.mosaic.plg"
   icon="desktop">
 
@@ -11,7 +11,7 @@
 ###2026.03.17
 - Add native Unraid plugin packaging for KMS Mosaic.
 - Manage `kms_mosaic` and the web UI without the old userscript.
-- Embed the existing configuration UI inside an Unraid page.
+- Host the full configuration UI directly inside the Unraid Settings page.
 </CHANGES>
 
 <FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.03.17.tgz">

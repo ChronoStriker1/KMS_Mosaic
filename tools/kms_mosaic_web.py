@@ -53,6 +53,32 @@ def default_config_path() -> str:
     return str(Path(home) / ".config" / "kms_mosaic.conf")
 
 
+def read_raw_config_text(config_path: Path) -> str:
+    try:
+        return config_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def read_state_from_config(config_path: Path) -> dict[str, Any]:
+    return parse_config_text(read_raw_config_text(config_path))
+
+
+def write_text_atomic(target_path: Path, text: str) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_name = tempfile.mkstemp(prefix=target_path.name + ".", dir=str(target_path.parent))
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp_name, target_path)
+    finally:
+        try:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+        except OSError:
+            pass
+
+
 def empty_state() -> dict[str, Any]:
     return {
         "connector": "",
@@ -4214,12 +4240,20 @@ class Handler(BaseHTTPRequestHandler):
         })
 
 
-def parse_args() -> WebConfig:
+def parse_cli_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Web UI for KMS Mosaic")
     parser.add_argument("--config", default=default_config_path(), help="Config file to edit")
     parser.add_argument("--host", default="0.0.0.0", help="Bind host")
     parser.add_argument("--port", type=int, default=8787, help="Bind port")
-    args = parser.parse_args()
+    parser.add_argument("--dump-state", action="store_true", help="Print parsed config state as JSON and exit")
+    parser.add_argument("--print-html", action="store_true", help="Print the standalone HTML shell and exit")
+    parser.add_argument("--write-state-json", help="Read a JSON file containing {state: ...}, write config, print updated JSON")
+    parser.add_argument("--write-raw-json", help="Read a JSON file containing {raw_config: ...}, write config, print updated JSON")
+    return parser.parse_args()
+
+
+def parse_args() -> WebConfig:
+    args = parse_cli_args()
     return WebConfig(
         config_path=Path(args.config),
         host=args.host,
@@ -4232,7 +4266,49 @@ def parse_args() -> WebConfig:
 
 
 def main() -> int:
-    app_config = parse_args()
+    cli = parse_cli_args()
+    config_path = Path(cli.config)
+    if cli.print_html:
+        print(HTML)
+        return 0
+    if cli.dump_state:
+        print(json.dumps({
+            "config_path": str(config_path),
+            "state": read_state_from_config(config_path),
+            "raw_config": read_raw_config_text(config_path),
+        }))
+        return 0
+    if cli.write_state_json:
+        payload = json.loads(Path(cli.write_state_json).read_text(encoding="utf-8"))
+        state = payload["state"]
+        write_text_atomic(config_path, serialize_config(state))
+        print(json.dumps({
+            "ok": True,
+            "config_path": str(config_path),
+            "state": read_state_from_config(config_path),
+            "raw_config": read_raw_config_text(config_path),
+        }))
+        return 0
+    if cli.write_raw_json:
+        payload = json.loads(Path(cli.write_raw_json).read_text(encoding="utf-8"))
+        write_text_atomic(config_path, str(payload["raw_config"]))
+        print(json.dumps({
+            "ok": True,
+            "config_path": str(config_path),
+            "state": read_state_from_config(config_path),
+            "raw_config": read_raw_config_text(config_path),
+        }))
+        return 0
+
+    app_config = WebConfig(
+        config_path=config_path,
+        host=cli.host,
+        port=cli.port,
+        snapshot_request_path=Path("/tmp/kms_mosaic_snapshot.request"),
+        preview_lease_path=Path("/tmp/kms_mosaic_preview.active"),
+        snapshot_output_path=Path("/tmp/kms_mosaic_preview.rgba"),
+        thumb_cache_dir=Path("/tmp/kms_mosaic_web_thumbs"),
+    )
     server = ReusableThreadingHTTPServer((app_config.host, app_config.port), Handler)
     server.app_config = app_config  # type: ignore[attr-defined]
     server.webrtc = WebRTCBridge(app_config)  # type: ignore[attr-defined]

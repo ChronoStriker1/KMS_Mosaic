@@ -98,3 +98,6 @@
 - Replaced the plugin page iframe with a native Unraid-style settings page that
   proxies the standalone editor APIs and hosts the full layout/media/playlist
   editor directly inside the plugin UI.
+- Moved the plugin launch target to the real `Settings/KMSMosaic` route so the
+  Plugins tab opens the same working settings page instead of a dead Utilities
+  route.
