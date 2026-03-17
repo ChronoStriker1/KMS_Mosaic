@@ -3,6 +3,7 @@
 $plugin = 'kms.mosaic';
 $cfg_file = "/boot/config/plugins/{$plugin}/{$plugin}.cfg";
 $service_script = "/usr/local/emhttp/plugins/{$plugin}/scripts/kms_mosaic-service";
+$web_wrapper = "/usr/local/bin/kms_mosaic_web";
 
 function read_plugin_cfg_file($cfg_file) {
   $defaults = [
@@ -33,6 +34,30 @@ function backend_base_url($cfg) {
   $port = (int)($cfg['WEB_PORT'] ?? 8788);
   if ($port < 1 || $port > 65535) $port = 8788;
   return "http://127.0.0.1:{$port}";
+}
+
+function run_web_wrapper($web_wrapper, $config_path, $args = []) {
+  $parts = [escapeshellcmd($web_wrapper), '--config', escapeshellarg($config_path)];
+  foreach ($args as $arg) {
+    $parts[] = escapeshellarg($arg);
+  }
+  $cmd = implode(' ', $parts) . ' 2>&1';
+  exec($cmd, $output, $code);
+  if ($code !== 0) {
+    throw new RuntimeException(trim(implode("\n", $output)) ?: 'kms_mosaic_web helper failed');
+  }
+  return implode("\n", $output);
+}
+
+function run_web_wrapper_with_temp_json($web_wrapper, $config_path, $flag, $json_text) {
+  $tmp = tempnam(sys_get_temp_dir(), 'kmsmosaic_');
+  if ($tmp === false) throw new RuntimeException('Unable to create temp file');
+  file_put_contents($tmp, $json_text);
+  try {
+    return run_web_wrapper($web_wrapper, $config_path, [$flag, $tmp]);
+  } finally {
+    @unlink($tmp);
+  }
 }
 
 function proxy_backend_request($method, $url, $body = null, $content_type = null) {
@@ -105,33 +130,37 @@ try {
   $backend = backend_base_url($cfg);
 
   if ($action === 'backend_html') {
-    $result = proxy_backend_request('GET', $backend . '/');
-    output_proxy_response($result, ['Content-Type']);
+    header('Content-Type: text/html; charset=utf-8');
+    echo run_web_wrapper($web_wrapper, $cfg['CONFIG_PATH'], ['--print-html']);
+    exit;
   }
 
   if ($action === 'backend_state') {
-    $result = proxy_backend_request('GET', $backend . '/api/state');
-    output_proxy_response($result, ['Content-Type']);
+    header('Content-Type: application/json');
+    echo run_web_wrapper($web_wrapper, $cfg['CONFIG_PATH'], ['--dump-state']);
+    exit;
   }
 
   if ($action === 'backend_config') {
-    $result = proxy_backend_request(
-      'POST',
-      $backend . '/api/config',
-      file_get_contents('php://input'),
-      $_SERVER['CONTENT_TYPE'] ?? 'application/json'
+    header('Content-Type: application/json');
+    echo run_web_wrapper_with_temp_json(
+      $web_wrapper,
+      $cfg['CONFIG_PATH'],
+      '--write-state-json',
+      file_get_contents('php://input')
     );
-    output_proxy_response($result, ['Content-Type']);
+    exit;
   }
 
   if ($action === 'backend_raw_config') {
-    $result = proxy_backend_request(
-      'POST',
-      $backend . '/api/raw_config',
-      file_get_contents('php://input'),
-      $_SERVER['CONTENT_TYPE'] ?? 'application/json'
+    header('Content-Type: application/json');
+    echo run_web_wrapper_with_temp_json(
+      $web_wrapper,
+      $cfg['CONFIG_PATH'],
+      '--write-raw-json',
+      file_get_contents('php://input')
     );
-    output_proxy_response($result, ['Content-Type']);
+    exit;
   }
 
   if ($action === 'backend_webrtc_offer') {

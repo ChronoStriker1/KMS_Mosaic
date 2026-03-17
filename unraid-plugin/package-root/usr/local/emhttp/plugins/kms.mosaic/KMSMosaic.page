@@ -1,4 +1,4 @@
-Menu="Utilities"
+Menu="Settings"
 Title="KMS Mosaic"
 Icon="desktop"
 ---
@@ -291,7 +291,7 @@ async function kmsRefreshStatus() {
   try {
     const data = await kmsPost('status');
     kmsUpdateStatus(data);
-    if (data.web_running) await kmsEnsureEmbeddedLoaded();
+    await kmsEnsureEmbeddedLoaded();
   } catch (err) {
     document.getElementById('kmsStatus').className = 'kms-status bad';
     document.getElementById('kmsStatus').textContent = err.message || 'Status failed';
@@ -307,7 +307,7 @@ async function kmsSavePluginSettings() {
       CONFIG_PATH: document.getElementById('kmsConfigPath').value
     });
     kmsUpdateStatus(data);
-    if (data.web_running) await kmsEnsureEmbeddedLoaded();
+    await kmsEnsureEmbeddedLoaded();
   } catch (err) {
     document.getElementById('kmsStatus').className = 'kms-status bad';
     document.getElementById('kmsStatus').textContent = err.message || 'Apply failed';
@@ -318,7 +318,7 @@ async function kmsControl(action) {
   try {
     const data = await kmsPost(action);
     kmsUpdateStatus(data);
-    if (data.web_running) await kmsEnsureEmbeddedLoaded();
+    await kmsEnsureEmbeddedLoaded();
   } catch (err) {
     document.getElementById('kmsStatus').className = 'kms-status bad';
     document.getElementById('kmsStatus').textContent = err.message || `${action} failed`;
