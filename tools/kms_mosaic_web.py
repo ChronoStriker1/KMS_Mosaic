@@ -401,22 +401,54 @@ HTML = r"""<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>KMS Mosaic Control Room</title>
+  <meta name="color-scheme" content="light dark" />
+  <title>KMS Mosaic — Config</title>
   <style>
     :root {
-      --bg: #f2eee6;
       --paper: rgba(255, 251, 244, 0.88);
-      --paper-strong: #fffaf2;
       --ink: #191816;
       --muted: #6f6a62;
       --line: rgba(34, 31, 26, 0.12);
-      --line-strong: rgba(34, 31, 26, 0.24);
       --accent: #b5532f;
-      --accent-soft: #e8c9b6;
       --accent-dark: #6d2f17;
-      --success: #2d6b57;
       --danger: #b3412b;
-      --shadow: 0 24px 60px rgba(54, 43, 32, 0.12);
+      --shadow: 0 20px 48px rgba(54, 43, 32, 0.10);
+      --surface: rgba(255, 255, 255, 0.46);
+      --surface-high: rgba(255, 255, 255, 0.70);
+      --surface-input: rgba(255, 255, 255, 0.76);
+      --surface-input-focus: #fffdf8;
+      --surface-pill: rgba(255, 255, 255, 0.50);
+      --hero-grad: linear-gradient(120deg, rgba(181,83,47,0.08), rgba(255,255,255,0.18) 40%, rgba(109,47,23,0.04)),
+        linear-gradient(180deg, rgba(255,255,255,0.64), rgba(255,255,255,0.08));
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: rgba(22, 18, 14, 0.92);
+        --ink: #ede7dd;
+        --muted: #847c72;
+        --line: rgba(255, 240, 210, 0.10);
+        --accent: #cf7853;
+        --accent-dark: #e8a07a;
+        --danger: #d96b4e;
+        --shadow: 0 20px 48px rgba(0, 0, 0, 0.45);
+        --surface: rgba(255, 255, 255, 0.05);
+        --surface-high: rgba(255, 255, 255, 0.09);
+        --surface-input: rgba(255, 255, 255, 0.07);
+        --surface-input-focus: rgba(255, 255, 255, 0.11);
+        --surface-pill: rgba(255, 255, 255, 0.07);
+        --hero-grad: linear-gradient(120deg, rgba(181,83,47,0.12), rgba(255,255,255,0.03) 40%, rgba(109,47,23,0.07)),
+          linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+      }
+      body {
+        background:
+          radial-gradient(circle at top left, rgba(181, 83, 47, 0.11), transparent 28%),
+          radial-gradient(circle at bottom right, rgba(109, 47, 23, 0.09), transparent 32%),
+          linear-gradient(180deg, #100d09 0%, #070504 100%);
+      }
+      #rawConfig {
+        background: #0e0c0a;
+        border-color: rgba(255,255,255,0.10);
+      }
     }
     * { box-sizing: border-box; }
     body {
@@ -426,7 +458,7 @@ HTML = r"""<!doctype html>
         radial-gradient(circle at top left, rgba(181, 83, 47, 0.10), transparent 24%),
         radial-gradient(circle at bottom right, rgba(109, 47, 23, 0.08), transparent 30%),
         linear-gradient(180deg, #f8f4ee 0%, #ebe5db 100%);
-      font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Avenir Next", "Helvetica Neue", sans-serif;
       min-height: 100vh;
     }
     .grain::before {
@@ -441,81 +473,61 @@ HTML = r"""<!doctype html>
       opacity: 0.7;
     }
     .shell {
-      width: min(1540px, calc(100vw - 36px));
-      margin: 18px auto 28px;
+      width: min(1540px, calc(100vw - 32px));
+      margin: 16px auto 28px;
       display: grid;
       grid-template-columns: 1.28fr 0.92fr;
-      gap: 18px;
+      gap: 16px;
       align-items: start;
     }
     .card {
       background: var(--paper);
       border: 1px solid var(--line);
-      border-radius: 28px;
+      border-radius: 24px;
       box-shadow: var(--shadow);
       backdrop-filter: blur(16px);
       overflow: hidden;
     }
     .left-rail {
       position: sticky;
-      top: 18px;
+      top: 16px;
     }
     .hero {
-      padding: 30px 30px 20px;
-      background:
-        linear-gradient(120deg, rgba(181,83,47,0.09), rgba(255,255,255,0.2) 40%, rgba(109,47,23,0.04)),
-        linear-gradient(180deg, rgba(255,255,255,0.68), rgba(255,255,255,0.08));
+      padding: 24px 24px 18px;
+      background: var(--hero-grad);
       border-bottom: 1px solid var(--line);
     }
     .eyebrow {
       color: var(--accent);
       font-family: "Menlo", "Consolas", monospace;
-      letter-spacing: 0.22em;
-      font-size: 12px;
+      letter-spacing: 0.20em;
+      font-size: 11px;
       text-transform: uppercase;
       margin-bottom: 14px;
-    }
-    h1 {
-      margin: 0 0 10px;
-      font-size: clamp(34px, 4.9vw, 62px);
-      line-height: 0.92;
-      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
-      font-weight: 600;
-      max-width: 11ch;
-      letter-spacing: -0.03em;
-    }
-    .sub {
-      color: var(--muted);
-      max-width: 58ch;
-      line-height: 1.6;
-      margin: 0;
-      font-size: 15px;
     }
     .meta {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 22px;
+      gap: 7px;
     }
     .pill {
-      padding: 10px 14px 9px;
+      padding: 7px 12px;
       border-radius: 999px;
       border: 1px solid var(--line);
-      background: rgba(255,255,255,0.52);
+      background: var(--surface-pill);
       color: var(--accent-dark);
       font-family: "Menlo", "Consolas", monospace;
-      font-size: 12px;
+      font-size: 11px;
     }
     .stage {
-      padding: 22px;
+      padding: 18px 20px 20px;
     }
     .preview-wrap {
       position: relative;
       width: min(100%, 560px);
       aspect-ratio: 16 / 9;
-      border-radius: 22px;
-      background:
-        linear-gradient(180deg, #1c1a18, #0d0c0b);
+      border-radius: 18px;
+      background: linear-gradient(180deg, #1c1a18, #0d0c0b);
       border: 1px solid rgba(0,0,0,0.25);
       overflow: hidden;
       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
@@ -537,35 +549,29 @@ HTML = r"""<!doctype html>
     .preview-image {
       display: none;
     }
-    .preview-note {
-      margin-top: 14px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.55;
-    }
     .preview-controls {
-      margin-top: 14px;
+      margin-top: 10px;
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 220px));
       gap: 10px;
     }
     .panel-body {
-      padding: 22px;
+      padding: 18px;
       display: grid;
-      gap: 18px;
+      gap: 14px;
     }
     .panel-body > div {
       border: 1px solid var(--line);
-      background: rgba(255,255,255,0.48);
-      border-radius: 22px;
-      padding: 18px 18px 16px;
+      background: var(--surface);
+      border-radius: 18px;
+      padding: 15px;
     }
     .panel-wide {
       grid-column: 1 / -1;
     }
     .section-title {
-      margin: 0 0 12px;
-      font-size: 12px;
+      margin: 0 0 11px;
+      font-size: 11px;
       letter-spacing: 0.16em;
       text-transform: uppercase;
       color: var(--accent);
@@ -573,15 +579,15 @@ HTML = r"""<!doctype html>
     }
     details.advanced-block {
       border: 1px solid var(--line);
-      background: rgba(255,255,255,0.48);
-      border-radius: 22px;
+      background: var(--surface);
+      border-radius: 18px;
       padding: 0;
       overflow: hidden;
     }
     details.advanced-block > summary {
       list-style: none;
       cursor: pointer;
-      padding: 18px 18px 16px;
+      padding: 15px 15px 14px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -590,12 +596,12 @@ HTML = r"""<!doctype html>
       letter-spacing: 0.16em;
       text-transform: uppercase;
       color: var(--accent);
-      font-size: 12px;
+      font-size: 11px;
     }
     details.advanced-block > summary::-webkit-details-marker { display: none; }
     details.advanced-block > summary::after {
       content: "+";
-      font-size: 16px;
+      font-size: 15px;
       letter-spacing: 0;
     }
     details.advanced-block[open] > summary::after {
@@ -603,86 +609,89 @@ HTML = r"""<!doctype html>
     }
     .advanced-body {
       display: grid;
-      gap: 18px;
-      padding: 0 18px 18px;
+      gap: 14px;
+      padding: 0 15px 15px;
     }
     .grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
+      gap: 11px;
     }
     .suggestion-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 8px;
     }
     .suggestion-btn {
       text-align: left;
-      border-radius: 18px;
+      border-radius: 14px;
       border: 1px solid var(--line);
-      background: rgba(255,255,255,0.72);
-      padding: 14px 14px 12px;
+      background: var(--surface-high);
+      padding: 11px 12px 10px;
+      transition: opacity 120ms ease, transform 120ms ease;
     }
+    .suggestion-btn:hover { transform: translateY(-1px); }
     .suggestion-btn strong {
       display: block;
-      font-size: 14px;
-      margin-bottom: 6px;
+      font-size: 13px;
+      margin-bottom: 4px;
     }
     .suggestion-btn span {
       display: block;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
       line-height: 1.4;
     }
     label {
       display: grid;
-      gap: 8px;
+      gap: 6px;
       color: var(--muted);
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 500;
     }
     input, select, textarea {
       width: 100%;
-      border-radius: 14px;
+      border-radius: 11px;
       border: 1px solid var(--line);
-      background: rgba(255,255,255,0.78);
+      background: var(--surface-input);
       color: var(--ink);
-      padding: 12px 14px;
+      padding: 10px 12px;
       font: inherit;
+      font-size: 13px;
       outline: none;
-      transition: border-color 150ms ease, transform 150ms ease, background 150ms ease, box-shadow 150ms ease;
+      transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
     }
     textarea {
-      min-height: 132px;
+      min-height: 120px;
       resize: vertical;
       font-family: "Menlo", "Consolas", monospace;
       font-size: 12px;
-      line-height: 1.55;
+      line-height: 1.6;
     }
     input:focus, select:focus, textarea:focus {
-      border-color: rgba(181,83,47,0.55);
-      background: #fffdf8;
-      box-shadow: 0 0 0 4px rgba(181,83,47,0.08);
+      border-color: rgba(181,83,47,0.50);
+      background: var(--surface-input-focus);
+      box-shadow: 0 0 0 3px rgba(181,83,47,0.09);
     }
     .pane-list {
       display: grid;
-      gap: 12px;
+      gap: 9px;
     }
     .pane-item {
       border: 1px solid var(--line);
-      border-radius: 18px;
-      background: rgba(255,255,255,0.62);
-      padding: 14px;
+      border-radius: 14px;
+      background: var(--surface-high);
+      padding: 12px;
     }
     .pane-head {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 10px;
+      margin-bottom: 9px;
     }
     .pane-name {
       font-family: "Menlo", "Consolas", monospace;
-      font-size: 12px;
+      font-size: 11px;
       letter-spacing: 0.12em;
       color: var(--accent-dark);
       text-transform: uppercase;
@@ -694,34 +703,36 @@ HTML = r"""<!doctype html>
     .checks {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px 14px;
+      gap: 6px 14px;
     }
     .check {
       display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 8px 0;
+      gap: 9px;
+      padding: 6px 0;
       color: var(--ink);
+      font-size: 13px;
     }
     .check input {
-      width: 16px;
-      height: 16px;
+      width: 15px;
+      height: 15px;
       margin: 0;
       accent-color: var(--accent);
     }
     .actions {
       display: flex;
-      gap: 12px;
+      gap: 9px;
       flex-wrap: wrap;
     }
     .actions.tight {
-      gap: 8px;
+      gap: 7px;
     }
     button {
       border: 1px solid transparent;
       border-radius: 999px;
-      padding: 13px 18px 12px;
+      padding: 10px 16px 9px;
       font: inherit;
+      font-size: 13px;
       cursor: pointer;
       transition: transform 120ms ease, opacity 120ms ease, background 120ms ease, border-color 120ms ease;
       font-weight: 600;
@@ -733,7 +744,7 @@ HTML = r"""<!doctype html>
       border-color: rgba(109,47,23,0.14);
     }
     .secondary {
-      background: rgba(255,255,255,0.72);
+      background: var(--surface-high);
       color: var(--ink);
       border-color: var(--line);
     }
@@ -745,22 +756,22 @@ HTML = r"""<!doctype html>
     }
     .status.error { color: var(--danger); }
     #rawConfig {
-      min-height: 320px;
+      min-height: 300px;
       background: #171513;
       color: #f5efe6;
       border-color: rgba(255,255,255,0.08);
     }
     .studio-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.5fr) minmax(300px, 0.9fr);
-      gap: 16px;
+      grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.9fr);
+      gap: 14px;
       align-items: start;
     }
     .studio-board {
       position: relative;
       min-height: 360px;
       aspect-ratio: 16 / 9;
-      border-radius: 24px;
+      border-radius: 20px;
       overflow: hidden;
       border: 1px solid var(--line);
       background:
@@ -778,17 +789,46 @@ HTML = r"""<!doctype html>
       background-size: 32px 32px;
       pointer-events: none;
     }
+    .studio-handle {
+      position: absolute;
+      border: 0;
+      padding: 0;
+      margin: 0;
+      background: rgba(255, 247, 230, 0.92);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.18), 0 8px 20px rgba(0,0,0,0.20);
+      z-index: 3;
+      touch-action: none;
+    }
+    .studio-handle.col {
+      width: 12px;
+      margin-left: -6px;
+      cursor: ew-resize;
+      border-radius: 999px;
+    }
+    .studio-handle.row {
+      height: 12px;
+      margin-top: -6px;
+      cursor: ns-resize;
+      border-radius: 999px;
+    }
+    .studio-handle::after {
+      content: "";
+      position: absolute;
+      inset: 2px;
+      border-radius: inherit;
+      background: linear-gradient(180deg, rgba(181,83,47,0.95), rgba(109,47,23,0.95));
+    }
     .studio-card {
       position: absolute;
-      border-radius: 20px;
+      border-radius: 17px;
       border: 1px solid rgba(255,255,255,0.08);
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03), 0 20px 40px rgba(0,0,0,0.22);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03), 0 16px 36px rgba(0,0,0,0.22);
       overflow: hidden;
       cursor: pointer;
       transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
       display: grid;
       align-content: space-between;
-      padding: 14px;
+      padding: 12px;
     }
     .studio-card:hover {
       transform: translateY(-2px);
@@ -796,7 +836,7 @@ HTML = r"""<!doctype html>
     }
     .studio-card.selected {
       border-color: rgba(255,244,221,0.72);
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12), 0 0 0 3px rgba(207,120,83,0.22), 0 20px 40px rgba(0,0,0,0.28);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12), 0 0 0 3px rgba(207,120,83,0.22), 0 16px 36px rgba(0,0,0,0.28);
     }
     .studio-card.video {
       background: linear-gradient(145deg, rgba(109,47,23,0.72), rgba(46,24,15,0.94));
@@ -812,26 +852,26 @@ HTML = r"""<!doctype html>
       justify-content: space-between;
       gap: 10px;
       font-family: "Menlo", "Consolas", monospace;
-      font-size: 12px;
+      font-size: 11px;
       letter-spacing: 0.12em;
       text-transform: uppercase;
     }
     .studio-tag {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      padding: 6px 10px;
+      gap: 5px;
+      padding: 5px 9px;
       border-radius: 999px;
       background: rgba(255,255,255,0.08);
       backdrop-filter: blur(6px);
     }
     .studio-card-body {
       display: grid;
-      gap: 8px;
+      gap: 7px;
       align-self: end;
     }
     .studio-card-title {
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 700;
       line-height: 1.05;
       letter-spacing: -0.03em;
@@ -843,34 +883,43 @@ HTML = r"""<!doctype html>
       max-width: 28ch;
     }
     .studio-inspector {
-      border-radius: 24px;
+      border-radius: 18px;
       border: 1px solid var(--line);
-      background: rgba(255,255,255,0.68);
-      padding: 16px;
+      background: var(--surface-high);
+      padding: 14px;
       display: grid;
-      gap: 14px;
+      gap: 12px;
     }
     .studio-empty {
       color: var(--muted);
       font-size: 13px;
-      line-height: 1.55;
+      line-height: 1.5;
     }
     .playlist-editor {
       display: grid;
-      gap: 12px;
+      gap: 9px;
     }
     .playlist-item {
       border: 1px solid var(--line);
-      border-radius: 18px;
-      background: rgba(255,255,255,0.62);
-      padding: 12px;
+      border-radius: 14px;
+      background: var(--surface-high);
+      padding: 11px;
       display: grid;
-      gap: 10px;
+      gap: 9px;
+    }
+    .playlist-item.dragging {
+      opacity: 0.55;
+      border-color: rgba(181,83,47,0.45);
+      transform: scale(0.995);
+    }
+    .playlist-item.drag-over {
+      border-color: rgba(181,83,47,0.65);
+      box-shadow: 0 0 0 3px rgba(181,83,47,0.12);
     }
     .playlist-thumb {
       width: 132px;
       aspect-ratio: 16 / 9;
-      border-radius: 14px;
+      border-radius: 11px;
       overflow: hidden;
       background:
         linear-gradient(140deg, rgba(181,83,47,0.18), rgba(25,24,22,0.08)),
@@ -907,12 +956,12 @@ HTML = r"""<!doctype html>
     .playlist-row {
       display: grid;
       grid-template-columns: auto 132px minmax(0, 1fr) auto auto auto;
-      gap: 10px;
+      gap: 9px;
       align-items: center;
     }
     .playlist-index {
-      width: 34px;
-      height: 34px;
+      width: 30px;
+      height: 30px;
       border-radius: 999px;
       display: grid;
       place-items: center;
@@ -926,9 +975,9 @@ HTML = r"""<!doctype html>
       min-width: 0;
     }
     .playlist-mini-btn {
-      padding: 9px 12px;
-      border-radius: 12px;
-      background: rgba(255,255,255,0.74);
+      padding: 8px 11px;
+      border-radius: 10px;
+      background: var(--surface-high);
       border: 1px solid var(--line);
       color: var(--ink);
     }
@@ -950,9 +999,9 @@ HTML = r"""<!doctype html>
     }
     @media (max-width: 680px) {
       .grid, .checks { grid-template-columns: 1fr; }
-      .hero { padding: 22px 20px 16px; }
-      .stage, .panel-body { padding: 18px; }
-      .panel-body > div { padding: 16px 16px 14px; }
+      .hero { padding: 18px 16px 14px; }
+      .stage, .panel-body { padding: 14px; }
+      .panel-body > div { padding: 13px; }
       .playlist-row { grid-template-columns: auto 1fr; }
       .playlist-thumb { width: 100%; }
     }
@@ -962,13 +1011,7 @@ HTML = r"""<!doctype html>
   <div class="shell">
     <section class="card left-rail">
       <div class="hero">
-        <div class="eyebrow">KMS Mosaic Control Room</div>
-        <h1>Actual output. Full config. No guessing.</h1>
-        <p class="sub">
-          The page edits the live config file directly, requests real snapshots from
-          the compositor, and lets you work from either structured controls or the
-          raw file without losing the parts the form does not understand.
-        </p>
+        <div class="eyebrow">KMS Mosaic</div>
         <div class="meta">
           <div class="pill" id="configPath">Config: ...</div>
           <div class="pill" id="reloadMode">Reload: watched file reexec</div>
@@ -983,9 +1026,6 @@ HTML = r"""<!doctype html>
             <img id="previewImage" class="preview-image" alt="Current KMS Mosaic output" />
           </div>
         </div>
-        <p class="preview-note">
-          This is a real compositor snapshot, not a synthetic mockup.
-        </p>
         <div class="preview-controls">
           <label>Preview Correction
             <select id="previewCorrection">
@@ -1022,7 +1062,7 @@ HTML = r"""<!doctype html>
               <div class="studio-board" id="studioBoard"></div>
             </div>
             <div class="studio-inspector" id="studioInspector">
-              <div class="studio-empty">Select a pane to edit it from a pane-centric view.</div>
+              <div class="studio-empty">Select a pane to edit it.</div>
             </div>
           </div>
         </div>
@@ -1030,9 +1070,6 @@ HTML = r"""<!doctype html>
         <div>
           <h2 class="section-title">Layout Suggestions</h2>
           <div class="suggestion-grid" id="layoutSuggestions"></div>
-          <p class="muted-note">
-            These are starter arrangements for the split-tree editor. The saved scene now follows the Layout Studio tree directly.
-          </p>
         </div>
 
         <div>
@@ -1077,9 +1114,7 @@ HTML = r"""<!doctype html>
           <div class="actions tight">
             <button class="secondary" id="addQueueItemBtn">Add Video</button>
           </div>
-          <p class="muted-note" id="queueEditorNote">
-            This queue follows the currently selected pane. Terminal panes do not have a media queue.
-          </p>
+          <p class="muted-note" id="queueEditorNote">Follows the selected pane. Not applicable to terminal panes.</p>
           <label>Video Files
             <textarea id="videoList" spellcheck="false" placeholder="/path/one.mp4&#10;/path/two.mp4"></textarea>
           </label>
@@ -1212,6 +1247,8 @@ HTML = r"""<!doctype html>
     let livePreviewInFlight = false;
     let livePreviewController = null;
     let livePreviewUrl = null;
+    let studioDragState = null;
+    let playlistDragIndex = null;
     const layoutSuggestionCopy = {
       stack: "Vertical stack of the visible panes.",
       row: "Horizontal row of the visible panes.",
@@ -1577,6 +1614,41 @@ HTML = r"""<!doctype html>
       return splitTreeCollapseRole(node.first, role) || splitTreeCollapseRole(node.second, role);
     }
 
+    function splitTreeNodeAtPath(node, path) {
+      let current = node;
+      for (const step of String(path || "")) {
+        if (!current || current.leaf) return null;
+        current = step === "0" ? current.first : current.second;
+      }
+      return current;
+    }
+
+    function splitTreeCollectHandles(node, area, out, path = "") {
+      if (!node || node.leaf) return;
+      const pct = Math.max(10, Math.min(90, Number(node.pct || 50)));
+      if (node.kind === "row") {
+        const firstH = area.h * pct / 100;
+        out.push({
+          path,
+          kind: "row",
+          logical: { x: area.x, y: area.y + firstH, w: area.w, h: 0 },
+          area,
+        });
+        splitTreeCollectHandles(node.first, { x: area.x, y: area.y, w: area.w, h: firstH }, out, `${path}0`);
+        splitTreeCollectHandles(node.second, { x: area.x, y: area.y + firstH, w: area.w, h: area.h - firstH }, out, `${path}1`);
+      } else {
+        const firstW = area.w * pct / 100;
+        out.push({
+          path,
+          kind: "col",
+          logical: { x: area.x + firstW, y: area.y, w: 0, h: area.h },
+          area,
+        });
+        splitTreeCollectHandles(node.first, { x: area.x, y: area.y, w: firstW, h: area.h }, out, `${path}0`);
+        splitTreeCollectHandles(node.second, { x: area.x + firstW, y: area.y, w: area.w - firstW, h: area.h }, out, `${path}1`);
+      }
+    }
+
     function ensureSelectedRole() {
       const maxRole = Math.max(0, Number(state?.pane_count || 0));
       if (!Number.isFinite(selectedRole) || selectedRole < 0) selectedRole = 0;
@@ -1763,9 +1835,23 @@ HTML = r"""<!doctype html>
       return rect;
     }
 
+    function studioDisplayPointToLogical(x, y) {
+      const total = normalizedRotationDegrees();
+      if (total === 90) return { x: y, y: 100 - x };
+      if (total === 180) return { x: 100 - x, y: 100 - y };
+      if (total === 270) return { x: 100 - y, y: x };
+      return { x, y };
+    }
+
     function applyStudioGeometry() {
       const total = normalizedRotationDegrees();
       studioBoard.style.aspectRatio = (total === 90 || total === 270) ? "9 / 16" : "16 / 9";
+    }
+
+    function studioDisplayHandleKind(kind) {
+      const total = normalizedRotationDegrees();
+      if (total === 90 || total === 270) return kind === "col" ? "row" : "col";
+      return kind;
     }
 
     function renderLayoutSuggestions() {
@@ -1787,6 +1873,47 @@ HTML = r"""<!doctype html>
         });
         layoutSuggestions.appendChild(button);
       });
+    }
+
+    function beginStudioDrag(path, clientX, clientY) {
+      const tree = ensureSplitTreeModel();
+      const node = splitTreeNodeAtPath(tree, path);
+      if (!node || node.leaf) return;
+      studioDragState = { path, node, startX: clientX, startY: clientY };
+      document.body.style.userSelect = "none";
+    }
+
+    function updateStudioDrag(clientX, clientY) {
+      if (!studioDragState || !state) return;
+      const tree = ensureSplitTreeModel();
+      const node = splitTreeNodeAtPath(tree, studioDragState.path);
+      if (!node || node.leaf) return;
+      const boardRect = studioBoard.getBoundingClientRect();
+      if (!boardRect.width || !boardRect.height) return;
+      const displayX = ((clientX - boardRect.left) / boardRect.width) * 100;
+      const displayY = ((clientY - boardRect.top) / boardRect.height) * 100;
+      const logical = studioDisplayPointToLogical(displayX, displayY);
+      const handles = [];
+      splitTreeCollectHandles(tree, { x: 0, y: 0, w: 100, h: 100 }, handles);
+      const handle = handles.find(entry => entry.path === studioDragState.path);
+      if (!handle) return;
+      let pct = node.pct;
+      if (node.kind === "col" && handle.area.w > 0) {
+        pct = ((logical.x - handle.area.x) / handle.area.w) * 100;
+      } else if (node.kind === "row" && handle.area.h > 0) {
+        pct = ((logical.y - handle.area.y) / handle.area.h) * 100;
+      }
+      node.pct = Math.max(10, Math.min(90, pct));
+      state.splitTreeModel = tree;
+      syncSplitTreeState();
+      renderStudioBoard();
+    }
+
+    function finishStudioDrag() {
+      if (!studioDragState) return;
+      studioDragState = null;
+      document.body.style.userSelect = "";
+      renderStudioBoard();
     }
 
     function renderStudioBoard() {
@@ -1826,6 +1953,32 @@ HTML = r"""<!doctype html>
           renderStudioInspector();
         });
         studioBoard.appendChild(card);
+      });
+
+      const handles = [];
+      splitTreeCollectHandles(ensureSplitTreeModel(), { x: 0, y: 0, w: 100, h: 100 }, handles);
+      handles.forEach((entry) => {
+        const displayRect = transformStudioRect(entry.logical);
+        const displayKind = studioDisplayHandleKind(entry.kind);
+        const handle = document.createElement("button");
+        handle.type = "button";
+        handle.className = `studio-handle ${displayKind}`;
+        if (displayKind === "col") {
+          handle.style.left = `${displayRect.x}%`;
+          handle.style.top = `${displayRect.y}%`;
+          handle.style.height = `${displayRect.h}%`;
+        } else {
+          handle.style.left = `${displayRect.x}%`;
+          handle.style.top = `${displayRect.y}%`;
+          handle.style.width = `${displayRect.w}%`;
+        }
+        handle.title = entry.kind === "col" ? "Drag to resize vertical split" : "Drag to resize horizontal split";
+        handle.addEventListener("pointerdown", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          beginStudioDrag(entry.path, event.clientX, event.clientY);
+        });
+        studioBoard.appendChild(handle);
       });
     }
 
@@ -1965,6 +2118,8 @@ HTML = r"""<!doctype html>
         const thumb = playlistThumbMarkup(path, index);
         const item = document.createElement("div");
         item.className = "playlist-item";
+        item.draggable = true;
+        item.dataset.videoDragIndex = String(index);
         item.innerHTML = `
           <div class="playlist-row">
             <div class="playlist-index">${index + 1}</div>
@@ -1977,6 +2132,27 @@ HTML = r"""<!doctype html>
             <button class="playlist-mini-btn danger" data-video-remove="${index}">Remove</button>
           </div>
         `;
+        item.addEventListener("dragstart", () => {
+          playlistDragIndex = index;
+          item.classList.add("dragging");
+        });
+        item.addEventListener("dragend", () => {
+          playlistDragIndex = null;
+          item.classList.remove("dragging");
+          playlistEditor.querySelectorAll(".playlist-item").forEach((node) => node.classList.remove("drag-over"));
+        });
+        item.addEventListener("dragover", (event) => {
+          if (playlistDragIndex == null || playlistDragIndex === index) return;
+          event.preventDefault();
+          item.classList.add("drag-over");
+        });
+        item.addEventListener("dragleave", () => item.classList.remove("drag-over"));
+        item.addEventListener("drop", (event) => {
+          if (playlistDragIndex == null || playlistDragIndex === index) return;
+          event.preventDefault();
+          item.classList.remove("drag-over");
+          moveQueueItemTo(playlistDragIndex, index);
+        });
         playlistEditor.appendChild(item);
       });
       playlistEditor.querySelectorAll("input[data-video-index]").forEach((input) => {
@@ -2034,6 +2210,18 @@ HTML = r"""<!doctype html>
       const ctx = queueEditorContext();
       if (!ctx) return;
       ctx.apply(ctx.paths.filter((_, idx) => idx !== index));
+      renderPlaylistEditor();
+      renderStudioBoard();
+    }
+
+    function moveQueueItemTo(fromIndex, toIndex) {
+      const ctx = queueEditorContext();
+      if (!ctx) return;
+      if (fromIndex < 0 || toIndex < 0 || fromIndex >= ctx.paths.length || toIndex >= ctx.paths.length) return;
+      const next = ctx.paths.slice();
+      const [item] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, item);
+      ctx.apply(next);
       renderPlaylistEditor();
       renderStudioBoard();
     }
@@ -2531,6 +2719,12 @@ HTML = r"""<!doctype html>
     previewImage.addEventListener("error", () => {
       livePreviewInFlight = false;
     });
+    window.addEventListener("pointermove", (event) => {
+      if (!studioDragState) return;
+      updateStudioDrag(event.clientX, event.clientY);
+    });
+    window.addEventListener("pointerup", () => finishStudioDrag());
+    window.addEventListener("pointercancel", () => finishStudioDrag());
 
     [
       "connector","mode","rotation","fontSize","rightFrac","paneSplit",
