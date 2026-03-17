@@ -116,6 +116,7 @@ That service:
 - exposes a pane-oriented "Layout Studio" that edits the saved `--split-tree` when present
 - lets you add/remove panes, switch panes between terminal and mpv, and edit the selected pane's media queue from the page
 - lets you attach pane-local mpv options to mpv panes so each media pane can override the global mpv defaults
+- exposes structured pane-local mpv controls in the pane inspector for audio, mute, loop-file, video-only/audio-only mode, and shader stacks while preserving a smaller raw per-pane options box for anything else
 - lets you split the selected pane vertically or horizontally from the studio itself
 - treats the old layout presets as starter suggestions instead of the main editing surface
 - moves scene rules, raw config, and raw mpv option text under Advanced
