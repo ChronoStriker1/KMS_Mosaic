@@ -243,6 +243,8 @@ with the Unraid `plugin install` command. The plugin:
 - manages boot/start/stop/restart for both `kms_mosaic` and the web UI
 - stores plugin settings in `/boot/config/plugins/kms.mosaic/kms.mosaic.cfg`
 - retires the old `Start kms_mosaic` userscript automatically so boot ownership does not race
+- extracts plugin payloads without preserving foreign ownership metadata
+- keeps config-watch reloads on the wrapper path so packaged library resolution survives live reexecs
 
 Important operational note:
 

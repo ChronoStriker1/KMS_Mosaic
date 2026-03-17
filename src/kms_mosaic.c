@@ -52,7 +52,9 @@ int main(int argc, char **argv) {
         int rc = app_run(argc, argv, &g_debug, &g_stop);
         if (rc != APP_RUN_RELOAD) return rc;
         fprintf(stderr, "Reloading after config change...\n");
-        execv(argv[0], argv);
+        const char *reexec_path = getenv("KMS_MOSAIC_REEXEC");
+        if (!reexec_path || !*reexec_path) reexec_path = argv[0];
+        execv(reexec_path, argv);
         perror("execv");
         return 1;
     }
