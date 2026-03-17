@@ -62,6 +62,9 @@
   items.
 - Rotated playlist preview thumbnails to match the effective mpv pane
   orientation instead of always showing upright media frames.
+- Changed playlist thumbnails to fit within their preview frame instead of
+  cropping, and restored bulk queue editing as a collapsed section beneath the
+  playlist list.
 - Reworked the web UI around a split-tree-first Layout Studio, with live split
   buttons, rotation-aware studio geometry, layout suggestions, Advanced
   demotion for legacy scene/raw fields, and structured global mpv controls for
