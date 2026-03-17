@@ -21,6 +21,7 @@ $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
     border: 1px solid var(--box_border, rgba(0,0,0,.12));
     border-radius: 8px;
     overflow: hidden;
+    color: #202225;
   }
   .kms-panel-head {
     padding: 14px 16px;
@@ -70,15 +71,22 @@ $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
   }
   .kms-field label {
     font-weight: 700;
+    color: #2c3136;
   }
   .kms-field input[type="text"],
   .kms-field select {
     width: 100%;
+    color: #1f2328;
+    background: #ffffff;
+    border-color: rgba(0,0,0,.16);
   }
   .kms-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+  }
+  .kms-actions button {
+    color: #222;
   }
   .kms-actions.service-actions {
     align-self: end;
@@ -105,6 +113,10 @@ $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
     background: rgba(255,255,255,.55);
   }
   .kms-ui-error { color: #ba3b2a; }
+  .kms-preview-note {
+    font-size: 12px;
+    color: #6b7280;
+  }
   @media (max-width: 1200px) {
     .kms-service-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
   }
@@ -224,10 +236,10 @@ function kmsEmbeddedOverrides() {
       font-size: 16px;
       letter-spacing: normal;
       text-transform: none;
-      color: var(--color-text, #222);
+      color: #202225;
     }
     #kmsUiMount .config-path {
-      color: var(--color-text-light, #666);
+      color: #6b7280;
       letter-spacing: normal;
       text-transform: none;
       font-size: 12px;
@@ -237,6 +249,52 @@ function kmsEmbeddedOverrides() {
       border-radius: 8px;
       background: rgba(255,255,255,.08);
       border: 1px solid rgba(0,0,0,.08);
+    }
+    #kmsUiMount,
+    #kmsUiMount label,
+    #kmsUiMount .mini,
+    #kmsUiMount .muted-note,
+    #kmsUiMount .studio-empty,
+    #kmsUiMount .playlist-path,
+    #kmsUiMount .playlist-duration,
+    #kmsUiMount .queue-note,
+    #kmsUiMount .config-path,
+    #kmsUiMount .pane-name,
+    #kmsUiMount .pane-head,
+    #kmsUiMount .section-title,
+    #kmsUiMount .check,
+    #kmsUiMount .status {
+      color: #202225 !important;
+    }
+    #kmsUiMount input,
+    #kmsUiMount select,
+    #kmsUiMount textarea {
+      background: #fff !important;
+      color: #1f2328 !important;
+      border-color: rgba(0,0,0,.16) !important;
+    }
+    #kmsUiMount input::placeholder,
+    #kmsUiMount textarea::placeholder {
+      color: #81858b !important;
+    }
+    #kmsUiMount button {
+      color: #202225 !important;
+    }
+    #kmsUiMount button.primary {
+      background: #f15a24 !important;
+      border-color: #cf4b1f !important;
+      color: #fff !important;
+    }
+    #kmsUiMount button.secondary,
+    #kmsUiMount .playlist-target-btn,
+    #kmsUiMount .playlist-mini-btn {
+      background: #f5f5f5 !important;
+      color: #202225 !important;
+      border-color: rgba(0,0,0,.18) !important;
+    }
+    #kmsUiMount .playlist-target-btn.active {
+      background: #e9eef5 !important;
+      border-color: #8ca0ba !important;
     }
     #kmsUiMount .stage {
       padding-top: 6px;
@@ -254,6 +312,17 @@ function kmsEmbeddedOverrides() {
       height: 100%;
       object-fit: contain;
       background: #000;
+    }
+    #kmsUiMount .preview-stage::after {
+      content: attr(data-preview-status);
+      display: none;
+      color: #c7d0db;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    #kmsUiMount .preview-stage.is-idle::after {
+      display: block;
     }
     #kmsUiMount button.primary,
     #kmsUiMount button.secondary {
