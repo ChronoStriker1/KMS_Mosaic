@@ -98,5 +98,6 @@
 - Replaced the plugin page iframe with a native Unraid-style settings page that
   proxies the standalone editor APIs and hosts the full layout/media/playlist
   editor directly inside the plugin UI.
-- Moved the plugin launch target back to `Tools/KMSMosaic` so it behaves like a
-  normal Unraid plugin launcher instead of rendering as a Settings section.
+- Reworked the plugin page into a single native settings surface with the
+  service controls folded into the main editor and moved the launcher back
+  under the Settings route expected by the plugin UI.

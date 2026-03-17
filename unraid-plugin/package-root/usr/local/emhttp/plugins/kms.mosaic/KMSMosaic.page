@@ -1,4 +1,5 @@
-Menu="Utilities"
+Menu="OtherSettings"
+Type="xmenu"
 Title="KMS Mosaic"
 Icon="desktop"
 ---
@@ -16,16 +17,15 @@ $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
     gap: 18px;
   }
   .kms-panel {
-    background: var(--box_bg, rgba(255,255,255,.78));
+    background: var(--box_bg, #f6f6f6);
     border: 1px solid var(--box_border, rgba(0,0,0,.12));
     border-radius: 8px;
     overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0,0,0,.06);
   }
   .kms-panel-head {
     padding: 14px 16px;
     border-bottom: 1px solid var(--box_border, rgba(0,0,0,.12));
-    background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(255,255,255,.32));
+    background: var(--header_bg, rgba(255,255,255,.45));
   }
   .kms-panel-head h2,
   .kms-panel-head h3 {
@@ -48,6 +48,21 @@ $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
     display: grid;
     gap: 4px;
     margin-bottom: 4px;
+  }
+  .kms-intro {
+    display: grid;
+    gap: 8px;
+    padding: 2px 0 4px;
+    color: var(--color-text, #222);
+  }
+  .kms-intro-title {
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .kms-intro-copy {
+    color: var(--color-text-light, #666);
+    line-height: 1.55;
+    max-width: 90ch;
   }
   .kms-field {
     display: grid;
@@ -104,6 +119,13 @@ $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
       <h2>KMS Mosaic</h2>
     </div>
     <div class="kms-panel-body">
+      <div class="kms-intro">
+        <div class="kms-intro-title">DRM video wall and terminal compositor for Unraid</div>
+        <div class="kms-intro-copy">
+          KMS Mosaic drives a direct-rendered fullscreen display with terminal panes, multiple mpv-backed media panes, live preview, split-tree layout editing, and runtime config reloads from <code><?=htmlspecialchars($config_path);?></code>.
+        </div>
+      </div>
+
       <div class="kms-service-meta">
         <div id="kmsStatus" class="kms-status">Loading status…</div>
         <div id="kmsMeta" class="kms-meta"></div>
@@ -213,7 +235,7 @@ function kmsEmbeddedOverrides() {
     #kmsUiMount .panel-body > div,
     #kmsUiMount details.advanced-block {
       border-radius: 8px;
-      background: rgba(255,255,255,.16);
+      background: rgba(255,255,255,.08);
       border: 1px solid rgba(0,0,0,.08);
     }
     #kmsUiMount .stage {
