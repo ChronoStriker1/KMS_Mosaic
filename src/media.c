@@ -93,12 +93,15 @@ static void media_apply_options(media_ctx *m, const options_t *opt, const pane_m
     if (opt->shuffle) mpv_set_option_string(m->mpv, "shuffle", "yes");
     if (!user_set_vsync) mpv_set_option_string(m->mpv, "video-sync", "display-resample");
     if (!user_set_keepaspect) mpv_set_option_string(m->mpv, "keepaspect", "yes");
-    if (opt->video_rotate >= 0 && !user_set_rotate) {
+    int rotate_value = (pane_media && pane_media->video_rotate >= 0) ? pane_media->video_rotate : opt->video_rotate;
+    const char *panscan_value = (pane_media && pane_media->panscan) ? pane_media->panscan : opt->panscan;
+
+    if (rotate_value >= 0 && !user_set_rotate) {
         char buf[16];
-        snprintf(buf, sizeof(buf), "%d", opt->video_rotate);
+        snprintf(buf, sizeof(buf), "%d", rotate_value);
         mpv_set_option_string(m->mpv, "video-rotate", buf);
     }
-    if (opt->panscan && !user_set_panscan) mpv_set_option_string(m->mpv, "panscan", opt->panscan);
+    if (panscan_value && !user_set_panscan) mpv_set_option_string(m->mpv, "panscan", panscan_value);
     if (opt->smooth) {
         if (!user_set_interpolation) mpv_set_option_string(m->mpv, "interpolation", "no");
         if (!user_set_tscale) mpv_set_option_string(m->mpv, "tscale", "linear");
@@ -336,8 +339,9 @@ static bool media_init_source(media_ctx *m, const options_t *opt, const pane_med
 
     media_load_inputs_source(m, opt, pane_media);
 
-    if (!pane_media && opt->mpv_out_path) {
-        m->mpv_out = fopen(opt->mpv_out_path, "w");
+    const char *mpv_out_path = pane_media ? pane_media->mpv_out_path : opt->mpv_out_path;
+    if (mpv_out_path) {
+        m->mpv_out = fopen(mpv_out_path, "w");
         if (!m->mpv_out) perror("mpv-out");
     }
     if (m->playlist_fifo_path) {
