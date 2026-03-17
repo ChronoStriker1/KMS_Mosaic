@@ -1324,6 +1324,14 @@ HTML = r"""<!doctype html>
       return `Pane ${index}`;
     }
 
+    function roleName(role) {
+      if (role === 0) return "Pane C";
+      if (role === 1) return "Pane A";
+      if (role === 2) return "Pane B";
+      if (role <= 26) return `Pane ${String.fromCharCode(64 + role + 1)}`;
+      return `Pane ${role}`;
+    }
+
     function parseMpvOptionGroups(opts) {
       const groups = { audioMode: "", muteMode: "", loopFile: "", videoMode: "", shaders: [], other: [] };
       (Array.isArray(opts) ? opts : []).forEach((opt) => {
@@ -1438,7 +1446,7 @@ HTML = r"""<!doctype html>
 
     function availablePlaylistTargets() {
       if (!state) return [];
-      const targets = [{ role: 0, title: "Main mpv Pane" }];
+      const targets = [{ role: 0, title: roleTitle(0) }];
       for (let role = 1; role <= Number(state.pane_count || 0); role += 1) {
         const paneIndex = role - 1;
         if (pendingNewPaneIndexes.has(paneIndex)) continue;
@@ -1562,7 +1570,7 @@ HTML = r"""<!doctype html>
               <textarea id="mediaOtherOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${groups.other.join("\n")}</textarea>
             </label>
           </div>
-          <p class="muted-note">This target controls the main mpv pane, including the global-only connector, panscan, output log, and video-rotate fields.</p>
+          <p class="muted-note">This target controls ${roleTitle(0)}, including the global-only connector, panscan, output log, and video-rotate fields.</p>
         `;
         const syncMain = () => {
           state.connector = document.getElementById("mediaConnector").value.trim();
@@ -1668,8 +1676,8 @@ HTML = r"""<!doctype html>
       ensurePlaylistTargetRole();
       if (playlistTargetRole === 0) {
         return {
-          title: "Main Video Queue",
-          note: "This queue controls the main mpv pane.",
+          title: `${roleTitle(0)} Queue`,
+          note: `This queue controls ${roleTitle(0)}.`,
           paths: Array.isArray(state.video_paths) ? state.video_paths.slice() : [],
           editable: true,
           apply(paths) {
@@ -1777,7 +1785,7 @@ HTML = r"""<!doctype html>
     }
 
     function roleTitle(role) {
-      return role === 0 ? "Main mpv Pane" : slotName(role);
+      return roleName(role);
     }
 
     function readInt(id, fallback) {
@@ -2382,7 +2390,7 @@ HTML = r"""<!doctype html>
         studioInspector.innerHTML = `
           <div>
             <h2 class="section-title">Selected Pane</h2>
-            <div class="mini">Main video pane</div>
+            <div class="mini">${roleTitle(0)}</div>
           </div>
           <label>Pane Type
             <input type="text" value="mpv" readonly />
@@ -2429,7 +2437,7 @@ HTML = r"""<!doctype html>
           <label>Additional mpv Options
             <textarea id="inspectorMainMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${mainMpvGroups.other.join("\n")}</textarea>
           </label>
-          <p class="muted-note">This inspector controls the main video pane. The queue editor below still controls the main pane video list.</p>
+          <p class="muted-note">This inspector controls ${roleTitle(0)}. The queue editor below still controls that pane's video list.</p>
         `;
         document.getElementById("inspectorPlaylist").addEventListener("input", (event) => {
           state.playlist = event.target.value;
