@@ -119,6 +119,7 @@ That service:
 - lets you attach pane-local mpv options to mpv panes so each media pane can override the global mpv defaults
 - lets each mpv pane keep its own playlist file or playlist FIFO so multiple mpv panes do not share one live queue
 - exposes the same structured mpv controls on the main video pane and extra mpv panes so playlist, fifo, mute, loop-file, audio, video-only/audio-only mode, and shader settings stay consistent across all media panes
+- gives the Media section its own pane target bar, so the same per-mpv-pane fields are editable there instead of only through the selected pane inspector
 - exposes structured pane-local mpv controls in the pane inspector for audio, mute, loop-file, video-only/audio-only mode, and shader stacks while preserving a smaller raw per-pane options box for anything else
 - rotates playlist preview thumbnails to match the effective mpv pane orientation instead of always rendering them upright
 - keeps playlist thumbnails fitted inside their preview frame instead of cropping them, and moves bulk queue editing into a collapsed section under the playlist editor

@@ -57,6 +57,9 @@
 - Brought the main video pane inspector up to the same structured mpv control
   surface as extra mpv panes, including playlist-extended, mute, loop-file,
   and video output mode controls.
+- Reworked the web Media section into the same explicit pane-targeted model as
+  the playlist editor, so each mpv pane can be edited there instead of the
+  section always pointing at the main pane.
 - Added inline playlist previews in the web queue editor by serving media files
   through the web app and letting the browser extract still frames for list
   items.
