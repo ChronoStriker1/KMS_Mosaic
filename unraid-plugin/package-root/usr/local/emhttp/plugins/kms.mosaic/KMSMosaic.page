@@ -73,21 +73,6 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     gap: 4px;
     margin-bottom: 4px;
   }
-  .kms-intro {
-    display: grid;
-    gap: 8px;
-    padding: 2px 0 4px;
-    color: var(--color-text, #222);
-  }
-  .kms-intro-title {
-    font-size: 18px;
-    font-weight: 700;
-  }
-  .kms-intro-copy {
-    color: var(--color-text-light, #666);
-    line-height: 1.55;
-    max-width: 90ch;
-  }
   .kms-field {
     display: grid;
     gap: 6px;
@@ -155,13 +140,6 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
       <h2>KMS Mosaic</h2>
     </div>
     <div class="kms-panel-body">
-      <div class="kms-intro">
-        <div class="kms-intro-title">DRM video wall and terminal compositor for Unraid</div>
-        <div class="kms-intro-copy">
-          KMS Mosaic drives a direct-rendered fullscreen display with terminal panes, multiple mpv-backed media panes, live preview, split-tree layout editing, and runtime config reloads from <code><?=htmlspecialchars($config_path);?></code>.
-        </div>
-      </div>
-
       <div class="kms-service-meta">
         <div id="kmsStatus" class="kms-status pending">
           Checking service state…
@@ -204,6 +182,8 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
           <button type="button" onclick="kmsControl('restart')">Restart</button>
           <button type="button" onclick="kmsControl('stop')">Stop</button>
           <button type="button" onclick="kmsRefreshStatus()">Refresh</button>
+          <button type="button" class="orange" id="kmsSaveConfigBtn">Save Config</button>
+          <button type="button" id="kmsReloadConfigBtn">Reload From Disk</button>
         </div>
       </div>
 
@@ -253,8 +233,9 @@ function kmsInstallFetchShim() {
 function kmsEmbeddedOverrides() {
   return `
     #kmsUiMount .shell {
-      margin: 0;
-      max-width: none;
+      margin: 0 auto;
+      width: min(100%, 1680px);
+      max-width: 1680px;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 18px;
       padding: 0;
@@ -335,8 +316,6 @@ function kmsEmbeddedOverrides() {
     }
     #kmsUiMount .preview-wrap {
       margin-inline: auto;
-      width: 100% !important;
-      max-width: 100% !important;
       background: #111 !important;
       border-color: rgba(0,0,0,.22) !important;
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.03), 0 3px 10px rgba(0,0,0,.10) !important;
@@ -528,6 +507,34 @@ async function kmsControl(action) {
   }
 }
 
+async function kmsSaveConfigState() {
+  try {
+    await kmsEnsureEmbeddedLoaded();
+    if (typeof window.saveState !== 'function') {
+      throw new Error('Embedded config save is unavailable');
+    }
+    await window.saveState();
+    setTimeout(() => { kmsRefreshStatus().catch(() => {}); }, 1500);
+  } catch (err) {
+    document.getElementById('kmsStatus').className = 'kms-status bad';
+    document.getElementById('kmsStatus').textContent = err.message || 'Save Config failed';
+  }
+}
+
+async function kmsReloadConfigState() {
+  try {
+    await kmsEnsureEmbeddedLoaded();
+    if (typeof window.loadState !== 'function') {
+      throw new Error('Embedded config reload is unavailable');
+    }
+    await window.loadState();
+    setTimeout(() => { kmsRefreshStatus().catch(() => {}); }, 250);
+  } catch (err) {
+    document.getElementById('kmsStatus').className = 'kms-status bad';
+    document.getElementById('kmsStatus').textContent = err.message || 'Reload From Disk failed';
+  }
+}
+
 async function kmsEnsureEmbeddedLoaded() {
   if (kmsEmbeddedLoaded) return;
   if (kmsEmbeddedLoadPromise) return kmsEmbeddedLoadPromise;
@@ -542,15 +549,10 @@ async function kmsEnsureEmbeddedLoaded() {
       if (!htmlResponse.ok) throw new Error(html || 'Unable to load editor');
       const statePayload = await stateResponse.json();
       if (!stateResponse.ok) throw new Error(statePayload.error || 'Unable to load editor state');
-      const rewritten = kmsRewriteBackendHtml(html)
-        .replace(
-          'document.getElementById("configPath").textContent = `Config: ${configPath}`;',
-          'const configPathNode = document.getElementById("configPath"); if (configPathNode) configPathNode.textContent = `Config: ${configPath}`;'
-        )
-        .replace(
-          'loadState().catch(err => setStatus(err.message, true));',
-          'if (window.__kmsEmbeddedInitialPayload) { fillForm(window.__kmsEmbeddedInitialPayload.state, window.__kmsEmbeddedInitialPayload.config_path, window.__kmsEmbeddedInitialPayload.raw_config); scheduleLivePreview(); setStatus(`Loaded ${window.__kmsEmbeddedInitialPayload.config_path}`, false, true); } else { loadState().catch(err => setStatus(err.message, true)); }'
-        );
+      const rewritten = kmsRewriteBackendHtml(html).replace(
+        'document.getElementById("configPath").textContent = `Config: ${configPath}`;',
+        'const configPathNode = document.getElementById("configPath"); if (configPathNode) configPathNode.textContent = `Config: ${configPath}`;'
+      );
       const doc = new DOMParser().parseFromString(rewritten, 'text/html');
       kmsInstallEmbeddedStyles(doc);
       const scripts = Array.from(doc.querySelectorAll('script')).map((script) => script.textContent || '');
@@ -564,6 +566,15 @@ async function kmsEnsureEmbeddedLoaded() {
         script.textContent = text;
         mount.appendChild(script);
       });
+      if (typeof window.fillForm === 'function') {
+        window.fillForm(statePayload.state, statePayload.config_path, statePayload.raw_config);
+      }
+      if (typeof window.scheduleLivePreview === 'function') {
+        window.scheduleLivePreview();
+      }
+      if (typeof window.setStatus === 'function') {
+        window.setStatus(`Loaded ${statePayload.config_path}`, false, true);
+      }
       kmsEmbeddedLoaded = true;
     } catch (err) {
       mount.className = 'kms-ui-error';
@@ -577,6 +588,8 @@ async function kmsEnsureEmbeddedLoaded() {
 }
 
 $(function() {
+  document.getElementById('kmsSaveConfigBtn').addEventListener('click', kmsSaveConfigState);
+  document.getElementById('kmsReloadConfigBtn').addEventListener('click', kmsReloadConfigState);
   kmsEnsureEmbeddedLoaded();
   kmsRefreshStatus();
 });

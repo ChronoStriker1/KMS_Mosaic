@@ -903,7 +903,7 @@ HTML = r"""<!doctype html>
     /* ─── preview ─────────────────────────────────────── */
     .stage { padding: 12px; }
     .preview-layout { display: block; }
-    .preview-layout.portrait .preview-wrap { aspect-ratio: 9 / 16; max-height: 440px; margin: 0 auto; }
+    .preview-layout.portrait .preview-wrap { aspect-ratio: 9 / 16; margin: 0 auto; }
     .preview-layout.landscape .preview-wrap { aspect-ratio: 16 / 9; }
     .preview-wrap {
       position: relative;
@@ -1272,7 +1272,23 @@ HTML = r"""<!doctype html>
     }
     .studio-empty { color: var(--muted); font-size: 12px; line-height: 1.5; }
     /* ─── playlist ────────────────────────────────────── */
-    .playlist-editor { display: grid; gap: 7px; }
+    .playlist-editor { display: grid; gap: 10px; }
+    .playlist-list {
+      display: grid;
+      gap: 7px;
+      max-height: calc(4 * 116px + 3 * 7px);
+      overflow-y: auto;
+      padding-right: 6px;
+    }
+    .playlist-list::-webkit-scrollbar {
+      width: 10px;
+    }
+    .playlist-list::-webkit-scrollbar-thumb {
+      background: rgba(0,0,0,0.18);
+      border-radius: 999px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
     .playlist-targets {
       display: flex;
       gap: 6px;
@@ -1310,10 +1326,13 @@ HTML = r"""<!doctype html>
       gap: 8px;
       transition: border-color 120ms ease, box-shadow 120ms ease;
     }
+    .playlist-item.alt {
+      background: color-mix(in srgb, var(--surface-high) 78%, #000 22%);
+    }
     .playlist-item:hover { border-color: var(--line-strong); }
     .playlist-item.dragging { opacity: 0.5; transform: scale(0.99); }
     .playlist-item.drag-over { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(181,83,47,0.14); }
-    .playlist-media-cell { width: 120px; display: grid; align-self: start; }
+    .playlist-media-cell { width: auto; display: grid; align-self: start; }
     .playlist-duration {
       position: absolute;
       bottom: 5px;
@@ -1332,8 +1351,8 @@ HTML = r"""<!doctype html>
     }
     .playlist-duration:empty { display: none; }
     .playlist-thumb {
-      width: 120px;
-      aspect-ratio: 16 / 9;
+      height: 60px;
+      width: auto;
       border-radius: 9px;
       overflow: hidden;
       background:
@@ -1350,6 +1369,8 @@ HTML = r"""<!doctype html>
       place-items: center;
       overflow: hidden;
       padding: 4px;
+      transition: transform 160ms ease, box-shadow 160ms ease;
+      transform-origin: center center;
     }
     .playlist-thumb img, .playlist-thumb video {
       width: 100%;
@@ -1374,9 +1395,9 @@ HTML = r"""<!doctype html>
     }
     .playlist-row {
       display: grid;
-      grid-template-columns: auto 120px 80px auto auto auto;
-      gap: 8px;
-      align-items: center;
+      grid-template-columns: auto auto 80px auto auto auto;
+      gap: 8px 10px;
+      align-items: start;
     }
     .playlist-path { width: 100%; grid-column: 1 / -1; margin-top: 1px; }
     .playlist-item.portrait-thumb { grid-template-columns: auto 1fr; align-items: start; }
@@ -1428,6 +1449,9 @@ HTML = r"""<!doctype html>
       justify-content: center;
       margin-top: 10px;
     }
+    .playlist-controls-row {
+      align-items: end;
+    }
     .playlist-mini-btn.danger { color: var(--danger); }
     .playlist-bulk {
       margin-top: 10px;
@@ -1459,6 +1483,35 @@ HTML = r"""<!doctype html>
       padding: 10px 12px 12px;
       display: grid;
       gap: 8px;
+    }
+    .layout-suggestions-block {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--r-sm);
+      background: rgba(255,255,255,0.02);
+      overflow: hidden;
+    }
+    .layout-suggestions-block summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 10px 12px;
+      font-family: "Menlo", "Consolas", monospace;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent-dark);
+      background: rgba(255,255,255,0.03);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      user-select: none;
+    }
+    .layout-suggestions-block summary::-webkit-details-marker { display: none; }
+    .layout-suggestions-block summary::after { content: "+"; font-size: 14px; letter-spacing: 0; }
+    .layout-suggestions-block[open] summary::after { content: "−"; }
+    .layout-suggestions-body {
+      padding: 12px;
     }
     /* ─── misc ────────────────────────────────────────── */
     .muted-note { color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: 7px; }
@@ -1496,6 +1549,7 @@ HTML = r"""<!doctype html>
             </div>
           </div>
         </div>
+        <div class="status" id="status"></div>
       </div>
     </section>
 
@@ -1519,15 +1573,16 @@ HTML = r"""<!doctype html>
               <div class="studio-empty">Select a pane to edit it.</div>
             </div>
           </div>
+          <details class="layout-suggestions-block">
+            <summary>Layout Suggestions</summary>
+            <div class="layout-suggestions-body">
+              <div class="suggestion-grid" id="layoutSuggestions"></div>
+            </div>
+          </details>
         </div>
 
         <div>
-          <h2 class="section-title">Layout Suggestions</h2>
-          <div class="suggestion-grid" id="layoutSuggestions"></div>
-        </div>
-
-        <div>
-          <h2 class="section-title">Media</h2>
+          <h2 class="section-title">Panes</h2>
           <div class="playlist-targets" id="mediaTargets"></div>
           <div class="media-editor" id="mediaEditor"></div>
         </div>
@@ -1552,11 +1607,6 @@ HTML = r"""<!doctype html>
         </div>
 
         <div>
-          <h2 class="section-title">Panes</h2>
-          <div class="pane-list" id="paneList"></div>
-        </div>
-
-        <div>
           <h2 class="section-title">Flags</h2>
           <div class="checks">
             <label class="check"><input id="flagNoVideo" type="checkbox" /> No Video</label>
@@ -1578,12 +1628,6 @@ HTML = r"""<!doctype html>
             <div>
               <h2 class="section-title">Scene Rules</h2>
               <div class="grid">
-                <label>Legacy Layout Suggestion
-                  <select id="layout"></select>
-                </label>
-                <label>Terminal Pane Count
-                  <input id="paneCount" type="number" min="1" max="12" />
-                </label>
                 <label>Rotation
                   <select id="rotation">
                     <option value="0">0</option>
@@ -1595,18 +1639,6 @@ HTML = r"""<!doctype html>
                 <label>Font Size
                   <input id="fontSize" type="number" min="10" max="48" />
                 </label>
-                <label>Column Split %
-                  <input id="rightFrac" type="number" min="10" max="90" />
-                </label>
-                <label>Row Split %
-                  <input id="paneSplit" type="number" min="10" max="90" />
-                </label>
-                <label>Video Fraction %
-                  <input id="videoFrac" type="number" min="0" max="90" />
-                </label>
-                <label>Roles
-                  <input id="roles" type="text" placeholder="CAB or 01234" />
-                </label>
                 <label>Mode
                   <input id="mode" type="text" placeholder="1920x1080@60" />
                 </label>
@@ -1614,13 +1646,6 @@ HTML = r"""<!doctype html>
                   <input id="fsCycleSec" type="number" min="0" max="600" />
                 </label>
               </div>
-            </div>
-
-            <div>
-              <h2 class="section-title">Additional mpv Options</h2>
-              <label>Raw Global mpv Options
-                <textarea id="mpvOpts" spellcheck="false" placeholder="hwdec=no&#10;profile=fast"></textarea>
-              </label>
             </div>
 
             <div>
@@ -1642,11 +1667,6 @@ HTML = r"""<!doctype html>
           </div>
         </details>
 
-        <div class="actions">
-          <button class="primary" id="saveBtn">Save Config</button>
-          <button class="secondary" id="reloadBtn">Reload From Disk</button>
-        </div>
-        <div class="status" id="status"></div>
       </div>
     </section>
   </div>
@@ -1695,12 +1715,14 @@ HTML = r"""<!doctype html>
       overlay: "Video with pane strip overlay."
     };
 
-    layoutNames.forEach(name => {
-      const option = document.createElement("option");
-      option.value = name;
-      option.textContent = name;
-      layoutSelect.appendChild(option);
-    });
+    if (layoutSelect) {
+      layoutNames.forEach(name => {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        layoutSelect.appendChild(option);
+      });
+    }
 
     function slotName(index) {
       if (index === 0) return "Video";
@@ -1778,11 +1800,10 @@ HTML = r"""<!doctype html>
     function buildMpvOptsFromControls() {
       const audioEl = document.getElementById("mpvAudioMode");
       const shadersEl = document.getElementById("mpvShaders");
-      const otherEl = document.getElementById("mpvOpts");
       return buildMpvOptsFromParts({
         audioMode: audioEl ? audioEl.value : "",
         shadersText: shadersEl ? shadersEl.value : "",
-        otherText: otherEl ? otherEl.value : "",
+        otherText: "",
       });
     }
 
@@ -1790,24 +1811,20 @@ HTML = r"""<!doctype html>
       const audioEl = document.getElementById("inspectorMainAudioMode");
       const muteEl = document.getElementById("inspectorMainMuteMode");
       const loopEl = document.getElementById("inspectorMainLoopFile");
-      const videoEl = document.getElementById("inspectorMainVideoMode");
       const shadersEl = document.getElementById("inspectorMainShaders");
       const otherEl = document.getElementById("inspectorMainMpvOpts");
-      if (!audioEl || !muteEl || !loopEl || !videoEl || !shadersEl || !otherEl) return;
+      if (!audioEl || !muteEl || !loopEl || !shadersEl || !otherEl) return;
       state.mpv_opts = buildMpvOptsFromParts({
         audioMode: audioEl.value,
         muteMode: muteEl.value,
         loopFile: loopEl.value,
-        videoMode: videoEl.value,
         shadersText: shadersEl.value,
         otherText: otherEl.value,
       });
       const mpvAudioEl = document.getElementById("mpvAudioMode");
       const mpvShadersEl = document.getElementById("mpvShaders");
-      const mpvOptsEl = document.getElementById("mpvOpts");
       if (mpvAudioEl) mpvAudioEl.value = audioEl.value;
       if (mpvShadersEl) mpvShadersEl.value = shadersEl.value;
-      if (mpvOptsEl) mpvOptsEl.value = otherEl.value;
     }
 
     function syncInspectorPaneMpvOpts(paneIndex) {
@@ -1815,15 +1832,13 @@ HTML = r"""<!doctype html>
       const audioEl = document.getElementById("inspectorPaneAudioMode");
       const muteEl = document.getElementById("inspectorPaneMuteMode");
       const loopEl = document.getElementById("inspectorPaneLoopFile");
-      const videoEl = document.getElementById("inspectorPaneVideoMode");
       const shadersEl = document.getElementById("inspectorPaneShaders");
       const otherEl = document.getElementById("inspectorPaneMpvOpts");
-      if (!audioEl || !muteEl || !loopEl || !videoEl || !shadersEl || !otherEl) return;
+      if (!audioEl || !muteEl || !loopEl || !shadersEl || !otherEl) return;
       state.pane_mpv_opts[paneIndex] = buildMpvOptsFromParts({
         audioMode: audioEl.value,
         muteMode: muteEl.value,
         loopFile: loopEl.value,
-        videoMode: videoEl.value,
         shadersText: shadersEl.value,
         otherText: otherEl.value,
       });
@@ -1844,6 +1859,20 @@ HTML = r"""<!doctype html>
         targets.push({ role, title: roleTitle(role) });
       }
       return targets;
+    }
+
+    function availablePaneTargets() {
+      if (!state) return [];
+      const targets = [{ role: 0, title: roleTitle(0), type: "mpv" }];
+      for (let role = 1; role <= Number(state.pane_count || 0); role += 1) {
+        const paneIndex = role - 1;
+        targets.push({
+          role,
+          title: roleTitle(role),
+          type: (state.pane_types?.[paneIndex] || "terminal"),
+        });
+      }
+      return targets.sort((a, b) => a.title.localeCompare(b.title));
     }
 
     function ensurePlaylistTargetRole() {
@@ -1881,7 +1910,7 @@ HTML = r"""<!doctype html>
       if (!mediaTargets) return;
       ensurePlaylistTargetRole();
       mediaTargets.innerHTML = "";
-      availablePlaylistTargets().forEach((target) => {
+      availablePaneTargets().forEach((target) => {
         const button = document.createElement("button");
         button.type = "button";
         button.className = `playlist-target-btn${playlistTargetRole === target.role ? " active" : ""}`;
@@ -1907,15 +1936,6 @@ HTML = r"""<!doctype html>
           <div class="grid">
             <label>Connector
               <input id="mediaConnector" type="text" value="${(state.connector || "").replace(/"/g, "&quot;")}" placeholder="HDMI-A-1" />
-            </label>
-            <label>Playlist
-              <input id="mediaPlaylist" type="text" value="${(state.playlist || "").replace(/"/g, "&quot;")}" placeholder="/path/to/list.txt" />
-            </label>
-            <label>Playlist Extended
-              <input id="mediaPlaylistExtended" type="text" value="${(state.playlist_extended || "").replace(/"/g, "&quot;")}" placeholder="/path/to/extended-playlist.txt" />
-            </label>
-            <label>Playlist FIFO
-              <input id="mediaPlaylistFifo" type="text" value="${(state.playlist_fifo || "").replace(/"/g, "&quot;")}" placeholder="/tmp/mosaic.fifo" />
             </label>
             <label>mpv Out
               <input id="mediaMpvOut" type="text" value="${(state.mpv_out || "").replace(/"/g, "&quot;")}" placeholder="/tmp/mpv.log" />
@@ -1947,12 +1967,6 @@ HTML = r"""<!doctype html>
                 <option value="inf"${groups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
               </select>
             </label>
-            <label>Video Output
-              <select id="mediaVideoMode">
-                <option value="">Default</option>
-                <option value="audio-only"${groups.videoMode === "audio-only" ? " selected" : ""}>Audio Only</option>
-              </select>
-            </label>
             <label style="grid-column: 1 / -1;">Shader Stack
               <textarea id="mediaShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${groups.shaders.join("\n")}</textarea>
             </label>
@@ -1964,9 +1978,6 @@ HTML = r"""<!doctype html>
         `;
         const syncMain = () => {
           state.connector = document.getElementById("mediaConnector").value.trim();
-          state.playlist = document.getElementById("mediaPlaylist").value.trim();
-          state.playlist_extended = document.getElementById("mediaPlaylistExtended").value.trim();
-          state.playlist_fifo = document.getElementById("mediaPlaylistFifo").value.trim();
           state.mpv_out = document.getElementById("mediaMpvOut").value.trim();
           state.panscan = document.getElementById("mediaPanscan").value.trim();
           state.video_rotate = document.getElementById("mediaVideoRotate").value.trim();
@@ -1974,15 +1985,14 @@ HTML = r"""<!doctype html>
             audioMode: document.getElementById("mediaAudioMode").value,
             muteMode: document.getElementById("mediaMuteMode").value,
             loopFile: document.getElementById("mediaLoopFile").value,
-            videoMode: document.getElementById("mediaVideoMode").value,
             shadersText: document.getElementById("mediaShaders").value,
             otherText: document.getElementById("mediaOtherOpts").value,
           });
         };
         [
-          "mediaConnector","mediaPlaylist","mediaPlaylistExtended","mediaPlaylistFifo",
+          "mediaConnector",
           "mediaMpvOut","mediaPanscan","mediaVideoRotate","mediaAudioMode",
-          "mediaMuteMode","mediaLoopFile","mediaVideoMode","mediaShaders","mediaOtherOpts"
+          "mediaMuteMode","mediaLoopFile","mediaShaders","mediaOtherOpts"
         ].forEach((id) => {
           document.getElementById(id).addEventListener("input", () => { syncMain(); renderPlaylistEditor(); renderStudioBoard(); });
           document.getElementById(id).addEventListener("change", () => { syncMain(); renderPlaylistEditor(); renderStudioBoard(); });
@@ -1990,21 +2000,46 @@ HTML = r"""<!doctype html>
         return;
       }
       const paneIndex = playlistTargetRole - 1;
+      const paneType = state.pane_types?.[paneIndex] || "terminal";
+      if (paneType !== "mpv") {
+        mediaEditor.innerHTML = `
+          <div class="grid">
+            <label>Pane Type
+              <select id="mediaPaneType">
+                <option value="terminal" selected>terminal</option>
+                <option value="mpv">mpv</option>
+              </select>
+            </label>
+            <label style="grid-column: 1 / -1;">Command
+              <input id="mediaPaneCommand" type="text" value="${(state.pane_commands?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="btop --utf-force" />
+            </label>
+          </div>
+          <p class="muted-note">${roleTitle(playlistTargetRole)} is a terminal pane. Configure its command here or switch it to mpv for a dedicated media pane.</p>
+        `;
+        document.getElementById("mediaPaneType").addEventListener("change", (event) => {
+          state.pane_types[paneIndex] = event.target.value;
+          renderPaneList(state);
+          renderStudioBoard();
+          renderStudioInspector();
+          renderMediaTargets();
+          renderMediaEditor();
+          renderPlaylistTargets();
+          renderPlaylistEditor();
+        });
+        document.getElementById("mediaPaneCommand").addEventListener("input", (event) => {
+          state.pane_commands[paneIndex] = event.target.value;
+          renderPaneList(state);
+          renderStudioBoard();
+          renderStudioInspector();
+        });
+        return;
+      }
       const groups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
       mediaEditor.innerHTML = `
         <div class="grid">
           <label>Connector
             <input id="mediaPaneConnector" type="text" value="${(state.connector || "").replace(/"/g, "&quot;")}" placeholder="HDMI-A-1" disabled />
           </label>
-          <label>Playlist
-            <input id="mediaPanePlaylist" type="text" value="${(state.pane_playlists?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="/path/to/list.txt" />
-          </label>
-          <label>Playlist Extended
-            <input id="mediaPanePlaylistExtended" type="text" value="${(state.pane_playlist_extended?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="/path/to/extended-playlist.txt" />
-          </label>
-            <label>Playlist FIFO
-              <input id="mediaPanePlaylistFifo" type="text" value="${(state.pane_playlist_fifos?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="/tmp/pane-playlist.fifo" />
-            </label>
             <label>mpv Out
               <input id="mediaPaneMpvOut" type="text" value="${(state.pane_mpv_outs?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="/tmp/pane-mpv.log" />
             </label>
@@ -2035,12 +2070,6 @@ HTML = r"""<!doctype html>
               <option value="inf"${groups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
             </select>
           </label>
-          <label>Video Output
-            <select id="mediaPaneVideoMode">
-              <option value="">Default</option>
-              <option value="audio-only"${groups.videoMode === "audio-only" ? " selected" : ""}>Audio Only</option>
-            </select>
-          </label>
           <label style="grid-column: 1 / -1;">Shader Stack
             <textarea id="mediaPaneShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${groups.shaders.join("\n")}</textarea>
           </label>
@@ -2051,9 +2080,6 @@ HTML = r"""<!doctype html>
         <p class="muted-note">This target controls ${roleTitle(playlistTargetRole)} with the same media field layout as ${roleTitle(0)}. The connector stays visible here for parity, but it remains a global-only field on ${roleTitle(0)}.</p>
       `;
       const syncPane = () => {
-        state.pane_playlists[paneIndex] = document.getElementById("mediaPanePlaylist").value.trim();
-        state.pane_playlist_extended[paneIndex] = document.getElementById("mediaPanePlaylistExtended").value.trim();
-        state.pane_playlist_fifos[paneIndex] = document.getElementById("mediaPanePlaylistFifo").value.trim();
         state.pane_mpv_outs[paneIndex] = document.getElementById("mediaPaneMpvOut").value.trim();
         state.pane_panscan[paneIndex] = document.getElementById("mediaPanePanscan").value.trim();
         state.pane_video_rotate[paneIndex] = document.getElementById("mediaPaneVideoRotate").value.trim();
@@ -2061,16 +2087,14 @@ HTML = r"""<!doctype html>
           audioMode: document.getElementById("mediaPaneAudioMode").value,
           muteMode: document.getElementById("mediaPaneMuteMode").value,
           loopFile: document.getElementById("mediaPaneLoopFile").value,
-          videoMode: document.getElementById("mediaPaneVideoMode").value,
           shadersText: document.getElementById("mediaPaneShaders").value,
           otherText: document.getElementById("mediaPaneOtherOpts").value,
         });
       };
       [
-        "mediaPanePlaylist","mediaPanePlaylistExtended","mediaPanePlaylistFifo",
         "mediaPaneMpvOut","mediaPanePanscan","mediaPaneVideoRotate",
         "mediaPaneAudioMode","mediaPaneMuteMode","mediaPaneLoopFile",
-        "mediaPaneVideoMode","mediaPaneShaders","mediaPaneOtherOpts"
+        "mediaPaneShaders","mediaPaneOtherOpts"
       ].forEach((id) => {
         document.getElementById(id).addEventListener("input", () => { syncPane(); renderPlaylistEditor(); renderStudioBoard(); });
         document.getElementById(id).addEventListener("change", () => { syncPane(); renderPlaylistEditor(); renderStudioBoard(); });
@@ -2105,12 +2129,9 @@ HTML = r"""<!doctype html>
       }
       const playlistPath = state.pane_playlists?.[paneIndex] || "";
       const playlistExtended = state.pane_playlist_extended?.[paneIndex] || "";
-      const playlistFifo = state.pane_playlist_fifos?.[paneIndex] || "";
       const paneMpvOpts = Array.isArray(state.pane_mpv_opts?.[paneIndex]) ? state.pane_mpv_opts[paneIndex].slice() : [];
       const noteParts = [`This queue controls ${roleTitle(playlistTargetRole)}.`];
       if (playlistPath) noteParts.push(`Playlist: ${playlistPath}`);
-      if (playlistExtended) noteParts.push(`Extended: ${playlistExtended}`);
-      if (playlistFifo) noteParts.push(`FIFO: ${playlistFifo}`);
       if (paneMpvOpts.length) noteParts.push(`${paneMpvOpts.length} pane-local mpv option${paneMpvOpts.length === 1 ? "" : "s"}.`);
       return {
         title: `${roleTitle(playlistTargetRole)} Queue`,
@@ -2752,7 +2773,8 @@ HTML = r"""<!doctype html>
         button.innerHTML = `<strong>${name}</strong><span>${layoutSuggestionCopy[name] || "Starter split-tree preset."}</span>`;
         button.addEventListener("click", () => {
           state.layout = name;
-          document.getElementById("layout").value = name;
+          const layoutInput = document.getElementById("layout");
+          if (layoutInput) layoutInput.value = name;
           state.splitTreeModel = presetTreeFromState(state);
           syncSplitTreeState();
           renderStudioBoard();
@@ -2876,15 +2898,6 @@ HTML = r"""<!doctype html>
           <label>Pane Type
             <input type="text" value="mpv" readonly />
           </label>
-          <label>Playlist Path
-            <input id="inspectorPlaylist" type="text" value="${(state.playlist || "").replace(/"/g, "&quot;")}" placeholder="/path/to/list.txt" />
-          </label>
-          <label>Playlist Extended
-            <input id="inspectorPlaylistExtended" type="text" value="${(state.playlist_extended || "").replace(/"/g, "&quot;")}" placeholder="/path/to/extended-playlist.txt" />
-          </label>
-          <label>Playlist FIFO
-            <input id="inspectorPlaylistFifo" type="text" value="${(state.playlist_fifo || "").replace(/"/g, "&quot;")}" placeholder="/tmp/mosaic.fifo" />
-          </label>
           <label>Audio Output
             <select id="inspectorMainAudioMode">
               <option value="">Default</option>
@@ -2906,12 +2919,6 @@ HTML = r"""<!doctype html>
               <option value="inf"${mainMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
             </select>
           </label>
-          <label>Video Output
-            <select id="inspectorMainVideoMode">
-              <option value="">Default</option>
-              <option value="audio-only"${mainMpvGroups.videoMode === "audio-only" ? " selected" : ""}>Audio Only</option>
-            </select>
-          </label>
           <label>Shader Stack
             <textarea id="inspectorMainShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${mainMpvGroups.shaders.join("\n")}</textarea>
           </label>
@@ -2920,26 +2927,10 @@ HTML = r"""<!doctype html>
           </label>
           <p class="muted-note">This inspector controls ${roleTitle(0)}. The queue editor below still controls that pane's video list.</p>
         `;
-        document.getElementById("inspectorPlaylist").addEventListener("input", (event) => {
-          state.playlist = event.target.value;
-          document.getElementById("playlist").value = state.playlist;
-          renderPlaylistEditor();
-        });
-        document.getElementById("inspectorPlaylistExtended").addEventListener("input", (event) => {
-          state.playlist_extended = event.target.value;
-          document.getElementById("playlistExtended").value = state.playlist_extended;
-          renderPlaylistEditor();
-        });
-        document.getElementById("inspectorPlaylistFifo").addEventListener("input", (event) => {
-          state.playlist_fifo = event.target.value;
-          document.getElementById("playlistFifo").value = state.playlist_fifo;
-          renderPlaylistEditor();
-        });
         [
           "inspectorMainAudioMode",
           "inspectorMainMuteMode",
           "inspectorMainLoopFile",
-          "inspectorMainVideoMode",
           "inspectorMainShaders",
           "inspectorMainMpvOpts"
         ].forEach((id) => {
@@ -2984,9 +2975,6 @@ HTML = r"""<!doctype html>
           });
           return;
         }
-        const panePlaylist = state.pane_playlists?.[paneIndex] || "";
-        const panePlaylistExtended = state.pane_playlist_extended?.[paneIndex] || "";
-        const panePlaylistFifo = state.pane_playlist_fifos?.[paneIndex] || "";
         const paneVideos = (state.pane_video_paths?.[paneIndex] || []).join("\n");
         const paneMpvGroups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
         studioInspector.innerHTML = `
@@ -2999,15 +2987,6 @@ HTML = r"""<!doctype html>
               <option value="terminal">terminal</option>
               <option value="mpv" selected>mpv</option>
             </select>
-          </label>
-          <label>Playlist Path
-            <input id="inspectorPanePlaylist" type="text" value="${panePlaylist.replace(/"/g, "&quot;")}" placeholder="/path/to/list.txt" />
-          </label>
-          <label>Playlist Extended
-            <input id="inspectorPanePlaylistExtended" type="text" value="${panePlaylistExtended.replace(/"/g, "&quot;")}" placeholder="/path/to/extended.txt" />
-          </label>
-          <label>Playlist FIFO
-            <input id="inspectorPanePlaylistFifo" type="text" value="${panePlaylistFifo.replace(/"/g, "&quot;")}" placeholder="/tmp/pane-playlist.fifo" />
           </label>
           <label>Audio Output
             <select id="inspectorPaneAudioMode">
@@ -3030,12 +3009,6 @@ HTML = r"""<!doctype html>
               <option value="inf"${paneMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
             </select>
           </label>
-          <label>Video Output
-            <select id="inspectorPaneVideoMode">
-              <option value="">Default</option>
-              <option value="audio-only"${paneMpvGroups.videoMode === "audio-only" ? " selected" : ""}>Audio Only</option>
-            </select>
-          </label>
           <label>Shader Stack
             <textarea id="inspectorPaneShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${paneMpvGroups.shaders.join("\n")}</textarea>
           </label>
@@ -3053,21 +3026,6 @@ HTML = r"""<!doctype html>
           renderStudioBoard();
           renderStudioInspector();
         });
-        document.getElementById("inspectorPanePlaylist").addEventListener("input", (event) => {
-          state.pane_playlists[paneIndex] = event.target.value;
-          renderStudioBoard();
-          renderPlaylistEditor();
-        });
-        document.getElementById("inspectorPanePlaylistExtended").addEventListener("input", (event) => {
-          state.pane_playlist_extended[paneIndex] = event.target.value;
-          renderStudioBoard();
-          renderPlaylistEditor();
-        });
-        document.getElementById("inspectorPanePlaylistFifo").addEventListener("input", (event) => {
-          state.pane_playlist_fifos[paneIndex] = event.target.value;
-          renderStudioBoard();
-          renderPlaylistEditor();
-        });
         document.getElementById("inspectorPaneVideos").addEventListener("input", (event) => {
           state.pane_video_paths[paneIndex] = event.target.value.split("\n").map(v => v.trim()).filter(Boolean);
           renderStudioBoard();
@@ -3077,7 +3035,6 @@ HTML = r"""<!doctype html>
           "inspectorPaneAudioMode",
           "inspectorPaneMuteMode",
           "inspectorPaneLoopFile",
-          "inspectorPaneVideoMode",
           "inspectorPaneShaders",
           "inspectorPaneMpvOpts",
         ].forEach((id) => {
@@ -3148,18 +3105,18 @@ HTML = r"""<!doctype html>
         playlistEditor.innerHTML = `<div class="studio-empty">No videos queued yet. Add one below or open Bulk Add Videos.</div>`;
         return;
       }
+      const list = document.createElement("div");
+      list.className = "playlist-list";
       groups.forEach((group, index) => {
         const thumb = playlistThumbMarkup(group.path, index, thumbMetrics);
-        const durationLabel = "";
         const item = document.createElement("div");
-        item.className = `playlist-item${thumbMetrics.isPortrait ? " portrait-thumb" : ""}`;
+        item.className = `playlist-item${thumbMetrics.isPortrait ? " portrait-thumb" : ""}${index % 2 === 1 ? " alt" : ""}`;
         item.draggable = true;
         item.dataset.videoDragIndex = String(index);
         const thumbCell = `
           <div class="playlist-media-cell">
-            <div class="playlist-thumb${thumb ? "" : " empty"}${thumbMetrics.cover ? " cover" : ""}" style="aspect-ratio: ${thumbMetrics.aspectRatio};">
+            <div class="playlist-thumb${thumb ? "" : " empty"}${thumbMetrics.cover ? " cover" : ""}" style="aspect-ratio: ${thumbMetrics.aspectRatio};" data-hover-src="${mediaUrl(group.path).replace(/"/g, "&quot;")}" data-hover-path="${group.path.replace(/"/g, "&quot;")}" data-hover-video="${isLikelyVideoPath(group.path) ? "1" : "0"}">
               ${thumb}
-              <div class="playlist-duration" data-video-duration="${index}">${durationLabel}</div>
             </div>
           </div>`;
         const controls = `
@@ -3199,7 +3156,7 @@ HTML = r"""<!doctype html>
         item.addEventListener("dragend", () => {
           playlistDragIndex = null;
           item.classList.remove("dragging");
-          playlistEditor.querySelectorAll(".playlist-item").forEach((node) => node.classList.remove("drag-over"));
+          list.querySelectorAll(".playlist-item").forEach((node) => node.classList.remove("drag-over"));
         });
         item.addEventListener("dragover", (event) => {
           if (playlistDragIndex == null || playlistDragIndex === index) return;
@@ -3213,8 +3170,9 @@ HTML = r"""<!doctype html>
           item.classList.remove("drag-over");
           moveQueueGroupTo(playlistDragIndex, index);
         });
-        playlistEditor.appendChild(item);
+        list.appendChild(item);
       });
+      playlistEditor.appendChild(list);
       playlistEditor.querySelectorAll("input[data-video-group-index]").forEach((input) => {
         input.addEventListener("input", (event) => {
           const idx = Number(event.target.dataset.videoGroupIndex);
@@ -3236,11 +3194,58 @@ HTML = r"""<!doctype html>
       playlistEditor.querySelectorAll("[data-video-group-remove]").forEach((button) => {
         button.addEventListener("click", () => removeQueueGroup(Number(button.dataset.videoGroupRemove)));
       });
+      playlistEditor.querySelectorAll(".playlist-thumb").forEach((thumb) => {
+        thumb.addEventListener("mouseenter", () => {
+          if (!window.__kmsThumbHoverOverlay) {
+            const overlay = document.createElement("div");
+            overlay.id = "kmsThumbHoverOverlay";
+            overlay.style.position = "fixed";
+            overlay.style.zIndex = "99999";
+            overlay.style.pointerEvents = "none";
+            overlay.style.display = "none";
+            overlay.style.borderRadius = "12px";
+            overlay.style.overflow = "hidden";
+            overlay.style.background = "rgba(8,8,10,0.96)";
+            overlay.style.boxShadow = "0 18px 40px rgba(0,0,0,0.42)";
+            document.body.appendChild(overlay);
+            window.__kmsThumbHoverOverlay = overlay;
+          }
+          const overlay = window.__kmsThumbHoverOverlay;
+          overlay.innerHTML = "";
+          const src = thumb.dataset.hoverSrc || "";
+          const isVideo = thumb.dataset.hoverVideo === "1";
+          let media;
+          if (isVideo) {
+            media = document.createElement("video");
+            media.src = `${src}#t=5`;
+            media.muted = true;
+            media.autoplay = true;
+            media.loop = true;
+            media.playsInline = true;
+          } else {
+            media = document.createElement("img");
+            media.src = src;
+            media.alt = thumb.dataset.hoverPath || "Preview";
+          }
+          media.style.width = "100%";
+          media.style.height = "100%";
+          media.style.display = "block";
+          media.style.objectFit = "cover";
+          overlay.appendChild(media);
+          const rect = thumb.getBoundingClientRect();
+          overlay.style.width = `${rect.width * 4}px`;
+          overlay.style.height = `${rect.height * 4}px`;
+          overlay.style.left = `${Math.max(12, Math.min(window.innerWidth - rect.width * 4 - 12, rect.left))}px`;
+          overlay.style.top = `${Math.max(12, Math.min(window.innerHeight - rect.height * 4 - 12, rect.top - rect.height * 1.5))}px`;
+          overlay.style.display = "block";
+        });
+        thumb.addEventListener("mouseleave", () => {
+          if (window.__kmsThumbHoverOverlay) window.__kmsThumbHoverOverlay.style.display = "none";
+        });
+      });
       playlistEditor.querySelectorAll("video[data-preview-video]").forEach((video) => {
-        const durationEl = playlistEditor.querySelector(`[data-video-duration="${video.dataset.previewVideo}"]`);
         const seekToPreview = () => {
           if (!Number.isFinite(video.duration) || video.duration <= 0) return;
-          if (durationEl) durationEl.textContent = formatMediaDuration(video.duration);
           try {
             video.currentTime = Math.min(5, Math.max(0.1, video.duration / 3));
           } catch (_) {
@@ -3252,7 +3257,6 @@ HTML = r"""<!doctype html>
           video.pause();
         }, { once: true });
         video.addEventListener("error", () => {
-          if (durationEl) durationEl.textContent = "";
           video.closest(".playlist-thumb")?.classList.add("empty");
           video.remove();
         }, { once: true });
@@ -3415,7 +3419,8 @@ HTML = r"""<!doctype html>
       }
       state.splitTreeModel = tree;
       syncSplitTreeState();
-      document.getElementById("paneCount").value = String(state.pane_count);
+      const paneCountInput = document.getElementById("paneCount");
+      if (paneCountInput) paneCountInput.value = String(state.pane_count);
       selectedRole = newRole;
       renderPaneList(state);
       renderPlaylistEditor();
@@ -3451,7 +3456,8 @@ HTML = r"""<!doctype html>
       state.pane_count = Math.max(1, state.pane_count - 1);
       state.splitTreeModel = tree;
       syncSplitTreeState();
-      document.getElementById("paneCount").value = String(state.pane_count);
+      const paneCountInput = document.getElementById("paneCount");
+      if (paneCountInput) paneCountInput.value = String(state.pane_count);
       selectedRole = Math.min(selectedRole, state.pane_count);
       renderPaneList(state);
       renderPlaylistEditor();
@@ -3460,6 +3466,7 @@ HTML = r"""<!doctype html>
     }
 
     function renderPaneList(nextState) {
+      if (!paneList) return;
       paneList.innerHTML = "";
       ensurePaneCommands(nextState);
       nextState.pane_commands.forEach((cmd, index) => {
@@ -3637,7 +3644,7 @@ HTML = r"""<!doctype html>
     }
 
     function effectiveDisplayRotationDegrees() {
-      return 0;
+      return normalizedRotationDegrees();
     }
 
     function configuredVideoRotationDegrees(role = playlistTargetRole) {
@@ -3702,8 +3709,8 @@ HTML = r"""<!doctype html>
       const naturalW = previewFrameWidth || 16;
       const naturalH = previewFrameHeight || 9;
       const quarterTurn = total === 90 || total === 270;
-      const displayW = quarterTurn ? naturalH : naturalW;
-      const displayH = quarterTurn ? naturalW : naturalH;
+      const displayW = quarterTurn ? 9 : 16;
+      const displayH = quarterTurn ? 16 : 9;
       const preview = document.getElementById("preview");
       previewLayout?.classList.toggle("portrait", quarterTurn);
       previewLayout?.classList.toggle("landscape", !quarterTurn);
@@ -3711,13 +3718,11 @@ HTML = r"""<!doctype html>
       const previewTop = preview.getBoundingClientRect().top;
       const viewportPadding = 24;
       const availableHeight = Math.max(220, Math.floor(window.innerHeight - previewTop - viewportPadding));
-      const parentWidth = preview.parentElement ? preview.parentElement.clientWidth : 560;
-      const maxWidthByHeight = Math.floor(availableHeight * (displayW / displayH));
-      const finalWidth = Math.max(180, Math.min(560, parentWidth, maxWidthByHeight));
-      preview.style.width = `${finalWidth}px`;
+      preview.style.width = "100%";
       preview.style.maxWidth = "100%";
-      preview.style.maxHeight = `${availableHeight}px`;
-      if (previewVideo) previewVideo.style.transform = total ? `rotate(${total}deg)` : "";
+      preview.style.maxHeight = "none";
+      preview.style.minHeight = `${Math.min(availableHeight, Math.floor(window.innerHeight * 0.72))}px`;
+      if (previewVideo) previewVideo.style.transform = "";
       applyStudioGeometry();
     }
 
@@ -3725,16 +3730,26 @@ HTML = r"""<!doctype html>
       const previousPaneCount = Array.isArray(state?.pane_commands) ? state.pane_commands.length : 0;
       const connectorEl = document.getElementById("connector");
       if (connectorEl) state.connector = connectorEl.value.trim();
-      state.mode = document.getElementById("mode").value.trim();
-      state.rotation = readInt("rotation", 0);
-      state.font_size = readInt("fontSize", 18);
-      state.right_frac = readInt("rightFrac", 33);
-      state.pane_split = readInt("paneSplit", 50);
-      state.video_frac = readInt("videoFrac", 0);
-      state.pane_count = Math.max(1, readInt("paneCount", 2));
-      state.layout = document.getElementById("layout").value;
-      state.roles = document.getElementById("roles").value.trim();
-      state.fs_cycle_sec = readInt("fsCycleSec", 5);
+      const modeEl = document.getElementById("mode");
+      const rotationEl = document.getElementById("rotation");
+      const fontSizeEl = document.getElementById("fontSize");
+      const rightFracEl = document.getElementById("rightFrac");
+      const paneSplitEl = document.getElementById("paneSplit");
+      const videoFracEl = document.getElementById("videoFrac");
+      const paneCountEl = document.getElementById("paneCount");
+      const layoutEl = document.getElementById("layout");
+      const rolesEl = document.getElementById("roles");
+      const fsCycleEl = document.getElementById("fsCycleSec");
+      if (modeEl) state.mode = modeEl.value.trim();
+      if (rotationEl) state.rotation = readInt("rotation", 0);
+      if (fontSizeEl) state.font_size = readInt("fontSize", 18);
+      if (rightFracEl) state.right_frac = readInt("rightFrac", 33);
+      if (paneSplitEl) state.pane_split = readInt("paneSplit", 50);
+      if (videoFracEl) state.video_frac = readInt("videoFrac", 0);
+      if (paneCountEl) state.pane_count = Math.max(1, readInt("paneCount", 2));
+      if (layoutEl) state.layout = layoutEl.value;
+      if (rolesEl) state.roles = rolesEl.value.trim();
+      if (fsCycleEl) state.fs_cycle_sec = readInt("fsCycleSec", 5);
       state.flags.no_video = document.getElementById("flagNoVideo").checked;
       state.flags.no_panes = document.getElementById("flagNoPanes").checked;
       state.flags.smooth = document.getElementById("flagSmooth").checked;
@@ -3778,16 +3793,26 @@ HTML = r"""<!doctype html>
       ensurePaneCommands(state);
       state.splitTreeModel = parseSplitTreeSpec(state.split_tree || "");
       document.getElementById("configPath").textContent = `Config: ${configPath}`;
-      document.getElementById("mode").value = state.mode || "";
-      document.getElementById("rotation").value = String(state.rotation || 0);
-      document.getElementById("fontSize").value = String(state.font_size || 18);
-      document.getElementById("rightFrac").value = String(state.right_frac || 33);
-      document.getElementById("paneSplit").value = String(state.pane_split || 50);
-      document.getElementById("videoFrac").value = String(state.video_frac || 0);
-      document.getElementById("paneCount").value = String(state.pane_count || 2);
-      document.getElementById("layout").value = state.layout || "stack";
-      document.getElementById("roles").value = state.roles || "";
-      document.getElementById("fsCycleSec").value = String(state.fs_cycle_sec || 5);
+      const modeEl = document.getElementById("mode");
+      const rotationEl = document.getElementById("rotation");
+      const fontSizeEl = document.getElementById("fontSize");
+      const rightFracEl = document.getElementById("rightFrac");
+      const paneSplitEl = document.getElementById("paneSplit");
+      const videoFracEl = document.getElementById("videoFrac");
+      const paneCountEl = document.getElementById("paneCount");
+      const layoutEl = document.getElementById("layout");
+      const rolesEl = document.getElementById("roles");
+      const fsCycleEl = document.getElementById("fsCycleSec");
+      if (modeEl) modeEl.value = state.mode || "";
+      if (rotationEl) rotationEl.value = String(state.rotation || 0);
+      if (fontSizeEl) fontSizeEl.value = String(state.font_size || 18);
+      if (rightFracEl) rightFracEl.value = String(state.right_frac || 33);
+      if (paneSplitEl) paneSplitEl.value = String(state.pane_split || 50);
+      if (videoFracEl) videoFracEl.value = String(state.video_frac || 0);
+      if (paneCountEl) paneCountEl.value = String(state.pane_count || 2);
+      if (layoutEl) layoutEl.value = state.layout || "stack";
+      if (rolesEl) rolesEl.value = state.roles || "";
+      if (fsCycleEl) fsCycleEl.value = String(state.fs_cycle_sec || 5);
       document.getElementById("videoList").value = (state.video_paths || []).join("\n");
       document.getElementById("flagNoVideo").checked = !!state.flags.no_video;
       document.getElementById("flagNoPanes").checked = !!state.flags.no_panes;
@@ -3812,8 +3837,16 @@ HTML = r"""<!doctype html>
 
     async function loadState() {
       const response = await fetch("/api/state");
-      if (!response.ok) throw new Error("Failed to load state");
-      const payload = await response.json();
+      const text = await response.text();
+      let payload = {};
+      if (text.trim()) {
+        try {
+          payload = JSON.parse(text);
+        } catch (err) {
+          throw new Error("Failed to parse state response");
+        }
+      }
+      if (!response.ok) throw new Error(payload.error || "Failed to load state");
       fillForm(payload.state, payload.config_path, payload.raw_config);
       scheduleLivePreview();
       setStatus(`Loaded ${payload.config_path}`, false, true);
@@ -3826,8 +3859,22 @@ HTML = r"""<!doctype html>
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ state })
       });
-      const payload = await response.json();
+      const text = await response.text();
+      let payload = {};
+      if (text.trim()) {
+        try {
+          payload = JSON.parse(text);
+        } catch (err) {
+          throw new Error("Failed to parse save response");
+        }
+      }
       if (!response.ok) throw new Error(payload.error || "Failed to save config");
+      if (!text.trim()) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        await loadState();
+        setStatus("Saved config. kms_mosaic will reload on file change.", false, true);
+        return;
+      }
       fillForm(payload.state, payload.config_path, payload.raw_config);
       scheduleLivePreview();
       setStatus(`Saved ${payload.config_path}. kms_mosaic will reload on file change.`, false, true);
@@ -3840,8 +3887,22 @@ HTML = r"""<!doctype html>
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ raw_config: rawConfig })
       });
-      const payload = await response.json();
+      const text = await response.text();
+      let payload = {};
+      if (text.trim()) {
+        try {
+          payload = JSON.parse(text);
+        } catch (err) {
+          throw new Error("Failed to parse raw config save response");
+        }
+      }
       if (!response.ok) throw new Error(payload.error || "Failed to save raw config");
+      if (!text.trim()) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        await loadState();
+        setStatus("Saved raw config.", false, true);
+        return;
+      }
       fillForm(payload.state, payload.config_path, payload.raw_config);
       scheduleLivePreview();
       setStatus(`Saved raw config to ${payload.config_path}.`, false, true);
@@ -3962,8 +4023,10 @@ HTML = r"""<!doctype html>
       "flagSmooth","flagLoop","flagLoopPlaylist","flagShuffle","flagAtomic",
       "flagAtomicNonblock","flagGlFinish","flagNoOsd"
     ].forEach(id => {
-      document.getElementById(id).addEventListener("input", () => syncFormToState());
-      document.getElementById(id).addEventListener("change", () => syncFormToState());
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("input", () => syncFormToState());
+      el.addEventListener("change", () => syncFormToState());
     });
     loadState().catch(err => setStatus(err.message, true));
     window.addEventListener("beforeunload", () => stopLivePreviewStream());
