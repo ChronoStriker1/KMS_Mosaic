@@ -870,6 +870,21 @@ HTML = r"""<!doctype html>
       gap: 7px;
       align-self: end;
     }
+    .studio-split-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+    .studio-split-btn {
+      border: 1px solid rgba(255,255,255,0.14);
+      background: rgba(255,255,255,0.10);
+      color: inherit;
+      padding: 6px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-family: "Menlo", "Consolas", monospace;
+    }
     .studio-card-title {
       font-size: 18px;
       font-weight: 700;
@@ -955,7 +970,7 @@ HTML = r"""<!doctype html>
     }
     .playlist-row {
       display: grid;
-      grid-template-columns: auto 132px minmax(0, 1fr) auto auto auto;
+      grid-template-columns: auto 132px minmax(0, 1fr) 88px auto auto auto;
       gap: 9px;
       align-items: center;
     }
@@ -973,6 +988,10 @@ HTML = r"""<!doctype html>
     }
     .playlist-row input {
       min-width: 0;
+    }
+    .playlist-repeat {
+      text-align: center;
+      font-family: "Menlo", "Consolas", monospace;
     }
     .playlist-mini-btn {
       padding: 8px 11px;
@@ -1383,6 +1402,31 @@ HTML = r"""<!doctype html>
         return `<video data-preview-video="${index}" muted playsinline preload="metadata" src="${src}#t=5"></video>`;
       }
       return "";
+    }
+
+    function compressPlaylistPaths(paths) {
+      const input = Array.isArray(paths) ? paths : [];
+      const groups = [];
+      input.forEach((path) => {
+        const value = String(path || "");
+        const last = groups[groups.length - 1];
+        if (last && last.path === value) {
+          last.count += 1;
+          return;
+        }
+        groups.push({ path: value, count: 1 });
+      });
+      return groups;
+    }
+
+    function expandPlaylistGroups(groups) {
+      const out = [];
+      (Array.isArray(groups) ? groups : []).forEach((group) => {
+        const path = String(group?.path || "");
+        const count = Math.max(1, Number(group?.count || 1));
+        for (let i = 0; i < count; i += 1) out.push(path);
+      });
+      return out;
     }
 
     function roleTitle(role) {
@@ -1937,6 +1981,12 @@ HTML = r"""<!doctype html>
           : (paneType === "mpv"
               ? `${(state.pane_video_paths?.[role - 1] || []).length} queued video${(state.pane_video_paths?.[role - 1] || []).length === 1 ? "" : "s"}`
               : (state.pane_commands?.[role - 1] || "No command"));
+        const splitActions = selectedRole === role
+          ? `<div class="studio-split-actions">
+               <button type="button" class="studio-split-btn" data-studio-split="col">Split V</button>
+               <button type="button" class="studio-split-btn" data-studio-split="row">Split H</button>
+             </div>`
+          : "";
         card.innerHTML = `
           <div class="studio-top">
             <span class="studio-tag">${paneType === "mpv" ? "mpv" : "shell"}</span>
@@ -1945,12 +1995,24 @@ HTML = r"""<!doctype html>
           <div class="studio-card-body">
             <div class="studio-card-title">${roleTitle(role)}</div>
             <div class="studio-card-meta">${summary}</div>
+            ${splitActions}
           </div>
         `;
         card.addEventListener("click", () => {
           selectedRole = role;
           renderStudioBoard();
           renderStudioInspector();
+        });
+        card.querySelectorAll("[data-studio-split]").forEach((button) => {
+          button.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!splitSelectedRole(button.dataset.studioSplit)) {
+              setStatus("Could not split the selected pane.", true);
+              return;
+            }
+            setStatus(button.dataset.studioSplit === "col" ? "Split the selected pane vertically." : "Split the selected pane horizontally.", false);
+          });
         });
         studioBoard.appendChild(card);
       });
@@ -2106,16 +2168,17 @@ HTML = r"""<!doctype html>
       document.getElementById("videoList").disabled = !ctx.editable;
       playlistEditor.innerHTML = "";
       const paths = ctx.paths;
+      const groups = compressPlaylistPaths(paths);
       if (!ctx.editable) {
         playlistEditor.innerHTML = `<div class="studio-empty">No media queue for the selected pane.</div>`;
         return;
       }
-      if (!paths.length) {
+      if (!groups.length) {
         playlistEditor.innerHTML = `<div class="studio-empty">No videos queued yet. Add one below or paste paths into the raw list.</div>`;
         return;
       }
-      paths.forEach((path, index) => {
-        const thumb = playlistThumbMarkup(path, index);
+      groups.forEach((group, index) => {
+        const thumb = playlistThumbMarkup(group.path, index);
         const item = document.createElement("div");
         item.className = "playlist-item";
         item.draggable = true;
@@ -2126,10 +2189,11 @@ HTML = r"""<!doctype html>
             <div class="playlist-thumb${thumb ? "" : " empty"}">
               ${thumb}
             </div>
-            <input type="text" data-video-index="${index}" value="${path.replace(/"/g, "&quot;")}" placeholder="/path/to/video.mp4" />
-            <button class="playlist-mini-btn" data-video-up="${index}">Up</button>
-            <button class="playlist-mini-btn" data-video-down="${index}">Down</button>
-            <button class="playlist-mini-btn danger" data-video-remove="${index}">Remove</button>
+            <input type="text" data-video-group-index="${index}" value="${group.path.replace(/"/g, "&quot;")}" placeholder="/path/to/video.mp4" />
+            <input class="playlist-repeat" type="number" min="1" step="1" data-video-group-repeat="${index}" value="${group.count}" title="Repeat count" />
+            <button class="playlist-mini-btn" data-video-group-up="${index}">Up</button>
+            <button class="playlist-mini-btn" data-video-group-down="${index}">Down</button>
+            <button class="playlist-mini-btn danger" data-video-group-remove="${index}">Remove</button>
           </div>
         `;
         item.addEventListener("dragstart", () => {
@@ -2151,27 +2215,30 @@ HTML = r"""<!doctype html>
           if (playlistDragIndex == null || playlistDragIndex === index) return;
           event.preventDefault();
           item.classList.remove("drag-over");
-          moveQueueItemTo(playlistDragIndex, index);
+          moveQueueGroupTo(playlistDragIndex, index);
         });
         playlistEditor.appendChild(item);
       });
-      playlistEditor.querySelectorAll("input[data-video-index]").forEach((input) => {
+      playlistEditor.querySelectorAll("input[data-video-group-index]").forEach((input) => {
         input.addEventListener("input", (event) => {
-          const idx = Number(event.target.dataset.videoIndex);
-          const nextPaths = ctx.paths.slice();
-          nextPaths[idx] = event.target.value;
-          ctx.apply(nextPaths);
-          renderStudioBoard();
+          const idx = Number(event.target.dataset.videoGroupIndex);
+          updateQueueGroup(idx, { path: event.target.value });
         });
       });
-      playlistEditor.querySelectorAll("[data-video-up]").forEach((button) => {
-        button.addEventListener("click", () => moveQueueItem(Number(button.dataset.videoUp), -1));
+      playlistEditor.querySelectorAll("input[data-video-group-repeat]").forEach((input) => {
+        input.addEventListener("input", (event) => {
+          const idx = Number(event.target.dataset.videoGroupRepeat);
+          updateQueueGroup(idx, { count: event.target.value });
+        });
       });
-      playlistEditor.querySelectorAll("[data-video-down]").forEach((button) => {
-        button.addEventListener("click", () => moveQueueItem(Number(button.dataset.videoDown), 1));
+      playlistEditor.querySelectorAll("[data-video-group-up]").forEach((button) => {
+        button.addEventListener("click", () => moveQueueGroupTo(Number(button.dataset.videoGroupUp), Math.max(0, Number(button.dataset.videoGroupUp) - 1)));
       });
-      playlistEditor.querySelectorAll("[data-video-remove]").forEach((button) => {
-        button.addEventListener("click", () => removeQueueItem(Number(button.dataset.videoRemove)));
+      playlistEditor.querySelectorAll("[data-video-group-down]").forEach((button) => {
+        button.addEventListener("click", () => moveQueueGroupTo(Number(button.dataset.videoGroupDown), Math.min(groups.length - 1, Number(button.dataset.videoGroupDown) + 1)));
+      });
+      playlistEditor.querySelectorAll("[data-video-group-remove]").forEach((button) => {
+        button.addEventListener("click", () => removeQueueGroup(Number(button.dataset.videoGroupRemove)));
       });
       playlistEditor.querySelectorAll("video[data-preview-video]").forEach((video) => {
         const seekToPreview = () => {
@@ -2202,6 +2269,45 @@ HTML = r"""<!doctype html>
       const [item] = next.splice(index, 1);
       next.splice(target, 0, item);
       ctx.apply(next);
+      renderPlaylistEditor();
+      renderStudioBoard();
+    }
+
+    function updateQueueGroup(groupIndex, patch) {
+      const ctx = queueEditorContext();
+      if (!ctx) return;
+      const groups = compressPlaylistPaths(ctx.paths);
+      if (groupIndex < 0 || groupIndex >= groups.length) return;
+      groups[groupIndex] = {
+        ...groups[groupIndex],
+        ...patch,
+      };
+      groups[groupIndex].count = Math.max(1, Number(groups[groupIndex].count || 1));
+      ctx.apply(expandPlaylistGroups(groups));
+      renderPlaylistEditor();
+      renderStudioBoard();
+    }
+
+    function removeQueueGroup(groupIndex) {
+      const ctx = queueEditorContext();
+      if (!ctx) return;
+      const groups = compressPlaylistPaths(ctx.paths);
+      if (groupIndex < 0 || groupIndex >= groups.length) return;
+      groups.splice(groupIndex, 1);
+      ctx.apply(expandPlaylistGroups(groups));
+      renderPlaylistEditor();
+      renderStudioBoard();
+    }
+
+    function moveQueueGroupTo(fromIndex, toIndex) {
+      const ctx = queueEditorContext();
+      if (!ctx) return;
+      const groups = compressPlaylistPaths(ctx.paths);
+      if (fromIndex < 0 || toIndex < 0 || fromIndex >= groups.length || toIndex >= groups.length) return;
+      const next = groups.slice();
+      const [item] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, item);
+      ctx.apply(expandPlaylistGroups(next));
       renderPlaylistEditor();
       renderStudioBoard();
     }
