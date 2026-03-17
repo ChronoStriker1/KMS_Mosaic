@@ -255,7 +255,7 @@ function kmsEmbeddedOverrides() {
     #kmsUiMount .shell {
       margin: 0;
       max-width: none;
-      grid-template-columns: minmax(340px, 400px) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
       gap: 18px;
       padding: 0;
     }
@@ -274,6 +274,7 @@ function kmsEmbeddedOverrides() {
     #kmsUiMount .left-rail {
       position: static;
       top: auto;
+      min-width: 0;
     }
     #kmsUiMount .app-header { display: none !important; }
     #kmsUiMount .panel-body > div,
@@ -334,6 +335,8 @@ function kmsEmbeddedOverrides() {
     }
     #kmsUiMount .preview-wrap {
       margin-inline: auto;
+      width: 100% !important;
+      max-width: 100% !important;
       background: #111 !important;
       border-color: rgba(0,0,0,.22) !important;
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.03), 0 3px 10px rgba(0,0,0,.10) !important;
