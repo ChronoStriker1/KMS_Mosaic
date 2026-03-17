@@ -10,6 +10,25 @@ $service = $cfg['SERVICE'] ?? 'enable';
 $web_service = $cfg['WEB_SERVICE'] ?? 'enable';
 $web_port = $cfg['WEB_PORT'] ?? '8788';
 $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
+$service_script = "/usr/local/emhttp/plugins/{$plugin}/scripts/kms_mosaic-service";
+$initial_status = [
+  'service' => $service,
+  'web_service' => $web_service,
+  'web_port' => $web_port,
+  'config_path' => $config_path,
+  'kms_running' => false,
+  'web_running' => false,
+  'kms_pid' => '',
+  'web_pid' => '',
+];
+$service_status_raw = @shell_exec(escapeshellcmd($service_script) . ' ' . escapeshellarg('status'));
+if (is_string($service_status_raw) && trim($service_status_raw) !== '') {
+  $decoded = json_decode($service_status_raw, true);
+  if (is_array($decoded)) {
+    $initial_status = array_merge($initial_status, $decoded);
+  }
+}
+$initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 ?>
 <style>
   .kms-page {
@@ -139,8 +158,14 @@ $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
       </div>
 
       <div class="kms-service-meta">
-        <div id="kmsStatus" class="kms-status">Loading status…</div>
-        <div id="kmsMeta" class="kms-meta"></div>
+        <div id="kmsStatus" class="kms-status <?=!empty($initial_status['kms_running']) ? 'ok' : 'bad';?>">
+          kms_mosaic: <?=!empty($initial_status['kms_running']) ? 'running' : 'stopped';?> | preview service: <?=!empty($initial_status['web_running']) ? 'running' : 'stopped';?>
+        </div>
+        <div id="kmsMeta" class="kms-meta">
+          Config: <?=htmlspecialchars((string)($initial_status['config_path'] ?? $config_path));?>
+          <?php if (!empty($initial_status['kms_pid'])): ?> | kms pid: <?=htmlspecialchars((string)$initial_status['kms_pid']);?><?php endif; ?>
+          <?php if (!empty($initial_status['web_pid'])): ?> | preview pid: <?=htmlspecialchars((string)$initial_status['web_pid']);?><?php endif; ?>
+        </div>
       </div>
 
       <div class="kms-service-grid">
@@ -186,6 +211,7 @@ $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
 
 <script>
 const kmsActionUrl = '/plugins/kms.mosaic/include/actions.php';
+const kmsInitialStatus = <?=$initial_status_json ?: '{}';?>;
 let kmsEmbeddedLoaded = false;
 let kmsEmbeddedStylesInstalled = false;
 
@@ -466,6 +492,8 @@ async function kmsEnsureEmbeddedLoaded() {
 }
 
 $(function() {
+  kmsUpdateStatus(kmsInitialStatus);
+  kmsEnsureEmbeddedLoaded();
   kmsRefreshStatus();
 });
 </script>

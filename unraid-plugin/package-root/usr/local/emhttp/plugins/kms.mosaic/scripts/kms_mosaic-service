@@ -11,6 +11,7 @@ WEB_LOG="/tmp/kms_mosaic_web.log"
 SERVICE="enable"
 WEB_SERVICE="enable"
 WEB_PORT="8788"
+WEB_HOST="127.0.0.1"
 CONFIG_PATH="/boot/config/kms_mosaic.conf"
 
 [ -r "$CFG" ] && source "$CFG"
@@ -19,7 +20,7 @@ KMS_WRAPPER="/usr/local/bin/kms_mosaic"
 WEB_WRAPPER="/usr/local/bin/kms_mosaic_web"
 
 web_pid_from_system() {
-  pgrep -fo "/usr/local/bin/kms_mosaic_web.py --config ${CONFIG_PATH} --port ${WEB_PORT}" 2>/dev/null || true
+  pgrep -fo "/usr/local/bin/kms_mosaic_web.py --config ${CONFIG_PATH} --host ${WEB_HOST} --port ${WEB_PORT}" 2>/dev/null || true
 }
 
 is_kms_running() {
@@ -109,7 +110,7 @@ stop_kms() {
 start_web() {
   [ "${WEB_SERVICE}" = "enable" ] || return 0
   is_web_running && return 0
-  nohup "$WEB_WRAPPER" --config "$CONFIG_PATH" --port "$WEB_PORT" >"$WEB_LOG" 2>&1 &
+  nohup "$WEB_WRAPPER" --config "$CONFIG_PATH" --host "$WEB_HOST" --port "$WEB_PORT" >"$WEB_LOG" 2>&1 &
   sleep 1
   local pid="$!"
   if ! kill -0 "$pid" 2>/dev/null; then
