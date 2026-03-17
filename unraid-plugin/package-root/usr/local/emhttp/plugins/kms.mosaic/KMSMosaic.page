@@ -1,0 +1,155 @@
+Menu="Utilities"
+Title="KMS Mosaic"
+Icon="desktop"
+---
+<?php
+$plugin = 'kms.mosaic';
+$cfg = parse_plugin_cfg($plugin);
+$service = $cfg['SERVICE'] ?? 'enable';
+$web_service = $cfg['WEB_SERVICE'] ?? 'enable';
+$web_port = $cfg['WEB_PORT'] ?? '8788';
+$config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
+?>
+<style>
+  .kmsmosaic-wrap { display:grid; grid-template-columns: 340px 1fr; gap: 24px; align-items:start; }
+  .kmsmosaic-panel { background: rgba(255,255,255,.65); border: 1px solid rgba(0,0,0,.08); border-radius: 10px; padding: 18px; }
+  .kmsmosaic-panel h3 { margin: 0 0 14px; }
+  .kmsmosaic-row { margin-bottom: 14px; }
+  .kmsmosaic-row label { display:block; font-weight: 600; margin-bottom: 6px; }
+  .kmsmosaic-row input[type="text"], .kmsmosaic-row select { width: 100%; }
+  .kmsmosaic-actions { display:flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .kmsmosaic-status { font-weight: 600; margin-bottom: 12px; }
+  .kmsmosaic-status.ok { color: #1f7a1f; }
+  .kmsmosaic-status.bad { color: #b3412b; }
+  .kmsmosaic-frame { width: 100%; min-height: 78vh; border: 1px solid rgba(0,0,0,.12); border-radius: 10px; background: #111; }
+  .kmsmosaic-meta { color: #666; font-size: 13px; margin-top: 8px; }
+</style>
+
+<div class="kmsmosaic-wrap">
+  <div class="kmsmosaic-panel">
+    <h3>KMS Mosaic Service</h3>
+    <div id="kmsStatus" class="kmsmosaic-status">Loading status…</div>
+
+    <div class="kmsmosaic-row">
+      <label for="SERVICE">Start `kms_mosaic` at boot</label>
+      <select id="SERVICE" name="SERVICE">
+        <?=mk_option($service, "enable", "Yes");?>
+        <?=mk_option($service, "disable", "No");?>
+      </select>
+    </div>
+
+    <div class="kmsmosaic-row">
+      <label for="WEB_SERVICE">Start web UI at boot</label>
+      <select id="WEB_SERVICE" name="WEB_SERVICE">
+        <?=mk_option($web_service, "enable", "Yes");?>
+        <?=mk_option($web_service, "disable", "No");?>
+      </select>
+    </div>
+
+    <div class="kmsmosaic-row">
+      <label for="WEB_PORT">Web UI port</label>
+      <input id="WEB_PORT" name="WEB_PORT" type="text" value="<?=htmlspecialchars($web_port);?>">
+    </div>
+
+    <div class="kmsmosaic-row">
+      <label for="CONFIG_PATH">Config path</label>
+      <input id="CONFIG_PATH" name="CONFIG_PATH" type="text" value="<?=htmlspecialchars($config_path);?>">
+    </div>
+
+    <div class="kmsmosaic-actions">
+      <button type="button" onclick="kmsSave()">Apply</button>
+      <button type="button" onclick="kmsControl('start')">Start</button>
+      <button type="button" onclick="kmsControl('restart')">Restart</button>
+      <button type="button" onclick="kmsControl('stop')">Stop</button>
+      <button type="button" onclick="kmsRefresh()">Refresh</button>
+    </div>
+
+    <div class="kmsmosaic-meta" id="kmsMeta"></div>
+  </div>
+
+  <div class="kmsmosaic-panel">
+    <h3>Embedded Config UI</h3>
+    <iframe id="kmsFrame" class="kmsmosaic-frame" src="about:blank"></iframe>
+  </div>
+</div>
+
+<script>
+const kmsActionUrl = '/plugins/kms.mosaic/include/actions.php';
+
+function kmsIframeUrl(port) {
+  return `http://${location.hostname}:${port}/`;
+}
+
+function kmsUpdateStatus(data) {
+  const el = document.getElementById('kmsStatus');
+  const meta = document.getElementById('kmsMeta');
+  const port = data.web_port || document.getElementById('WEB_PORT').value || '8788';
+  const frame = document.getElementById('kmsFrame');
+  const kmsOk = !!data.kms_running;
+  const webOk = !!data.web_running;
+  el.className = `kmsmosaic-status ${kmsOk ? 'ok' : 'bad'}`;
+  el.textContent = `kms_mosaic: ${kmsOk ? 'running' : 'stopped'} | web: ${webOk ? 'running' : 'stopped'}`;
+  meta.textContent = `Config: ${data.config_path || ''}${data.kms_pid ? ' | kms pid: ' + data.kms_pid : ''}${data.web_pid ? ' | web pid: ' + data.web_pid : ''}`;
+  if (webOk) {
+    const nextSrc = kmsIframeUrl(port);
+    if (frame.dataset.src !== nextSrc) {
+      frame.src = nextSrc;
+      frame.dataset.src = nextSrc;
+    }
+  } else {
+    frame.src = 'about:blank';
+    frame.dataset.src = '';
+  }
+}
+
+async function kmsPost(action, extra = {}) {
+  const body = new URLSearchParams({ action, ...extra });
+  const response = await fetch(kmsActionUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+
+async function kmsRefresh() {
+  try {
+    const data = await kmsPost('status');
+    kmsUpdateStatus(data);
+  } catch (err) {
+    document.getElementById('kmsStatus').className = 'kmsmosaic-status bad';
+    document.getElementById('kmsStatus').textContent = err.message || 'Status failed';
+  }
+}
+
+async function kmsSave() {
+  try {
+    const data = await kmsPost('save', {
+      SERVICE: document.getElementById('SERVICE').value,
+      WEB_SERVICE: document.getElementById('WEB_SERVICE').value,
+      WEB_PORT: document.getElementById('WEB_PORT').value,
+      CONFIG_PATH: document.getElementById('CONFIG_PATH').value
+    });
+    kmsUpdateStatus(data);
+  } catch (err) {
+    document.getElementById('kmsStatus').className = 'kmsmosaic-status bad';
+    document.getElementById('kmsStatus').textContent = err.message || 'Apply failed';
+  }
+}
+
+async function kmsControl(action) {
+  try {
+    const data = await kmsPost(action);
+    kmsUpdateStatus(data);
+  } catch (err) {
+    document.getElementById('kmsStatus').className = 'kmsmosaic-status bad';
+    document.getElementById('kmsStatus').textContent = err.message || `${action} failed`;
+  }
+}
+
+$(function() {
+  kmsRefresh();
+});
+</script>

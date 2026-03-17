@@ -301,14 +301,18 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         render_gl_draw_border_rect(bx, by, bw, bh, thickness, logical_w, logical_h, 0.1f, 0.9f, 0.95f, 1.0f);
     }
 
+    if (snapshot_path && snapshot_written && !rt->direct_mode) {
+        *snapshot_written = render_gl_write_current_rgba_frame(snapshot_path, logical_w, logical_h);
+    }
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (!rt->direct_mode) {
         glViewport(0, 0, fb_w, fb_h);
         render_gl_clear_color(0.f, 0.f, 0.f, 1.f);
         render_gl_blit_rt_to_screen(rg, opt->rotation);
     }
-    if (snapshot_path && snapshot_written) {
-        *snapshot_written = render_gl_write_current_bmp(snapshot_path, fb_w, fb_h);
+    if (snapshot_path && snapshot_written && rt->direct_mode) {
+        *snapshot_written = render_gl_write_current_rgba_frame(snapshot_path, fb_w, fb_h);
     }
 
     eglSwapBuffers(e->dpy, e->surf);

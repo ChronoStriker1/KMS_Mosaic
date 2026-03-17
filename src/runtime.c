@@ -53,7 +53,7 @@ bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const m
     rt->direct_test_only = (dtest_env && (*dtest_env == '1' || *dtest_env == 'y' || *dtest_env == 'Y'));
     rt->mpv_needs_render = 1;
 
-    rt->pfds[RUNTIME_POLL_STDIN].fd = 0;
+    rt->pfds[RUNTIME_POLL_STDIN].fd = isatty(0) ? 0 : -1;
     rt->pfds[RUNTIME_POLL_STDIN].events = POLLIN;
     rt->pfds[RUNTIME_POLL_MPV_WAKEUP].fd = use_mpv ? m->wakeup_fd[0] : -1;
     rt->pfds[RUNTIME_POLL_MPV_WAKEUP].events = POLLIN;

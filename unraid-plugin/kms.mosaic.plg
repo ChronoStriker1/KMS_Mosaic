@@ -1,0 +1,84 @@
+<?xml version="1.0" standalone="yes"?>
+<PLUGIN
+  name="kms.mosaic"
+  author="OpenAI / chronostriker1"
+  version="2026.03.17"
+  launch="Utilities/KMS Mosaic"
+  pluginURL="https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/unraid-plugin/kms.mosaic.plg"
+  icon="desktop">
+
+<CHANGES>
+###2026.03.17
+- Add native Unraid plugin packaging for KMS Mosaic.
+- Manage `kms_mosaic` and the web UI without the old userscript.
+- Embed the existing configuration UI inside an Unraid page.
+</CHANGES>
+
+<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.03.17.tgz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.03.17.tgz</URL>
+</FILE>
+
+<FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.03.17-x86_64-1.txz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.03.17-x86_64-1.txz</URL>
+</FILE>
+
+<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic.cfg">
+<INLINE>
+<![CDATA[
+SERVICE="enable"
+WEB_SERVICE="enable"
+WEB_PORT="8788"
+CONFIG_PATH="/boot/config/kms_mosaic.conf"
+]]>
+</INLINE>
+</FILE>
+
+<FILE Run="/bin/bash">
+<INLINE>
+<![CDATA[
+mkdir -p /usr/local/emhttp/plugins/kms.mosaic
+tar -xzf /boot/config/plugins/kms.mosaic/kms.mosaic-2026.03.17.tgz -C /
+upgradepkg --install-new --reinstall /boot/config/plugins/kms.mosaic/kms_mosaic-2026.03.17-x86_64-1.txz
+chmod +x /usr/local/bin/kms_mosaic_web
+chmod +x /usr/local/bin/kms_mosaic_web.py
+chmod +x /usr/local/emhttp/plugins/kms.mosaic/event/started
+chmod +x /usr/local/emhttp/plugins/kms.mosaic/event/stopping_svcs
+chmod +x /usr/local/emhttp/plugins/kms.mosaic/scripts/kms_mosaic-service
+legacy_userscript="/boot/config/plugins/user.scripts/scripts/Start kms_mosaic"
+legacy_backup="/boot/config/plugins/user.scripts/scripts/Start kms_mosaic.disabled-by-kms-mosaic-plugin"
+if [ -d "$legacy_userscript" ] && [ ! -e "$legacy_backup" ]; then
+  mv "$legacy_userscript" "$legacy_backup"
+fi
+/usr/local/emhttp/plugins/kms.mosaic/scripts/kms_mosaic-service restart >/dev/null 2>&1 || true
+echo ""
+echo "-----------------------------------------------------------"
+echo " Plugin kms.mosaic is installed."
+echo " Version: 2026.03.17"
+echo "-----------------------------------------------------------"
+echo ""
+]]>
+</INLINE>
+</FILE>
+
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+<![CDATA[
+/usr/local/emhttp/plugins/kms.mosaic/scripts/kms_mosaic-service stop >/dev/null 2>&1 || true
+rm -rf /usr/local/emhttp/plugins/kms.mosaic
+rm -f /usr/local/bin/kms_mosaic_web /usr/local/bin/kms_mosaic_web.py
+legacy_userscript="/boot/config/plugins/user.scripts/scripts/Start kms_mosaic"
+legacy_backup="/boot/config/plugins/user.scripts/scripts/Start kms_mosaic.disabled-by-kms-mosaic-plugin"
+if [ -d "$legacy_backup" ] && [ ! -e "$legacy_userscript" ]; then
+  mv "$legacy_backup" "$legacy_userscript"
+fi
+rm -rf /boot/config/plugins/kms.mosaic
+echo ""
+echo "-----------------------------------------------------------"
+echo " Plugin kms.mosaic is removed."
+echo "-----------------------------------------------------------"
+echo ""
+]]>
+</INLINE>
+</FILE>
+
+</PLUGIN>

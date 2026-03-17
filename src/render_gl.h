@@ -31,7 +31,7 @@ void render_gl_ensure_video_rt(render_gl_ctx *ctx, int w, int h);
 void render_gl_blit_rt_to_screen(render_gl_ctx *ctx, rotation_t rot);
 void render_gl_draw_tex_fullscreen(render_gl_ctx *ctx, GLuint tex);
 void render_gl_draw_tex_to_rt(render_gl_ctx *ctx, GLuint tex, int x, int y, int w, int h, int rt_w, int rt_h);
-bool render_gl_write_current_bmp(const char *path, int w, int h);
+bool render_gl_write_current_rgba_frame(const char *path, int w, int h);
 void render_gl_destroy(render_gl_ctx *ctx);
 
 #endif

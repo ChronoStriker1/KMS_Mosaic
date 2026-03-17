@@ -39,7 +39,7 @@ Implemented:
 - Option parsing and layout output now allocate pane/role storage dynamically, including generic `--pane N "CMD"` support
 - DRM atomic modesetting with optional nonblocking flips
 - Containerized Linux build path from macOS and other non-Linux hosts
-- Unraid deployment workflow using the existing userscript launcher
+- Unraid deployment workflow through a native Unraid plugin with start/stop and embedded configuration UI
 
 Still not implemented:
 
@@ -107,13 +107,13 @@ Web UI
 There is also a companion web control surface:
 
 ```sh
-python3 tools/kms_mosaic_web.py --config /boot/config/kms_mosaic.conf --host 0.0.0.0 --port 8787
+python3 tools/kms_mosaic_web.py --config /boot/config/kms_mosaic.conf --host 0.0.0.0 --port 8788
 ```
 
 That service:
 
 - reads the active `kms_mosaic.conf`
-- streams live compositor frames into the browser preview over a framed binary HTTP stream
+- streams the live compositor preview into the browser over WebRTC
 - exposes a pane-oriented "Layout Studio" that edits the saved `--split-tree` when present
 - lets you add/remove panes, switch panes between terminal and mpv, and edit each mpv pane's media queue from an explicit playlist target bar instead of tying queue edits to the selected studio pane
 - lets you attach pane-local mpv options to mpv panes so each media pane can override the global mpv defaults
@@ -139,7 +139,7 @@ does not destabilize scanout or input handling.
 Current limitation:
 
 - The web UI now edits split trees, but the studio is still a button-driven split editor rather than a full drag-handle tree designer.
-- The browser preview is materially better than the older snapshot-reload path, but it is still fed by compositor snapshots rather than a true encoded display mirror.
+- The browser preview is much closer to a true live mirror now, but it still depends on compositor-side preview capture rather than a dedicated zero-copy capture/encode path.
 
 Defaults:
 
@@ -219,15 +219,38 @@ Debugging
 Unraid notes
 ------------
 
-The current deployment workflow has been validated against an Unraid host started
-via the existing userscript launcher.
+The preferred Unraid deployment path is now the native plugin under
+`unraid-plugin/`, not the old userscript.
+
+Plugin artifacts:
+
+- plugin manifest: `dist/kms.mosaic.plg`
+- plugin payload bundle: `dist/kms.mosaic-2026.03.17.tgz`
+- Linux package: `dist/kms_mosaic-2026.03.17-x86_64-1.txz`
+
+Build the plugin artifacts after building the Linux package:
+
+```sh
+scripts/build_unraid_plugin.sh
+```
+
+On the Unraid host, install the generated `.plg` through the Plugins page or
+with the Unraid `plugin install` command. The plugin:
+
+- installs the packaged `kms_mosaic` binary
+- installs the web UI under `/usr/local/bin/kms_mosaic_web.py`
+- adds an Unraid page at `Utilities -> KMS Mosaic`
+- manages boot/start/stop/restart for both `kms_mosaic` and the web UI
+- stores plugin settings in `/boot/config/plugins/kms.mosaic/kms.mosaic.cfg`
+- retires the old `Start kms_mosaic` userscript automatically so boot ownership does not race
 
 Important operational note:
 
 - Stop and start must be sequential.
 - Do not use a parallel stop/start restart pattern.
-- Prefer `pkill -x kms_mosaic.bin`, wait briefly, then launch the userscript.
+- Prefer `pkill -x kms_mosaic.bin`, wait briefly, then launch the plugin service or `/usr/local/bin/kms_mosaic` wrapper.
 - A very fast restart can still lose DRM master and fail with `drmModeAtomicCommit (modeset): Permission denied`; a delayed second restart has been sufficient on the current Unraid host.
+- Do not re-enable the old userscript after installing the plugin, or both launch paths can race on boot.
 
 Roadmap
 -------

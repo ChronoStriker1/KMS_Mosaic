@@ -1,0 +1,8 @@
+#!/bin/bash
+set -euo pipefail
+
+if [ -x /root/.venvs/kms_mosaic_web/bin/python ]; then
+  exec /root/.venvs/kms_mosaic_web/bin/python /usr/local/bin/kms_mosaic_web.py "$@"
+fi
+
+exec python3 /usr/local/bin/kms_mosaic_web.py "$@"
