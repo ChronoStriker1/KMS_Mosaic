@@ -33,10 +33,13 @@ bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const m
 void runtime_update_pane_fds(runtime_state *rt, const options_t *opt, const pane_runtime *panes,
                              const media_ctx *pane_media);
 void runtime_refresh_playlist_fd(runtime_state *rt, const media_ctx *m);
+void runtime_refresh_pane_playlist_fd(runtime_state *rt, const options_t *opt, const media_ctx *pane_media);
 int runtime_pane_poll_index(int pane_index);
 int runtime_pane_media_poll_index(const options_t *opt, int pane_index);
+int runtime_pane_playlist_poll_index(const options_t *opt, int pane_index);
 bool runtime_pane_ready(const runtime_state *rt, int pane_index);
 bool runtime_pane_media_ready(const runtime_state *rt, const options_t *opt, int pane_index);
+bool runtime_pane_playlist_ready(const runtime_state *rt, const options_t *opt, int pane_index);
 void runtime_destroy(runtime_state *rt);
 
 #endif

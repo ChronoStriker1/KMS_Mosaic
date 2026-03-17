@@ -243,7 +243,7 @@ void media_handle_wakeup(media_ctx *m, bool debug, int *mpv_needs_render) {
     }
 }
 
-void media_handle_playlist_fifo(media_ctx *m, const options_t *opt, char *pfifo_buf, int *pfifo_len) {
+void media_handle_playlist_fifo(media_ctx *m, char *pfifo_buf, int *pfifo_len) {
     ssize_t r = read(m->playlist_fifo_fd, pfifo_buf + *pfifo_len, 1024 - *pfifo_len - 1);
     if (r > 0) {
         *pfifo_len += (int)r;
@@ -259,7 +259,11 @@ void media_handle_playlist_fifo(media_ctx *m, const options_t *opt, char *pfifo_
         memmove(pfifo_buf, start, (size_t)*pfifo_len);
     } else if (r == 0) {
         close(m->playlist_fifo_fd);
-        m->playlist_fifo_fd = open(opt->playlist_fifo, O_RDONLY | O_NONBLOCK);
+        if (m->playlist_fifo_path) {
+            m->playlist_fifo_fd = open(m->playlist_fifo_path, O_RDONLY | O_NONBLOCK);
+        } else {
+            m->playlist_fifo_fd = -1;
+        }
     }
 }
 
@@ -281,6 +285,7 @@ static bool media_init_source(media_ctx *m, const options_t *opt, const pane_med
     m->wakeup_fd[0] = -1;
     m->wakeup_fd[1] = -1;
     m->playlist_fifo_fd = -1;
+    m->playlist_fifo_path = pane_media ? pane_media->playlist_fifo : opt->playlist_fifo;
 
     if (pane_media) {
         if (!media_should_use_pane(pane_media)) return false;
@@ -335,9 +340,9 @@ static bool media_init_source(media_ctx *m, const options_t *opt, const pane_med
         m->mpv_out = fopen(opt->mpv_out_path, "w");
         if (!m->mpv_out) perror("mpv-out");
     }
-    if (!pane_media && opt->playlist_fifo) {
-        mkfifo(opt->playlist_fifo, 0666);
-        m->playlist_fifo_fd = open(opt->playlist_fifo, O_RDONLY | O_NONBLOCK);
+    if (m->playlist_fifo_path) {
+        mkfifo(m->playlist_fifo_path, 0666);
+        m->playlist_fifo_fd = open(m->playlist_fifo_path, O_RDONLY | O_NONBLOCK);
         if (m->playlist_fifo_fd < 0) perror("playlist-fifo");
     }
     return true;
@@ -361,6 +366,7 @@ void media_shutdown(media_ctx *m) {
     m->mpv_out = NULL;
     if (m->playlist_fifo_fd >= 0) close(m->playlist_fifo_fd);
     m->playlist_fifo_fd = -1;
+    m->playlist_fifo_path = NULL;
     if (m->wakeup_fd[0] >= 0) close(m->wakeup_fd[0]);
     if (m->wakeup_fd[1] >= 0) close(m->wakeup_fd[1]);
     m->wakeup_fd[0] = -1;

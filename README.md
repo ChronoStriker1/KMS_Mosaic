@@ -92,6 +92,7 @@ Examples:
 ./kms_mosaic --pane-count 6 --pane 5 "watch -n1 sensors" --pane 6 "iftop"
 ./kms_mosaic --pane-media 2 --pane-video 2 /mnt/user/video/clip.mp4
 ./kms_mosaic --pane-media 3 --pane-playlist 3 /boot/config/pane3.m3u
+./kms_mosaic --pane-media 2 --pane-playlist-fifo 2 /tmp/pane2.fifo --pane-media 3 --pane-playlist-fifo 3 /tmp/pane3.fifo
 ./kms_mosaic --pane-media 2 --pane-mpv-opt 2 mute=yes --pane-mpv-opt 2 video-rotate=90
 ./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle
 ./kms_mosaic --playlist-fifo /tmp/mosaic.fifo --mpv-out /tmp/mpv.log
@@ -116,6 +117,7 @@ That service:
 - exposes a pane-oriented "Layout Studio" that edits the saved `--split-tree` when present
 - lets you add/remove panes, switch panes between terminal and mpv, and edit the selected pane's media queue from the page
 - lets you attach pane-local mpv options to mpv panes so each media pane can override the global mpv defaults
+- lets each mpv pane keep its own playlist file or playlist FIFO so multiple mpv panes do not share one live queue
 - exposes structured pane-local mpv controls in the pane inspector for audio, mute, loop-file, video-only/audio-only mode, and shader stacks while preserving a smaller raw per-pane options box for anything else
 - lets you split the selected pane vertically or horizontally from the studio itself
 - treats the old layout presets as starter suggestions instead of the main editing surface

@@ -304,6 +304,7 @@ static void app_collect_pane_ready(const options_t *opt, const runtime_state *rt
 
 static void app_handle_runtime_events(runtime_state *rt, ui_state *ui, const options_t *opt, media_ctx *m,
                                       media_ctx *pane_media, drm_ctx *d, char *pfifo_buf, int *pfifo_len,
+                                      char (*pane_pfifo_bufs)[1024], int *pane_pfifo_lens,
                                       bool use_mpv, bool debug) {
     struct timespec ts_now;
     clock_gettime(CLOCK_MONOTONIC, &ts_now);
@@ -319,8 +320,15 @@ static void app_handle_runtime_events(runtime_state *rt, ui_state *ui, const opt
         }
     }
     if (m->playlist_fifo_fd >= 0 && (rt->pfds[RUNTIME_POLL_PLAYLIST_FIFO].revents & POLLIN)) {
-        media_handle_playlist_fifo(m, opt, pfifo_buf, pfifo_len);
+        media_handle_playlist_fifo(m, pfifo_buf, pfifo_len);
         runtime_refresh_playlist_fd(rt, m);
+    }
+    for (int i = 0; i < opt->pane_count; ++i) {
+        if (pane_media && pane_media[i].playlist_fifo_fd >= 0 &&
+            runtime_pane_playlist_ready(rt, opt, i)) {
+            media_handle_playlist_fifo(&pane_media[i], pane_pfifo_bufs[i], &pane_pfifo_lens[i]);
+            runtime_refresh_pane_playlist_fd(rt, opt, pane_media);
+        }
     }
     if (rt->pfds[RUNTIME_POLL_DRM].revents & POLLIN) {
         drmEventContext ev = {0};
@@ -447,6 +455,8 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     snapshot_watch snap_watch = {0};
     char pfifo_buf[1024];
     int pfifo_len = 0;
+    char (*pane_pfifo_bufs)[1024] = NULL;
+    int *pane_pfifo_lens = NULL;
     int rc = 0;
 
     if (options_parse_cli(&opt, argc, argv, debug)) return 0;
@@ -468,6 +478,9 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     bool use_mpv = media_init(&m, &opt, *debug);
     pane_media = calloc((size_t)opt.pane_count, sizeof(*pane_media));
     if (!pane_media) app_die("calloc pane_media");
+    pane_pfifo_bufs = calloc((size_t)opt.pane_count, sizeof(*pane_pfifo_bufs));
+    pane_pfifo_lens = calloc((size_t)opt.pane_count, sizeof(*pane_pfifo_lens));
+    if (!pane_pfifo_bufs || !pane_pfifo_lens) app_die("calloc pane playlist fifo buffers");
     for (int i = 0; i < opt.pane_count; ++i) {
         if (opt.pane_media && opt.pane_media[i].enabled) {
             (void)media_init_pane(&pane_media[i], &opt, &opt.pane_media[i], *debug);
@@ -510,7 +523,9 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
         if (*debug && rt.frame < 5) fprintf(stderr, "Loop frame %d start\n", rt.frame);
         if (!app_poll_runtime_with_media(&rt, &opt, &panes, pane_media)) app_die("poll");
         if (!app_handle_input_ready(&rt, &ui, &opt, use_mpv, &panes, &m, pane_media, *debug)) break;
-        app_handle_runtime_events(&rt, &ui, &opt, &m, pane_media, &d, pfifo_buf, &pfifo_len, use_mpv, *debug);
+        app_handle_runtime_events(&rt, &ui, &opt, &m, pane_media, &d,
+                                  pfifo_buf, &pfifo_len, pane_pfifo_bufs, pane_pfifo_lens,
+                                  use_mpv, *debug);
         if (app_config_watch_poll(&cfg_watch)) {
             fprintf(stderr, "Config file changed: %s\n", cfg_watch.path);
             rc = APP_RUN_RELOAD;
@@ -537,6 +552,8 @@ cleanup:
     ui_state_destroy(&ui);
     runtime_destroy(&rt);
     app_scene_destroy(&scene);
+    free(pane_pfifo_bufs);
+    free(pane_pfifo_lens);
     app_cleanup(&opt, &m, pane_media, &rg, &d, &g, &e, &panes);
     options_destroy(&opt);
     return rc;

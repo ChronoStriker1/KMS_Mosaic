@@ -397,6 +397,8 @@ static void print_usage(const char *exe) {
         "  --pane-playlist N FILE   Playlist for media pane N.\n"
         "  --pane-playlist-extended N FILE\n"
         "                           Extended playlist for media pane N.\n"
+        "  --pane-playlist-fifo N FILE\n"
+        "                           FIFO to append playlist entries into media pane N.\n"
         "  --pane-video N PATH      Add a video to media pane N (repeatable).\n"
         "  --pane-mpv-opt N K=V     Per-pane mpv option for media pane N (repeatable).\n"
         "  --split-tree SPEC        Explicit split-tree layout override.\n"
@@ -596,6 +598,20 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
                 opt->pane_media[pane_index].playlist_ext = playlist_ext;
             }
         }
+        else if (!strcmp(argv[i], "--pane-playlist-fifo") && i + 2 < argc) {
+            int pane_index = atoi(argv[++i]) - 1;
+            const char *playlist_fifo = argv[++i];
+            if (pane_index >= 0) {
+                if (pane_index + 1 > opt->pane_count) opt->pane_count = pane_index + 1;
+                if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                    !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                    fprintf(stderr, "Failed to allocate pane storage.\n");
+                    return 1;
+                }
+                opt->pane_media[pane_index].enabled = true;
+                opt->pane_media[pane_index].playlist_fifo = playlist_fifo;
+            }
+        }
         else if (!strcmp(argv[i], "--pane-video") && i + 2 < argc) {
             int pane_index = atoi(argv[++i]) - 1;
             const char *video_path = argv[++i];
@@ -745,6 +761,7 @@ void save_config(const options_t *opt, const char *path) {
         fprintf(f, "--pane-media %d\n", i + 1);
         if (pm->playlist_path) fprintf(f, "--pane-playlist %d '%s'\n", i + 1, pm->playlist_path);
         if (pm->playlist_ext) fprintf(f, "--pane-playlist-extended %d '%s'\n", i + 1, pm->playlist_ext);
+        if (pm->playlist_fifo) fprintf(f, "--pane-playlist-fifo %d '%s'\n", i + 1, pm->playlist_fifo);
         for (int vi = 0; vi < pm->video_count; ++vi) fprintf(f, "--pane-video %d '%s'\n", i + 1, pm->videos[vi].path);
         for (int oi = 0; oi < pm->n_mpv_opts; ++oi) fprintf(f, "--pane-mpv-opt %d '%s'\n", i + 1, pm->mpv_opts[oi]);
     }
