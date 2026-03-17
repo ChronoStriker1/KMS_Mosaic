@@ -39,7 +39,7 @@ Implemented:
 - Option parsing and layout output now allocate pane/role storage dynamically, including generic `--pane N "CMD"` support
 - DRM atomic modesetting with optional nonblocking flips
 - Containerized Linux build path from macOS and other non-Linux hosts
-- Unraid deployment workflow through a native Unraid plugin with start/stop and embedded configuration UI
+- Unraid deployment workflow through a native Unraid plugin with start/stop and a native settings page that hosts the full editor through same-origin plugin proxies
 
 Still not implemented:
 
@@ -240,6 +240,7 @@ with the Unraid `plugin install` command. The plugin:
 - installs the packaged `kms_mosaic` binary
 - installs the web UI under `/usr/local/bin/kms_mosaic_web.py`
 - adds an Unraid page at `Utilities -> KMS Mosaic`
+- proxies the standalone editor APIs through the plugin page so the full layout/media/playlist editor runs inside the Unraid settings page instead of an iframe
 - manages boot/start/stop/restart for both `kms_mosaic` and the web UI
 - stores plugin settings in `/boot/config/plugins/kms.mosaic/kms.mosaic.cfg`
 - retires the old `Start kms_mosaic` userscript automatically so boot ownership does not race

@@ -95,3 +95,6 @@
 - Added an Unraid plugin payload, service scripts, and an Unraid management page
   so `kms_mosaic` and the web UI can be started, stopped, and configured from
   the Unraid interface instead of the legacy userscript path.
+- Replaced the plugin page iframe with a native Unraid-style settings page that
+  proxies the standalone editor APIs and hosts the full layout/media/playlist
+  editor directly inside the plugin UI.
