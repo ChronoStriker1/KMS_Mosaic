@@ -535,6 +535,7 @@ HTML = r"""<!doctype html>
       .accent-bar { background: linear-gradient(180deg, rgba(207,120,83,0.8), rgba(181,83,47,0.6)); }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
     body {
       color: var(--ink);
       background:
@@ -797,6 +798,9 @@ HTML = r"""<!doctype html>
       font-size: 12px;
       line-height: 1.6;
     }
+    input:hover:not(:focus), select:hover:not(:focus), textarea:hover:not(:focus) {
+      border-color: var(--line-strong);
+    }
     input:focus, select:focus, textarea:focus {
       border-color: var(--accent);
       background: var(--surface-input-focus);
@@ -854,6 +858,7 @@ HTML = r"""<!doctype html>
       white-space: nowrap;
     }
     button:hover { transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0,0,0,0.10); }
+    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .primary {
       background: linear-gradient(135deg, var(--accent) 0%, #d4764e 100%);
       color: #fff9f4;
@@ -873,6 +878,8 @@ HTML = r"""<!doctype html>
       padding: 2px 0 0;
     }
     .status.error { color: var(--danger); }
+    .status.success { color: #4a8c5c; }
+    @media (prefers-color-scheme: dark) { .status.success { color: #6abf82; } }
     /* ─── raw config ──────────────────────────────────── */
     #rawConfig {
       min-height: 280px;
@@ -992,6 +999,7 @@ HTML = r"""<!doctype html>
       font-family: "Menlo", "Consolas", monospace;
       letter-spacing: 0.06em;
       text-transform: uppercase;
+      transition: background 140ms ease, color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
     }
     .playlist-target-btn.active {
       color: #fff8f0;
@@ -1010,18 +1018,29 @@ HTML = r"""<!doctype html>
       padding: 9px 10px;
       display: grid;
       gap: 8px;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
     }
+    .playlist-item:hover { border-color: var(--line-strong); }
     .playlist-item.dragging { opacity: 0.5; transform: scale(0.99); }
     .playlist-item.drag-over { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(181,83,47,0.14); }
-    .playlist-media-cell { width: 120px; display: grid; gap: 4px; align-self: start; }
+    .playlist-media-cell { width: 120px; display: grid; align-self: start; }
     .playlist-duration {
-      color: var(--muted);
+      position: absolute;
+      bottom: 5px;
+      right: 6px;
+      padding: 1px 5px 2px;
+      border-radius: 4px;
+      background: rgba(0,0,0,0.60);
+      color: rgba(255,255,255,0.90);
       font-family: "Menlo", "Consolas", monospace;
-      font-size: 10px;
-      letter-spacing: 0.08em;
+      font-size: 9px;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
-      text-align: center;
+      z-index: 2;
+      pointer-events: none;
+      backdrop-filter: blur(4px);
     }
+    .playlist-duration:empty { display: none; }
     .playlist-thumb {
       width: 120px;
       aspect-ratio: 16 / 9;
@@ -1032,9 +1051,7 @@ HTML = r"""<!doctype html>
         var(--surface-high);
       border: 1px solid var(--line);
       position: relative;
-    }
-    .playlist-thumb.quarter-turn {
-      aspect-ratio: 9 / 16;
+      flex-shrink: 0;
     }
     .playlist-thumb-media {
       position: absolute;
@@ -1050,6 +1067,9 @@ HTML = r"""<!doctype html>
       object-fit: contain;
       display: block;
       transform-origin: center center;
+    }
+    .playlist-thumb.cover img, .playlist-thumb.cover video {
+      object-fit: cover;
     }
     .playlist-thumb video { background: #0e0c0a; }
     .playlist-thumb.empty::after {
@@ -1069,6 +1089,12 @@ HTML = r"""<!doctype html>
       align-items: center;
     }
     .playlist-path { width: 100%; grid-column: 1 / -1; margin-top: 1px; }
+    .playlist-item.portrait-thumb { grid-template-columns: auto 1fr; align-items: start; }
+    .playlist-controls { display: grid; gap: 6px; min-width: 0; }
+    .playlist-controls-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .playlist-controls-row .playlist-mini-btn { margin-top: 0; }
+    .playlist-item.portrait-thumb .playlist-path { grid-column: auto; margin-top: 0; }
+    .playlist-thumb-media.quarter-turn { padding: 0; }
     .playlist-index {
       width: 26px; height: 26px;
       border-radius: 6px;
@@ -1130,8 +1156,15 @@ HTML = r"""<!doctype html>
       text-transform: uppercase;
       color: var(--accent-dark);
       background: rgba(255,255,255,0.03);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      user-select: none;
     }
     .playlist-bulk summary::-webkit-details-marker { display: none; }
+    .playlist-bulk summary::after { content: "+"; font-size: 14px; letter-spacing: 0; }
+    .playlist-bulk[open] summary::after { content: "−"; }
     .playlist-bulk-body {
       padding: 10px 12px 12px;
       display: grid;
@@ -1812,13 +1845,43 @@ HTML = r"""<!doctype html>
       return /\.(m4v|mkv|mov|mp4|mpeg|mpg|ts|webm)$/i.test(String(path || ""));
     }
 
-    function playlistThumbMarkup(path, index) {
+    function targetPlaylistMetrics(role = playlistTargetRole) {
+      const rotation = effectivePlaylistThumbRotationDegrees(role);
+      const rects = computeStudioRects(state);
+      const rawRect = rects?.[role] || { w: 16, h: 9 };
+      const rect = transformStudioPaneRect(rawRect);
+      const width = Math.max(1, Number(rect?.w || 16));
+      const height = Math.max(1, Number(rect?.h || 9));
+      const paneIndex = role - 1;
+      const panscanValue = role === 0
+        ? String(state?.panscan || "").trim()
+        : String(state?.pane_panscan?.[paneIndex] || "").trim();
+      const panscan = Number.parseFloat(panscanValue || "0");
+      return {
+        rotation,
+        aspectRatio: `${width} / ${height}`,
+        cover: Number.isFinite(panscan) && panscan > 0,
+        isPortrait: height > width,
+      };
+    }
+
+    function playlistThumbMarkup(path, index, metrics) {
       const value = String(path || "").trim();
       if (!value) return "";
       const src = mediaUrl(value);
-      const total = effectivePlaylistThumbRotationDegrees();
+      const total = metrics.rotation;
       const quarterTurn = total === 90 || total === 270;
-      const mediaStyle = total ? ` style="transform: rotate(${total}deg);"` : "";
+      let mediaStyle = "";
+      if (total) {
+        if (quarterTurn) {
+          const [mw, mh] = metrics.aspectRatio.split(" / ").map(Number);
+          const thumbW = 120;
+          const thumbH = Math.round(thumbW * mh / mw);
+          mediaStyle = ` style="position:absolute;width:${thumbH}px;height:${thumbW}px;top:50%;left:50%;transform:translate(-50%,-50%) rotate(${total}deg);object-fit:cover;"`;
+        } else {
+          mediaStyle = ` style="transform: rotate(${total}deg);"`;
+        }
+      }
       if (isLikelyImagePath(value)) {
         return `<div class="playlist-thumb-media${quarterTurn ? " quarter-turn" : ""}"><img src="${src}" alt="Preview for queue item ${index + 1}" loading="lazy"${mediaStyle} /></div>`;
       }
@@ -2742,36 +2805,55 @@ HTML = r"""<!doctype html>
         playlistEditor.innerHTML = `<div class="studio-empty">No media queue is available for this target.</div>`;
         return;
       }
+      const thumbMetrics = targetPlaylistMetrics(playlistTargetRole);
       if (!groups.length) {
         playlistEditor.innerHTML = `<div class="studio-empty">No videos queued yet. Add one below or open Bulk Add Videos.</div>`;
         return;
       }
       groups.forEach((group, index) => {
-        const thumb = playlistThumbMarkup(group.path, index);
-        const durationLabel = isLikelyVideoPath(group.path) ? "Loading..." : "";
+        const thumb = playlistThumbMarkup(group.path, index, thumbMetrics);
+        const durationLabel = "";
         const item = document.createElement("div");
-        item.className = "playlist-item";
+        item.className = `playlist-item${thumbMetrics.isPortrait ? " portrait-thumb" : ""}`;
         item.draggable = true;
         item.dataset.videoDragIndex = String(index);
-        item.innerHTML = `
-          <div class="playlist-row">
-            <div class="playlist-index">${index + 1}</div>
-            <div class="playlist-media-cell">
+        const thumbCell = `
+          <div class="playlist-media-cell">
+            <div class="playlist-thumb${thumb ? "" : " empty"}${thumbMetrics.cover ? " cover" : ""}" style="aspect-ratio: ${thumbMetrics.aspectRatio};">
+              ${thumb}
               <div class="playlist-duration" data-video-duration="${index}">${durationLabel}</div>
-              <div class="playlist-thumb${thumb ? "" : " empty"}${previewQuarterTurn ? " quarter-turn" : ""}">
-                ${thumb}
-              </div>
             </div>
+          </div>`;
+        const controls = `
             <label class="playlist-repeat-wrap" title="How many times this video repeats in a row">
               <span>Repeat</span>
               <input class="playlist-repeat" type="number" min="1" step="1" data-video-group-repeat="${index}" value="${group.count}" title="Repeat count" />
             </label>
             <button class="playlist-mini-btn" data-video-group-up="${index}">Up</button>
             <button class="playlist-mini-btn" data-video-group-down="${index}">Down</button>
-            <button class="playlist-mini-btn danger" data-video-group-remove="${index}">Remove</button>
-            <input class="playlist-path" type="text" data-video-group-index="${index}" value="${group.path.replace(/"/g, "&quot;")}" placeholder="/path/to/video.mp4" />
-          </div>
-        `;
+            <button class="playlist-mini-btn danger" data-video-group-remove="${index}">Remove</button>`;
+        const pathInput = `<input class="playlist-path" type="text" data-video-group-index="${index}" value="${group.path.replace(/"/g, "&quot;")}" placeholder="/path/to/video.mp4" />`;
+        if (thumbMetrics.isPortrait) {
+          item.innerHTML = `
+            ${thumbCell}
+            <div class="playlist-controls">
+              <div class="playlist-controls-row">
+                <div class="playlist-index">${index + 1}</div>
+                ${controls}
+              </div>
+              ${pathInput}
+            </div>
+          `;
+        } else {
+          item.innerHTML = `
+            <div class="playlist-row">
+              <div class="playlist-index">${index + 1}</div>
+              ${thumbCell}
+              ${controls}
+              ${pathInput}
+            </div>
+          `;
+        }
         item.addEventListener("dragstart", () => {
           playlistDragIndex = index;
           item.classList.add("dragging");
@@ -3005,15 +3087,16 @@ HTML = r"""<!doctype html>
       ensurePaneCommands(nextState);
       nextState.pane_commands.forEach((cmd, index) => {
         const paneType = nextState.pane_types?.[index] || "terminal";
+        if (paneType === "mpv") return;
         const item = document.createElement("div");
         item.className = "pane-item";
         item.innerHTML = `
           <div class="pane-head">
             <div class="pane-name">${slotName(index + 1)}</div>
-            <div class="mini">${paneType === "mpv" ? "mpv pane" : `role ${index + 1}`}</div>
+            <div class="mini">${`role ${index + 1}`}</div>
           </div>
           <label>Command
-            <input type="text" data-pane-index="${index}" value="${(cmd || "").replace(/"/g, "&quot;")}" placeholder="btop --utf-force" ${paneType === "mpv" ? "disabled" : ""} />
+            <input type="text" data-pane-index="${index}" value="${(cmd || "").replace(/"/g, "&quot;")}" placeholder="btop --utf-force" />
           </label>
         `;
         paneList.appendChild(item);
@@ -3171,7 +3254,7 @@ HTML = r"""<!doctype html>
     }
 
     function effectivePlaylistThumbRotationDegrees(role = playlistTargetRole) {
-      let total = (effectiveDisplayRotationDegrees() + configuredVideoRotationDegrees(role)) % 360;
+      let total = (normalizedRotationDegrees() + configuredVideoRotationDegrees(role)) % 360;
       if (total < 0) total += 360;
       return total;
     }
@@ -3342,7 +3425,7 @@ HTML = r"""<!doctype html>
       fillForm(payload.state, payload.config_path, payload.raw_config);
       await refreshSnapshot();
       scheduleLivePreview();
-      setStatus(`Loaded ${payload.config_path}`, false);
+      setStatus(`Loaded ${payload.config_path}`, false, true);
     }
 
     async function saveState() {
@@ -3357,7 +3440,7 @@ HTML = r"""<!doctype html>
       fillForm(payload.state, payload.config_path, payload.raw_config);
       await refreshSnapshot();
       scheduleLivePreview();
-      setStatus(`Saved ${payload.config_path}. kms_mosaic will reload on file change.`, false);
+      setStatus(`Saved ${payload.config_path}. kms_mosaic will reload on file change.`, false, true);
     }
 
     async function saveRawConfig() {
@@ -3372,12 +3455,12 @@ HTML = r"""<!doctype html>
       fillForm(payload.state, payload.config_path, payload.raw_config);
       await refreshSnapshot();
       scheduleLivePreview();
-      setStatus(`Saved raw config to ${payload.config_path}.`, false);
+      setStatus(`Saved raw config to ${payload.config_path}.`, false, true);
     }
 
-    function setStatus(message, isError) {
+    function setStatus(message, isError, isSuccess) {
       statusEl.textContent = message;
-      statusEl.className = `status${isError ? " error" : ""}`;
+      statusEl.className = `status${isError ? " error" : isSuccess ? " success" : ""}`;
     }
 
     function currentLivePreviewDelay() {
