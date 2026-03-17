@@ -85,11 +85,19 @@ if command -v ldd >/dev/null 2>&1; then
   echo "Bundling shared libraries recursively into $LIBDIR"
   declare -A seen=()
   queue=()
+  direct=()
   while read -r line; do
     so="$(echo "$line" | awk '/=>/ {print $3} !/=>/ {print $1}')"
     [ "$so" = "not" ] && so=""
-    [ -n "$so" ] && queue+=("$so")
+    if [ -n "$so" ]; then
+      queue+=("$so")
+      direct+=("$so")
+    fi
   done < <(ldd ./kms_mosaic)
+
+  for so in "${direct[@]}"; do
+    bundle_one "$so"
+  done
 
   idx=0
   while [ "$idx" -lt "${#queue[@]}" ]; do
@@ -110,6 +118,15 @@ if command -v ldd >/dev/null 2>&1; then
   done
 fi
 
+# Guarantee the two primary non-system runtime libs are present even if the
+# recursive walk misses them due to loader output differences.
+for needed in libmpv.so.1 libvterm.so.0; do
+  if [ ! -e "$LIBDIR/$needed" ] && command -v ldconfig >/dev/null 2>&1; then
+    found="$(ldconfig -p 2>/dev/null | awk -v so="$needed" '$1 == so { print $NF; exit }')"
+    [ -n "$found" ] && bundle_one "$found"
+  fi
+done
+
 # Safety: ensure we never ship toolchain libs that might conflict with system drivers
 rm -f "$LIBDIR"/libstdc++.so.* "$LIBDIR"/libgcc_s.so.* "$LIBDIR"/libc.so.* "$LIBDIR"/libm.so.* \
       "$LIBDIR"/libpthread.so.* "$LIBDIR"/librt.so.* "$LIBDIR"/libdl.so.* || true
@@ -120,6 +137,7 @@ cat >"$PKGROOT/usr/local/bin/kms_mosaic" <<'WRAP'
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LIBDIR="$SCRIPT_DIR/../lib/kms_mosaic"
+export KMS_MOSAIC_REEXEC="$SCRIPT_DIR/kms_mosaic"
 # Prepend our libdir if critical GL libs are missing system-wide; otherwise append (prefer system)
 if ! ldconfig -p 2>/dev/null | grep -qE 'libGLESv2\.so|libEGL\.so'; then
   export LD_LIBRARY_PATH="$LIBDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

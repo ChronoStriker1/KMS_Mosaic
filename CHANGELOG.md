@@ -12,6 +12,12 @@
 - Switched terminal redraw tracking to libvterm damage callbacks.
 - Fixed the containerized package build path so it completes reliably on macOS/Docker.
 - Documented the Unraid restart requirement that stop/start must be sequential.
+- Fixed the packaged Linux wrapper/reexec path so config-watch reloads keep using
+  `/usr/local/bin/kms_mosaic` instead of reexecing the bare binary and dropping
+  packaged shared-library resolution.
+- Hardened the Unraid plugin installer against ownership damage by extracting the
+  payload with `--no-same-owner` and resetting installed plugin paths to
+  `root:root`.
 - Converted internal terminal-pane runtime storage from explicit `tp_a` / `tp_b`
   fields to indexed pane slots as groundwork for variable pane counts.
 - Converted role, focus, fullscreen, and layout-permutation bookkeeping to shared
