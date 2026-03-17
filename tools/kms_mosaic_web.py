@@ -973,8 +973,24 @@ HTML = r"""<!doctype html>
       border: 1px solid var(--line);
       position: relative;
     }
+    .playlist-thumb.quarter-turn {
+      aspect-ratio: 9 / 16;
+    }
+    .playlist-thumb-media {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
     .playlist-thumb img, .playlist-thumb video {
       width: 100%; height: 100%; object-fit: cover; display: block;
+    }
+    .playlist-thumb.quarter-turn img,
+    .playlist-thumb.quarter-turn video {
+      width: auto;
+      height: 100%;
+      min-width: 100%;
     }
     .playlist-thumb video { background: #0e0c0a; }
     .playlist-thumb.empty::after {
@@ -1372,11 +1388,17 @@ HTML = r"""<!doctype html>
 
     function syncMainInspectorMpvOpts() {
       const audioEl = document.getElementById("inspectorMainAudioMode");
+      const muteEl = document.getElementById("inspectorMainMuteMode");
+      const loopEl = document.getElementById("inspectorMainLoopFile");
+      const videoEl = document.getElementById("inspectorMainVideoMode");
       const shadersEl = document.getElementById("inspectorMainShaders");
       const otherEl = document.getElementById("inspectorMainMpvOpts");
-      if (!audioEl || !shadersEl || !otherEl) return;
+      if (!audioEl || !muteEl || !loopEl || !videoEl || !shadersEl || !otherEl) return;
       state.mpv_opts = buildMpvOptsFromParts({
         audioMode: audioEl.value,
+        muteMode: muteEl.value,
+        loopFile: loopEl.value,
+        videoMode: videoEl.value,
         shadersText: shadersEl.value,
         otherText: otherEl.value,
       });
@@ -1515,11 +1537,14 @@ HTML = r"""<!doctype html>
       const value = String(path || "").trim();
       if (!value) return "";
       const src = mediaUrl(value);
+      const total = effectiveDisplayRotationDegrees();
+      const quarterTurn = total === 90 || total === 270;
+      const mediaStyle = total ? ` style="transform: rotate(${total}deg);"` : "";
       if (isLikelyImagePath(value)) {
-        return `<img src="${src}" alt="Preview for queue item ${index + 1}" loading="lazy" />`;
+        return `<div class="playlist-thumb-media${quarterTurn ? " quarter-turn" : ""}"><img src="${src}" alt="Preview for queue item ${index + 1}" loading="lazy"${mediaStyle} /></div>`;
       }
       if (isLikelyVideoPath(value)) {
-        return `<video data-preview-video="${index}" muted playsinline preload="metadata" src="${src}#t=5"></video>`;
+        return `<div class="playlist-thumb-media${quarterTurn ? " quarter-turn" : ""}"><video data-preview-video="${index}" muted playsinline preload="metadata" src="${src}#t=5"${mediaStyle}></video></div>`;
       }
       return "";
     }
@@ -2174,6 +2199,9 @@ HTML = r"""<!doctype html>
           <label>Playlist Path
             <input id="inspectorPlaylist" type="text" value="${(state.playlist || "").replace(/"/g, "&quot;")}" placeholder="/path/to/list.txt" />
           </label>
+          <label>Playlist Extended
+            <input id="inspectorPlaylistExtended" type="text" value="${(state.playlist_extended || "").replace(/"/g, "&quot;")}" placeholder="/path/to/extended-playlist.txt" />
+          </label>
           <label>Playlist FIFO
             <input id="inspectorPlaylistFifo" type="text" value="${(state.playlist_fifo || "").replace(/"/g, "&quot;")}" placeholder="/tmp/mosaic.fifo" />
           </label>
@@ -2181,6 +2209,27 @@ HTML = r"""<!doctype html>
             <select id="inspectorMainAudioMode">
               <option value="">Default</option>
               <option value="no-audio"${mainMpvGroups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
+            </select>
+          </label>
+          <label>Mute
+            <select id="inspectorMainMuteMode">
+              <option value="">Default</option>
+              <option value="yes"${mainMpvGroups.muteMode === "yes" ? " selected" : ""}>Muted</option>
+              <option value="no"${mainMpvGroups.muteMode === "no" ? " selected" : ""}>Unmuted</option>
+            </select>
+          </label>
+          <label>Loop Current File
+            <select id="inspectorMainLoopFile">
+              <option value="">Default</option>
+              <option value="no"${mainMpvGroups.loopFile === "no" ? " selected" : ""}>Off</option>
+              <option value="yes"${mainMpvGroups.loopFile === "yes" ? " selected" : ""}>On</option>
+              <option value="inf"${mainMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
+            </select>
+          </label>
+          <label>Video Output
+            <select id="inspectorMainVideoMode">
+              <option value="">Default</option>
+              <option value="audio-only"${mainMpvGroups.videoMode === "audio-only" ? " selected" : ""}>Audio Only</option>
             </select>
           </label>
           <label>Shader Stack
@@ -2196,18 +2245,33 @@ HTML = r"""<!doctype html>
           document.getElementById("playlist").value = state.playlist;
           renderPlaylistEditor();
         });
+        document.getElementById("inspectorPlaylistExtended").addEventListener("input", (event) => {
+          state.playlist_extended = event.target.value;
+          document.getElementById("playlistExtended").value = state.playlist_extended;
+          renderPlaylistEditor();
+        });
         document.getElementById("inspectorPlaylistFifo").addEventListener("input", (event) => {
           state.playlist_fifo = event.target.value;
           document.getElementById("playlistFifo").value = state.playlist_fifo;
+          renderPlaylistEditor();
         });
-        ["inspectorMainAudioMode", "inspectorMainShaders", "inspectorMainMpvOpts"].forEach((id) => {
+        [
+          "inspectorMainAudioMode",
+          "inspectorMainMuteMode",
+          "inspectorMainLoopFile",
+          "inspectorMainVideoMode",
+          "inspectorMainShaders",
+          "inspectorMainMpvOpts"
+        ].forEach((id) => {
           document.getElementById(id).addEventListener("input", () => {
             syncMainInspectorMpvOpts();
             renderStudioBoard();
+            renderPlaylistEditor();
           });
           document.getElementById(id).addEventListener("change", () => {
             syncMainInspectorMpvOpts();
             renderStudioBoard();
+            renderPlaylistEditor();
           });
         });
         syncMainInspectorMpvOpts();
@@ -2385,6 +2449,8 @@ HTML = r"""<!doctype html>
       renderPlaylistTargets();
       const ctx = queueEditorContext();
       if (!ctx) return;
+      const previewRotation = effectiveDisplayRotationDegrees();
+      const previewQuarterTurn = previewRotation === 90 || previewRotation === 270;
       queueEditorTitleEl.textContent = ctx.title;
       queueEditorNoteEl.textContent = ctx.note;
       addQueueItemBtn.disabled = !ctx.editable;
@@ -2413,7 +2479,7 @@ HTML = r"""<!doctype html>
             <div class="playlist-index">${index + 1}</div>
             <div class="playlist-media-cell">
               <div class="playlist-duration" data-video-duration="${index}">${durationLabel}</div>
-              <div class="playlist-thumb${thumb ? "" : " empty"}">
+              <div class="playlist-thumb${thumb ? "" : " empty"}${previewQuarterTurn ? " quarter-turn" : ""}">
                 ${thumb}
               </div>
             </div>
