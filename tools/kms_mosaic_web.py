@@ -1728,7 +1728,7 @@ HTML = r"""<!doctype html>
       const value = String(path || "").trim();
       if (!value) return "";
       const src = mediaUrl(value);
-      const total = effectiveDisplayRotationDegrees();
+      const total = effectivePlaylistThumbRotationDegrees();
       const quarterTurn = total === 90 || total === 270;
       const mediaStyle = total ? ` style="transform: rotate(${total}deg);"` : "";
       if (isLikelyImagePath(value)) {
@@ -2640,7 +2640,7 @@ HTML = r"""<!doctype html>
       renderPlaylistTargets();
       const ctx = queueEditorContext();
       if (!ctx) return;
-      const previewRotation = effectiveDisplayRotationDegrees();
+      const previewRotation = effectivePlaylistThumbRotationDegrees();
       const previewQuarterTurn = previewRotation === 90 || previewRotation === 270;
       queueEditorTitleEl.textContent = ctx.title;
       queueEditorNoteEl.textContent = ctx.note;
@@ -3065,6 +3065,20 @@ HTML = r"""<!doctype html>
       const rotation = Number(state?.rotation || 0);
       const correction = getPreviewCorrection();
       let total = ((360 - rotation) + correction) % 360;
+      if (total < 0) total += 360;
+      return total;
+    }
+
+    function configuredVideoRotationDegrees() {
+      const raw = parseInt(String(state?.video_rotate || "0"), 10);
+      if (!Number.isFinite(raw)) return 0;
+      let total = raw % 360;
+      if (total < 0) total += 360;
+      return total;
+    }
+
+    function effectivePlaylistThumbRotationDegrees() {
+      let total = (effectiveDisplayRotationDegrees() + configuredVideoRotationDegrees()) % 360;
       if (total < 0) total += 360;
       return total;
     }
