@@ -89,13 +89,36 @@ static void media_apply_global_options(media_ctx *m, const options_t *opt) {
     }
 }
 
-static void media_load_inputs(media_ctx *m, const options_t *opt) {
-    if (opt->playlist_path) {
-        const char *cmd[] = {"loadlist", opt->playlist_path, "replace", NULL};
+static void media_load_inputs_source(media_ctx *m, const options_t *opt, const pane_media_config *pane_media) {
+    const char *playlist_path = pane_media ? pane_media->playlist_path : opt->playlist_path;
+    const char *playlist_ext = pane_media ? pane_media->playlist_ext : opt->playlist_ext;
+    video_item *videos = pane_media ? pane_media->videos : opt->videos;
+    int video_count = pane_media ? pane_media->video_count : opt->video_count;
+
+    if (playlist_path) {
+        const char *cmd[] = {"loadlist", playlist_path, "replace", NULL};
         mpv_command_async(m->mpv, 0, cmd);
-    } else if (opt->video_count > 0) {
-        for (int vi = 0; vi < opt->video_count; ++vi) {
-            const video_item *item = &opt->videos[vi];
+    } else if (playlist_ext) {
+        int loaded = 0;
+        FILE *f = fopen(playlist_ext, "r");
+        if (f) {
+            char *line = NULL;
+            size_t cap = 0;
+            ssize_t n;
+            while ((n = getline(&line, &cap, f)) != -1) {
+                while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = '\0';
+                mpv_append_line(m->mpv, line);
+                loaded++;
+            }
+            free(line);
+            fclose(f);
+        }
+        if (loaded == 0) {
+            fprintf(stderr, "warning: playlist-ext empty or unreadable: %s\n", playlist_ext);
+        }
+    } else if (video_count > 0) {
+        for (int vi = 0; vi < video_count; ++vi) {
+            const video_item *item = &videos[vi];
             if (item->nopts == 0) {
                 const char *mode = (vi == 0 ? "replace" : "append");
                 const char *cmd[] = {"loadfile", item->path, mode, NULL};
@@ -228,14 +251,24 @@ bool media_should_use(const options_t *opt) {
     return false;
 }
 
-bool media_init(media_ctx *m, const options_t *opt, bool debug) {
+bool media_should_use_pane(const pane_media_config *pane_media) {
+    if (!pane_media || !pane_media->enabled) return false;
+    if (pane_media->video_count > 0 || pane_media->playlist_path || pane_media->playlist_ext) return true;
+    return false;
+}
+
+static bool media_init_source(media_ctx *m, const options_t *opt, const pane_media_config *pane_media, bool debug) {
     if (!m || !opt) return false;
     memset(m, 0, sizeof(*m));
     m->wakeup_fd[0] = -1;
     m->wakeup_fd[1] = -1;
     m->playlist_fifo_fd = -1;
 
-    if (!media_should_use(opt)) return false;
+    if (pane_media) {
+        if (!media_should_use_pane(pane_media)) return false;
+    } else if (!media_should_use(opt)) {
+        return false;
+    }
     const char *disable_env = getenv("KMS_MPV_DISABLE");
     if (disable_env && (*disable_env == '1' || *disable_env == 'y' || *disable_env == 'Y')) {
         fprintf(stderr, "Debug: KMS_MPV_DISABLE set; skipping mpv setup.\n");
@@ -278,18 +311,26 @@ bool media_init(media_ctx *m, const options_t *opt, bool debug) {
     mpv_render_context_set_update_callback(m->mpv_gl, media_update_wakeup, m);
     mpv_set_wakeup_callback(m->mpv, media_update_wakeup, m);
 
-    media_load_inputs(m, opt);
+    media_load_inputs_source(m, opt, pane_media);
 
-    if (opt->mpv_out_path) {
+    if (!pane_media && opt->mpv_out_path) {
         m->mpv_out = fopen(opt->mpv_out_path, "w");
         if (!m->mpv_out) perror("mpv-out");
     }
-    if (opt->playlist_fifo) {
+    if (!pane_media && opt->playlist_fifo) {
         mkfifo(opt->playlist_fifo, 0666);
         m->playlist_fifo_fd = open(opt->playlist_fifo, O_RDONLY | O_NONBLOCK);
         if (m->playlist_fifo_fd < 0) perror("playlist-fifo");
     }
     return true;
+}
+
+bool media_init(media_ctx *m, const options_t *opt, bool debug) {
+    return media_init_source(m, opt, NULL, debug);
+}
+
+bool media_init_pane(media_ctx *m, const options_t *opt, const pane_media_config *pane_media, bool debug) {
+    return media_init_source(m, opt, pane_media, debug);
 }
 
 void media_shutdown(media_ctx *m) {

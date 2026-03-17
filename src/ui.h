@@ -34,7 +34,7 @@ bool ui_state_init(ui_state *ui, const options_t *opt, bool use_mpv);
 void ui_state_destroy(ui_state *ui);
 void ui_update_fs_cycle(ui_state *ui, int pane_count, int fs_cycle_sec, double now_sec);
 bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
-                     bool use_mpv, term_pane *const *panes, int pane_count,
+                     bool use_mpv, term_pane *const *panes, mpv_handle *const *pane_mpv, int pane_count,
                      mpv_handle *mpv, bool *running, bool debug);
 
 #endif

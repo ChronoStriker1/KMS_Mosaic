@@ -7,13 +7,27 @@
 
 #include "term_pane.h"
 
-static int runtime_pane_poll_index(int pane_index) {
-    return RUNTIME_POLL_PANE_BASE + pane_index;
+int runtime_pane_poll_index(int pane_index) {
+    return RUNTIME_POLL_BASE_COUNT + pane_index;
+}
+
+int runtime_pane_media_poll_index(const options_t *opt, int pane_index) {
+    return RUNTIME_POLL_BASE_COUNT + opt->pane_count + pane_index;
+}
+
+bool runtime_pane_ready(const runtime_state *rt, int pane_index) {
+    int poll_index = runtime_pane_poll_index(pane_index);
+    return rt->pfds[poll_index].revents & (POLLIN | POLLERR | POLLHUP);
+}
+
+bool runtime_pane_media_ready(const runtime_state *rt, const options_t *opt, int pane_index) {
+    int poll_index = runtime_pane_media_poll_index(opt, pane_index);
+    return rt->pfds[poll_index].revents & (POLLIN | POLLERR | POLLHUP);
 }
 
 bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const media_ctx *m, int drm_fd) {
     memset(rt, 0, sizeof(*rt));
-    rt->nfds = opt->no_panes ? 4 : (RUNTIME_POLL_PANE_BASE + opt->pane_count);
+    rt->nfds = RUNTIME_POLL_BASE_COUNT + opt->pane_count + opt->pane_count;
     rt->pfds = calloc((size_t)rt->nfds, sizeof(*rt->pfds));
     if (!rt->pfds) return false;
     rt->running = true;
@@ -40,15 +54,19 @@ bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const m
     rt->pfds[RUNTIME_POLL_PLAYLIST_FIFO].events = POLLIN;
     for (int i = 0; i < opt->pane_count; ++i) {
         rt->pfds[runtime_pane_poll_index(i)].events = POLLIN | POLLERR | POLLHUP;
+        rt->pfds[runtime_pane_media_poll_index(opt, i)].events = POLLIN | POLLERR | POLLHUP;
     }
     fcntl(0, F_SETFL, O_NONBLOCK);
     return true;
 }
 
-void runtime_update_pane_fds(runtime_state *rt, const options_t *opt, const pane_runtime *panes) {
-    if (opt->no_panes) return;
-    for (int i = 0; i < panes->count; ++i) {
-        rt->pfds[runtime_pane_poll_index(i)].fd = term_pane_get_fd(panes_get_term(panes, i));
+void runtime_update_pane_fds(runtime_state *rt, const options_t *opt, const pane_runtime *panes,
+                             const media_ctx *pane_media) {
+    for (int i = 0; i < opt->pane_count; ++i) {
+        rt->pfds[runtime_pane_poll_index(i)].fd =
+            opt->no_panes ? -1 : term_pane_get_fd(panes_get_term(panes, i));
+        rt->pfds[runtime_pane_media_poll_index(opt, i)].fd =
+            (pane_media && pane_media[i].mpv) ? pane_media[i].wakeup_fd[0] : -1;
     }
 }
 

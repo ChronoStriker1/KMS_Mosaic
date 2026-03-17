@@ -90,12 +90,45 @@ Examples:
 ./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22
 ./kms_mosaic --pane-count 4 --pane-c "htop" --pane-d "watch sensors"
 ./kms_mosaic --pane-count 6 --pane 5 "watch -n1 sensors" --pane 6 "iftop"
+./kms_mosaic --pane-media 2 --pane-video 2 /mnt/user/video/clip.mp4
+./kms_mosaic --pane-media 3 --pane-playlist 3 /boot/config/pane3.m3u
 ./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle
 ./kms_mosaic --playlist-fifo /tmp/mosaic.fifo --mpv-out /tmp/mpv.log
 ./kms_mosaic --config /path/profile.conf
 ./kms_mosaic --save-config-default
 ./kms_mosaic --layout overlay /path/to/video.mp4
 ```
+
+Web UI
+------
+
+There is also a companion web control surface:
+
+```sh
+python3 tools/kms_mosaic_web.py --config /boot/config/kms_mosaic.conf --host 0.0.0.0 --port 8787
+```
+
+That service:
+
+- reads the active `kms_mosaic.conf`
+- streams live compositor frames into the browser preview over a framed binary HTTP stream
+- exposes a pane-oriented "Layout Studio" that edits the saved `--split-tree` when present
+- lets you add/remove panes, switch panes between terminal and mpv, and edit the selected pane's media queue from the page
+- lets you split the selected pane vertically or horizontally from the studio itself
+- treats the old layout presets as starter suggestions instead of the main editing surface
+- moves scene rules, raw config, and raw mpv option text under Advanced
+- exposes common global mpv controls such as audio mode and shader stack as structured fields
+- shows inline playlist previews in the queue editor using browser-decoded media frames served from the Unraid host
+- writes config changes back atomically
+- relies on the compositor's file-watch reload path to apply changes live
+
+It is intentionally separate from the KMS compositor process so web serving
+does not destabilize scanout or input handling.
+
+Current limitation:
+
+- The web UI now edits split trees, but the studio is still a button-driven split editor rather than a full drag-handle tree designer.
+- The browser preview is materially better than the older snapshot-reload path, but it is still fed by compositor snapshots rather than a true encoded display mirror.
 
 Defaults:
 
@@ -191,5 +224,14 @@ Roadmap
 High-value remaining work:
 
 - Add more intentional layouts for higher pane counts instead of relying mostly on split-and-tile behavior
+- Add direct drag/resize editing to the split-tree studio instead of only button-driven splits
+- Add richer per-pane playlist management in the web UI, including drag-and-drop reorder
 - Keep tightening terminal performance under heavy Unicode and scroll loads
 - Simplify pane naming/help text so higher-count configurations read more naturally in the UI and saved configs
+
+Requested follow-up UI changes
+------------------------------
+
+- Improve the live preview transport further so it behaves closer to a true 1:1 mirror
+- Add drag handles for split movement and resizing directly in the Layout Studio
+- Expand the structured mpv controls beyond audio/shader fields so fewer users need the raw advanced text

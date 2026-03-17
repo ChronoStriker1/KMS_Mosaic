@@ -18,7 +18,9 @@ typedef struct {
 } media_ctx;
 
 bool media_should_use(const options_t *opt);
+bool media_should_use_pane(const pane_media_config *pane_media);
 bool media_init(media_ctx *m, const options_t *opt, bool debug);
+bool media_init_pane(media_ctx *m, const options_t *opt, const pane_media_config *pane_media, bool debug);
 void media_handle_wakeup(media_ctx *m, bool debug, int *mpv_needs_render);
 void media_handle_playlist_fifo(media_ctx *m, const options_t *opt, char *pfifo_buf, int *pfifo_len);
 void media_shutdown(media_ctx *m);

@@ -122,11 +122,24 @@ static bool options_ensure_role_capacity(options_t *opt, int role_count) {
 static bool options_ensure_pane_capacity(options_t *opt, int pane_count) {
     if (opt->pane_cap >= pane_count) return true;
     int old_cap = opt->pane_cap;
-    const char **next = realloc(opt->pane_cmds, (size_t)pane_count * sizeof(*next));
+    const char **next = malloc((size_t)pane_count * sizeof(*next));
     if (!next) return false;
+    pane_media_config *next_media = malloc((size_t)pane_count * sizeof(*next_media));
+    if (!next_media) {
+        free(next);
+        return false;
+    }
+    if (opt->pane_cmds) memcpy(next, opt->pane_cmds, (size_t)old_cap * sizeof(*next));
+    if (opt->pane_media) memcpy(next_media, opt->pane_media, (size_t)old_cap * sizeof(*next_media));
+    free(opt->pane_cmds);
+    free(opt->pane_media);
     opt->pane_cmds = next;
+    opt->pane_media = next_media;
     opt->pane_cap = pane_count;
-    for (int i = old_cap; i < pane_count; ++i) opt->pane_cmds[i] = NULL;
+    for (int i = old_cap; i < pane_count; ++i) {
+        opt->pane_cmds[i] = NULL;
+        opt->pane_media[i] = (pane_media_config){0};
+    }
     return true;
 }
 
@@ -148,6 +161,22 @@ void push_video(options_t *opt, const char *path) {
     memset(vi, 0, sizeof(*vi));
     vi->path = path;
     opt->video_path = path;
+}
+
+void push_pane_video(pane_media_config *pane_media, const char *path) {
+    if (!pane_media) return;
+    if (pane_media->video_count == pane_media->video_cap) {
+        int ncap = pane_media->video_cap ? pane_media->video_cap * 2 : 8;
+        video_item *next = realloc(pane_media->videos, (size_t)ncap * sizeof(video_item));
+        if (!next) return;
+        pane_media->videos = next;
+        memset(pane_media->videos + pane_media->video_cap, 0,
+               (size_t)(ncap - pane_media->video_cap) * sizeof(video_item));
+        pane_media->video_cap = ncap;
+    }
+    video_item *vi = &pane_media->videos[pane_media->video_count++];
+    memset(vi, 0, sizeof(*vi));
+    vi->path = path;
 }
 
 void push_video_opt(video_item *vi, const char *kv) {
@@ -178,7 +207,7 @@ void parse_playlist_ext(options_t *opt, const char *file) {
     size_t cap = 0;
     ssize_t n;
     while ((n = getline(&line, &cap, f)) != -1) {
-        if (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[n - 1] = '\0';
+        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = '\0';
         char *p = (char *)trim(line);
         if (*p == '#' || *p == '\0') continue;
         char *bar = strchr(p, '|');
@@ -352,6 +381,12 @@ static void print_usage(const char *exe) {
         "  --pane-c \"CMD\"           Command for Pane C.\n"
         "  --pane-d \"CMD\"           Command for Pane D.\n"
         "  --pane N \"CMD\"           Command for pane index N (1-based).\n"
+        "  --pane-media N           Make pane index N an mpv/media pane.\n"
+        "  --pane-playlist N FILE   Playlist for media pane N.\n"
+        "  --pane-playlist-extended N FILE\n"
+        "                           Extended playlist for media pane N.\n"
+        "  --pane-video N PATH      Add a video to media pane N (repeatable).\n"
+        "  --split-tree SPEC        Explicit split-tree layout override.\n"
         "  --layout M              stack | row | 2x1 | 1x2 | 2over1 | 1over2 | overlay\n"
         "  --roles ORDER           Slot roles order; legacy CAB or numeric strings like 01234.\n"
         "  --fs-cycle-sec SEC      Fullscreen cycle interval for 'c' key.\n\n"
@@ -508,6 +543,60 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
                 opt->pane_cmds[pane_index] = pane_cmd;
             }
         }
+        else if (!strcmp(argv[i], "--pane-media") && i + 1 < argc) {
+            int pane_index = atoi(argv[++i]) - 1;
+            if (pane_index >= 0) {
+                if (pane_index + 1 > opt->pane_count) opt->pane_count = pane_index + 1;
+                if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                    !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                    fprintf(stderr, "Failed to allocate pane storage.\n");
+                    return 1;
+                }
+                opt->pane_media[pane_index].enabled = true;
+            }
+        }
+        else if (!strcmp(argv[i], "--pane-playlist") && i + 2 < argc) {
+            int pane_index = atoi(argv[++i]) - 1;
+            const char *playlist_path = argv[++i];
+            if (pane_index >= 0) {
+                if (pane_index + 1 > opt->pane_count) opt->pane_count = pane_index + 1;
+                if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                    !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                    fprintf(stderr, "Failed to allocate pane storage.\n");
+                    return 1;
+                }
+                opt->pane_media[pane_index].enabled = true;
+                opt->pane_media[pane_index].playlist_path = playlist_path;
+            }
+        }
+        else if (!strcmp(argv[i], "--pane-playlist-extended") && i + 2 < argc) {
+            int pane_index = atoi(argv[++i]) - 1;
+            const char *playlist_ext = argv[++i];
+            if (pane_index >= 0) {
+                if (pane_index + 1 > opt->pane_count) opt->pane_count = pane_index + 1;
+                if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                    !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                    fprintf(stderr, "Failed to allocate pane storage.\n");
+                    return 1;
+                }
+                opt->pane_media[pane_index].enabled = true;
+                opt->pane_media[pane_index].playlist_ext = playlist_ext;
+            }
+        }
+        else if (!strcmp(argv[i], "--pane-video") && i + 2 < argc) {
+            int pane_index = atoi(argv[++i]) - 1;
+            const char *video_path = argv[++i];
+            if (pane_index >= 0) {
+                if (pane_index + 1 > opt->pane_count) opt->pane_count = pane_index + 1;
+                if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                    !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                    fprintf(stderr, "Failed to allocate pane storage.\n");
+                    return 1;
+                }
+                opt->pane_media[pane_index].enabled = true;
+                push_pane_video(&opt->pane_media[pane_index], video_path);
+            }
+        }
         else if (!strcmp(argv[i], "--list-connectors")) opt->list_connectors = true;
         else if (!strcmp(argv[i], "--no-video")) opt->no_video = true;
         else if (!strcmp(argv[i], "--no-panes")) opt->no_panes = true;
@@ -515,6 +604,7 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
         else if (!strcmp(argv[i], "--gl-test")) opt->gl_test = true;
         else if (!strcmp(argv[i], "--no-config")) opt->no_config = true;
         else if (!strcmp(argv[i], "--smooth")) opt->smooth = true;
+        else if (!strcmp(argv[i], "--split-tree") && i + 1 < argc) opt->split_tree_spec = argv[++i];
         else if (!strcmp(argv[i], "--layout") && i + 1 < argc) {
             int mode = parse_layout_mode(argv[++i]);
             if (mode >= 0) opt->layout_mode = mode;
@@ -602,6 +692,7 @@ void save_config(const options_t *opt, const char *path) {
     if (opt->font_px) fprintf(f, "--font-size %d\n", opt->font_px);
     const char *lay_str = layout_mode_name(opt->layout_mode);
     fprintf(f, "--layout %s\n", lay_str);
+    if (opt->split_tree_spec && *opt->split_tree_spec) fprintf(f, "--split-tree '%s'\n", opt->split_tree_spec);
     if (opt->video_frac_pct) fprintf(f, "--video-frac %d\n", opt->video_frac_pct);
     else if (opt->right_frac_pct) fprintf(f, "--right-frac %d\n", opt->right_frac_pct);
     if (opt->pane_split_pct) fprintf(f, "--pane-split %d\n", opt->pane_split_pct);
@@ -620,6 +711,14 @@ void save_config(const options_t *opt, const char *path) {
         else if (i == 2) fprintf(f, "--pane-c '%s'\n", opt->pane_cmds[i]);
         else if (i == 3) fprintf(f, "--pane-d '%s'\n", opt->pane_cmds[i]);
         else fprintf(f, "--pane %d '%s'\n", i + 1, opt->pane_cmds[i]);
+    }
+    for (int i = 0; i < opt->pane_count; ++i) {
+        const pane_media_config *pm = &opt->pane_media[i];
+        if (!pm->enabled) continue;
+        fprintf(f, "--pane-media %d\n", i + 1);
+        if (pm->playlist_path) fprintf(f, "--pane-playlist %d '%s'\n", i + 1, pm->playlist_path);
+        if (pm->playlist_ext) fprintf(f, "--pane-playlist-extended %d '%s'\n", i + 1, pm->playlist_ext);
+        for (int vi = 0; vi < pm->video_count; ++vi) fprintf(f, "--pane-video %d '%s'\n", i + 1, pm->videos[vi].path);
     }
     if (opt->no_video) fprintf(f, "--no-video\n");
     if (opt->loop_file) fprintf(f, "--loop-file\n");
@@ -641,8 +740,13 @@ void save_config(const options_t *opt, const char *path) {
 void options_destroy(options_t *opt) {
     if (!opt) return;
     free(opt->pane_cmds);
+    if (opt->pane_media) {
+        for (int i = 0; i < opt->pane_cap; ++i) free(opt->pane_media[i].videos);
+    }
+    free(opt->pane_media);
     free(opt->roles);
     opt->pane_cmds = NULL;
+    opt->pane_media = NULL;
     opt->roles = NULL;
     opt->pane_cap = 0;
     opt->role_cap = 0;

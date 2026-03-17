@@ -12,16 +12,26 @@
 #include "term_pane.h"
 
 void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, media_ctx *m,
+                  media_ctx *pane_media,
                   drm_ctx *d, gbm_ctx *g, egl_ctx *e, pane_runtime *panes, ui_state *ui,
                   const pane_layout *slot_layouts,
                   const pane_layout *pane_layouts, int pane_count,
                   int logical_w,
                   int logical_h, int fb_w, int fb_h, int screen_w, int screen_h,
                   const int *pane_font_px, bool use_mpv,
-                  const bool *pane_ready, bool debug) {
+                  const bool *pane_ready, bool debug,
+                  const char *snapshot_path, bool *snapshot_written) {
     const pane_layout *lay_video = &slot_layouts[KMS_MOSAIC_SLOT_VIDEO];
+    bool has_pane_media = false;
+    for (int i = 0; i < pane_count; ++i) {
+        if (pane_media && opt->pane_media && opt->pane_media[i].enabled && pane_media[i].mpv_gl) {
+            has_pane_media = true;
+            break;
+        }
+    }
+    if (snapshot_written) *snapshot_written = false;
 
-    if (rt->direct_mode && (rt->direct_test_only || !use_mpv)) {
+    if (!has_pane_media && rt->direct_mode && (rt->direct_test_only || !use_mpv)) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_BLEND);
@@ -50,12 +60,12 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
     glViewport(0, 0, logical_w, logical_h);
     render_gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
 
-    if (use_mpv && rt->mpv_needs_render && (!ui->fullscreen || ui->fs_pane == 0)) {
+    if (use_mpv && (!ui->fullscreen || ui->fs_pane == 0)) {
         int vw = lay_video->w;
         int vh = lay_video->h;
         if (vw < 1) vw = 1;
         if (vh < 1) vh = 1;
-        if (rt->direct_mode) {
+        if (!has_pane_media && rt->direct_mode) {
             if (debug) fprintf(stderr, "Render: mpv direct to default FB...\n");
             if (!rt->direct_via_fbo) {
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -180,6 +190,38 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         panes_sync_layout(panes, pane_layouts, pane_count, pane_font_px);
         if (ui->layout_reinit_countdown > 0) ui->layout_reinit_countdown--;
         for (int i = 0; i < pane_count; ++i) {
+            if (pane_media && opt->pane_media && opt->pane_media[i].enabled && pane_media[i].mpv_gl) {
+                if (!ui->fullscreen || ui->fs_pane == i + 1) {
+                    int vw = pane_layouts[i].w;
+                    int vh = pane_layouts[i].h;
+                    if (vw < 1) vw = 1;
+                    if (vh < 1) vh = 1;
+                    render_gl_ensure_video_rt(rg, vw, vh);
+                    glBindFramebuffer(GL_FRAMEBUFFER, rg->vid_fbo);
+                    glDisable(GL_SCISSOR_TEST);
+                    glDisable(GL_BLEND);
+                    glDisable(GL_DITHER);
+                    glDisable(GL_CULL_FACE);
+                    glDisable(GL_DEPTH_TEST);
+                    glViewport(0, 0, vw, vh);
+                    render_gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
+                    int flip_y = 0;
+                    mpv_opengl_fbo fbo = {.fbo = (int)rg->vid_fbo, .w = vw, .h = vh, .internal_format = 0};
+                    mpv_render_param params[] = {
+                        {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
+                        {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+                        {0}
+                    };
+                    mpv_render_context_render(pane_media[i].mpv_gl, params);
+
+                    glBindFramebuffer(GL_FRAMEBUFFER, rg->rt_fbo);
+                    render_gl_reset_state_2d();
+                    glViewport(0, 0, logical_w, logical_h);
+                    render_gl_draw_tex_to_rt(rg, rg->vid_tex,
+                                             pane_layouts[i].x, pane_layouts[i].y, vw, vh, logical_w, logical_h);
+                }
+                continue;
+            }
             term_pane *tp = panes_get_term(panes, i);
             if (!tp) continue;
             if (pane_ready[i]) (void)term_pane_poll(tp);
@@ -264,6 +306,9 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         glViewport(0, 0, fb_w, fb_h);
         render_gl_clear_color(0.f, 0.f, 0.f, 1.f);
         render_gl_blit_rt_to_screen(rg, opt->rotation);
+    }
+    if (snapshot_path && snapshot_written) {
+        *snapshot_written = render_gl_write_current_bmp(snapshot_path, fb_w, fb_h);
     }
 
     eglSwapBuffers(e->dpy, e->surf);

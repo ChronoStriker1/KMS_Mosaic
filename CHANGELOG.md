@@ -31,3 +31,29 @@
   including generic `--pane N "CMD"` configuration support.
 - Updated the README and project guidance docs to reflect the current modular
   architecture, build path, and remaining roadmap.
+- Added a companion web control surface that can stream live compositor frames,
+  edit the full raw config, and provide pane-oriented controls for the current
+  preset layout model.
+- Added pane-studio controls in the web UI for selecting panes, adding/removing
+  terminal panes, and reordering the current global video queue with explicit
+  groundwork for the future split-tree editor.
+- Added pane-local mpv support so non-primary panes can now be configured as
+  media panes with their own playlist or video inputs.
+- Wired pane-local mpv wakeups into the compositor poll loop and disabled the
+  direct-render shortcut when pane-local media is active, avoiding multi-pane
+  media regressions.
+- Added compositor-side `--split-tree` layout parsing so explicit split trees
+  can override the legacy preset-layout geometry.
+- Updated the web queue editor so it follows the currently selected pane,
+  allowing pane-local mpv queues to be edited directly instead of only through
+  raw text fields.
+- Added inline playlist previews in the web queue editor by serving media files
+  through the web app and letting the browser extract still frames for list
+  items.
+- Reworked the web UI around a split-tree-first Layout Studio, with live split
+  buttons, rotation-aware studio geometry, layout suggestions, Advanced
+  demotion for legacy scene/raw fields, and structured global mpv controls for
+  audio mode and shader stacks.
+- Switched the web preview transport to a framed binary live stream and made
+  compositor snapshot writes atomic so the browser stops seeing partially
+  written frames.

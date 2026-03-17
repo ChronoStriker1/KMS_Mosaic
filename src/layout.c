@@ -1,7 +1,17 @@
 #include "layout.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+
+typedef struct split_tree_node {
+    bool leaf;
+    int role;
+    bool split_rows;
+    int pct;
+    struct split_tree_node *first;
+    struct split_tree_node *second;
+} split_tree_node;
 
 static int clamp_split_pct(int split_pct) {
     if (split_pct <= 0) split_pct = 50;
@@ -55,6 +65,123 @@ static void split_horizontal(pane_layout area, int count, pane_layout *out) {
     }
 }
 
+static void split_tree_destroy(split_tree_node *node) {
+    if (!node) return;
+    split_tree_destroy(node->first);
+    split_tree_destroy(node->second);
+    free(node);
+}
+
+static void split_tree_skip_ws(const char **sp) {
+    while (sp && *sp && **sp && isspace((unsigned char)**sp)) (*sp)++;
+}
+
+static bool split_tree_parse_int(const char **sp, int *out) {
+    char *end = NULL;
+    long value;
+    split_tree_skip_ws(sp);
+    if (!sp || !*sp || !**sp) return false;
+    value = strtol(*sp, &end, 10);
+    if (end == *sp) return false;
+    *sp = end;
+    *out = (int)value;
+    return true;
+}
+
+static split_tree_node *split_tree_parse_node(const char **sp) {
+    split_tree_node *node = NULL;
+    int value = 0;
+
+    split_tree_skip_ws(sp);
+    if (!sp || !*sp || !**sp) return NULL;
+
+    if (isdigit((unsigned char)**sp)) {
+        if (!split_tree_parse_int(sp, &value)) return NULL;
+        node = calloc(1, sizeof(*node));
+        if (!node) return NULL;
+        node->leaf = true;
+        node->role = value;
+        return node;
+    }
+
+    if (!strncmp(*sp, "row", 3)) {
+        *sp += 3;
+        node = calloc(1, sizeof(*node));
+        if (!node) return NULL;
+        node->split_rows = true;
+    } else if (!strncmp(*sp, "col", 3)) {
+        *sp += 3;
+        node = calloc(1, sizeof(*node));
+        if (!node) return NULL;
+        node->split_rows = false;
+    } else {
+        return NULL;
+    }
+
+    split_tree_skip_ws(sp);
+    if (**sp != ':') goto fail;
+    (*sp)++;
+    if (!split_tree_parse_int(sp, &value)) goto fail;
+    node->pct = clamp_split_pct(value);
+
+    split_tree_skip_ws(sp);
+    if (**sp != '(') goto fail;
+    (*sp)++;
+    node->first = split_tree_parse_node(sp);
+    if (!node->first) goto fail;
+    split_tree_skip_ws(sp);
+    if (**sp != ',') goto fail;
+    (*sp)++;
+    node->second = split_tree_parse_node(sp);
+    if (!node->second) goto fail;
+    split_tree_skip_ws(sp);
+    if (**sp != ')') goto fail;
+    (*sp)++;
+    return node;
+
+fail:
+    split_tree_destroy(node);
+    return NULL;
+}
+
+static bool split_tree_parse(const char *spec, split_tree_node **out_node) {
+    const char *p = spec;
+    split_tree_node *node = NULL;
+    if (!spec || !*spec || !out_node) return false;
+    node = split_tree_parse_node(&p);
+    if (!node) return false;
+    split_tree_skip_ws(&p);
+    if (*p != '\0') {
+        split_tree_destroy(node);
+        return false;
+    }
+    *out_node = node;
+    return true;
+}
+
+static void split_tree_apply(const split_tree_node *node, pane_layout area,
+                             pane_layout *role_layouts, int role_count) {
+    if (!node) return;
+    if (node->leaf) {
+        if (node->role >= 0 && node->role < role_count) role_layouts[node->role] = area;
+        return;
+    }
+
+    if (node->split_rows) {
+        int first_h = area.h * clamp_split_pct(node->pct) / 100;
+        pane_layout first = { .x = area.x, .y = area.y, .w = area.w, .h = first_h };
+        pane_layout second = { .x = area.x, .y = area.y + first_h, .w = area.w, .h = area.h - first_h };
+        split_tree_apply(node->first, first, role_layouts, role_count);
+        split_tree_apply(node->second, second, role_layouts, role_count);
+    } else {
+        int first_w = area.w * clamp_split_pct(node->pct) / 100;
+        pane_layout first = { .x = area.x, .y = area.y, .w = first_w, .h = area.h };
+        pane_layout second = { .x = area.x + first_w, .y = area.y, .w = area.w - first_w, .h = area.h };
+        split_tree_apply(node->first, first, role_layouts, role_count);
+        split_tree_apply(node->second, second, role_layouts, role_count);
+    }
+}
+
 bool mosaic_layout_init(mosaic_layout *layout, int role_count) {
     memset(layout, 0, sizeof(*layout));
     layout->role_layouts = calloc((size_t)role_count, sizeof(*layout->role_layouts));
@@ -71,6 +198,7 @@ void mosaic_layout_destroy(mosaic_layout *layout) {
 
 void compute_mosaic_layout(int screen_w, int screen_h, int layout_mode,
                            int right_frac_pct, int pane_split_pct, int pane_count,
+                           const char *split_tree_spec,
                            rotation_t rotation, const int *perm,
                            bool overlay_swap, bool fullscreen, int fs_pane,
                            mosaic_layout *out) {
@@ -82,6 +210,20 @@ void compute_mosaic_layout(int screen_w, int screen_h, int layout_mode,
     int col_pct = clamp_col_pct(right_frac_pct);
     int role_count = KMS_MOSAIC_SLOT_PANE_BASE + pane_count;
     pane_layout s0 = {0}, s1 = {0}, s2 = {0};
+
+    if (split_tree_spec && *split_tree_spec) {
+        split_tree_node *tree = NULL;
+        if (split_tree_parse(split_tree_spec, &tree)) {
+            split_tree_apply(tree, (pane_layout){ .x = 0, .y = 0, .w = screen_w, .h = screen_h },
+                             out->role_layouts, role_count);
+            if (fullscreen) {
+                pane_layout full = { .x = 0, .y = 0, .w = screen_w, .h = screen_h };
+                out->role_layouts[fs_pane >= 0 && fs_pane < role_count ? fs_pane : KMS_MOSAIC_SLOT_VIDEO] = full;
+            }
+            split_tree_destroy(tree);
+            return;
+        }
+    }
 
     if (pane_count > 2) {
         pane_layout *slots = calloc((size_t)role_count, sizeof(*slots));
