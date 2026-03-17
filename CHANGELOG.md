@@ -54,9 +54,14 @@
 - Expanded the web pane inspector with structured pane-local mpv controls for
   common overrides like audio, mute, loop-file, video disable, and shader
   stacks, while keeping raw per-pane mpv options for everything else.
+- Brought the main video pane inspector up to the same structured mpv control
+  surface as extra mpv panes, including playlist-extended, mute, loop-file,
+  and video output mode controls.
 - Added inline playlist previews in the web queue editor by serving media files
   through the web app and letting the browser extract still frames for list
   items.
+- Rotated playlist preview thumbnails to match the effective mpv pane
+  orientation instead of always showing upright media frames.
 - Reworked the web UI around a split-tree-first Layout Studio, with live split
   buttons, rotation-aware studio geometry, layout suggestions, Advanced
   demotion for legacy scene/raw fields, and structured global mpv controls for
