@@ -183,7 +183,7 @@ void ui_update_fs_cycle(ui_state *ui, int pane_count, int fs_cycle_sec, double n
 }
 
 bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
-                     bool use_mpv, term_pane *const *panes, int pane_count,
+                     bool use_mpv, term_pane *const *panes, mpv_handle *const *pane_mpv, int pane_count,
                      mpv_handle *mpv, bool *running, bool debug) {
     for (ssize_t i = 0; i < n; i++) {
         unsigned char ch = (unsigned char)buf[i];
@@ -299,6 +299,9 @@ bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
     if (!consumed && !ui->ui_control) {
         term_pane *focused = ui_focus_term(panes, pane_count, ui->focus);
         if (focused) term_pane_send_input(focused, buf, (size_t)n);
+        else if (ui_is_pane_focus(ui->focus, pane_count) && pane_mpv && pane_mpv[ui->focus - 1]) {
+            ui_mpv_send_keys(pane_mpv[ui->focus - 1], buf, n);
+        }
         else if (ui->focus == UI_SLOT_VIDEO && mpv) ui_mpv_send_keys(mpv, buf, n);
     }
 

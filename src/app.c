@@ -54,6 +54,15 @@ typedef struct {
     bool exists;
 } config_watch;
 
+typedef struct {
+    const char *request_path;
+    const char *output_path;
+    struct timespec last_mtime;
+    off_t last_size;
+    bool exists;
+    bool pending;
+} snapshot_watch;
+
 static bool app_scene_init(app_scene *scene, int pane_count) {
     memset(scene, 0, sizeof(*scene));
     scene->pane_count = pane_count;
@@ -108,6 +117,32 @@ static void app_config_watch_init(config_watch *watch, const options_t *opt) {
         watch->last_mtime = st.st_mtim;
         watch->last_size = st.st_size;
     }
+}
+
+static void app_snapshot_watch_init(snapshot_watch *watch) {
+    memset(watch, 0, sizeof(*watch));
+    watch->request_path = "/tmp/kms_mosaic_snapshot.request";
+    watch->output_path = "/tmp/kms_mosaic_snapshot.bmp";
+}
+
+static void app_snapshot_watch_poll(snapshot_watch *watch) {
+    if (!watch || !watch->request_path) return;
+    struct stat st;
+    bool exists = stat(watch->request_path, &st) == 0;
+    if (!exists) {
+        watch->exists = false;
+        memset(&watch->last_mtime, 0, sizeof(watch->last_mtime));
+        watch->last_size = 0;
+        return;
+    }
+    bool changed = !watch->exists ||
+                   watch->last_size != st.st_size ||
+                   watch->last_mtime.tv_sec != st.st_mtim.tv_sec ||
+                   watch->last_mtime.tv_nsec != st.st_mtim.tv_nsec;
+    watch->exists = true;
+    watch->last_mtime = st.st_mtim;
+    watch->last_size = st.st_size;
+    if (changed) watch->pending = true;
 }
 
 static bool app_config_watch_poll(config_watch *watch) {
@@ -219,7 +254,8 @@ static void app_init_scene(const options_t *opt, bool use_mpv, pane_runtime *pan
     mosaic_layout initial_layout = {0};
     if (!mosaic_layout_init(&initial_layout, KMS_MOSAIC_SLOT_PANE_BASE + scene->pane_count)) app_die("mosaic_layout_init");
     compute_mosaic_layout(scene->screen_w, scene->screen_h, opt->layout_mode, opt->right_frac_pct,
-                          opt->pane_split_pct, scene->pane_count, opt->rotation, ui->perm, ui->overlay_swap,
+                          opt->pane_split_pct, scene->pane_count, opt->split_tree_spec,
+                          opt->rotation, ui->perm, ui->overlay_swap,
                           ui->fullscreen, ui->fs_pane, &initial_layout);
     for (int i = 0; i < KMS_MOSAIC_SLOT_PANE_BASE + scene->pane_count; ++i) scene->slot_layouts[i] = initial_layout.role_layouts[i];
     for (int i = 0; i < scene->pane_count; ++i) scene->pane_layouts[i] = scene->slot_layouts[KMS_MOSAIC_SLOT_PANE_BASE + i];
@@ -229,24 +265,32 @@ static void app_init_scene(const options_t *opt, bool use_mpv, pane_runtime *pan
     if (!opt->no_panes) panes_create(panes, opt, scene->pane_layouts, debug);
 }
 
-static bool app_poll_runtime(runtime_state *rt, const options_t *opt, const pane_runtime *panes) {
-    runtime_update_pane_fds(rt, opt, panes);
+static bool app_poll_runtime_with_media(runtime_state *rt, const options_t *opt,
+                                        const pane_runtime *panes, const media_ctx *pane_media) {
+    runtime_update_pane_fds(rt, opt, panes, pane_media);
     return poll(rt->pfds, rt->nfds, 10) >= 0 || errno == EINTR;
 }
 
 static bool app_handle_input_ready(runtime_state *rt, ui_state *ui, options_t *opt, bool use_mpv,
-                                   pane_runtime *panes, media_ctx *m, bool debug) {
+                                   pane_runtime *panes, media_ctx *m, media_ctx *pane_media, bool debug) {
     if (!(rt->pfds[RUNTIME_POLL_STDIN].revents & POLLIN)) return true;
     char buf[64];
     ssize_t n = read(0, buf, sizeof(buf));
     if (n > 0) {
         term_pane **pane_terms = calloc((size_t)opt->pane_count, sizeof(*pane_terms));
-        if (!pane_terms) return rt->running;
+        mpv_handle **pane_mpv = calloc((size_t)opt->pane_count, sizeof(*pane_mpv));
+        if (!pane_terms || !pane_mpv) {
+            free(pane_terms);
+            free(pane_mpv);
+            return rt->running;
+        }
         for (int i = 0; i < opt->pane_count; ++i) pane_terms[i] = panes_get_term(panes, i);
+        for (int i = 0; i < opt->pane_count; ++i) pane_mpv[i] = pane_media && pane_media[i].mpv ? pane_media[i].mpv : NULL;
         (void)ui_handle_input(ui, opt, buf, n, use_mpv,
-                              pane_terms, opt->pane_count,
+                              pane_terms, pane_mpv, opt->pane_count,
                               m->mpv, &rt->running, debug);
         free(pane_terms);
+        free(pane_mpv);
     }
     return rt->running;
 }
@@ -254,20 +298,25 @@ static bool app_handle_input_ready(runtime_state *rt, ui_state *ui, options_t *o
 static void app_collect_pane_ready(const options_t *opt, const runtime_state *rt,
                                    bool *pane_ready) {
     for (int i = 0; i < opt->pane_count; ++i) {
-        int poll_index = RUNTIME_POLL_PANE_BASE + i;
-        pane_ready[i] = !opt->no_panes &&
-                        (rt->pfds[poll_index].revents & (POLLIN | POLLERR | POLLHUP));
+        pane_ready[i] = !opt->no_panes && runtime_pane_ready(rt, i);
     }
 }
 
 static void app_handle_runtime_events(runtime_state *rt, ui_state *ui, const options_t *opt, media_ctx *m,
-                                      drm_ctx *d, char *pfifo_buf, int *pfifo_len, bool use_mpv, bool debug) {
+                                      media_ctx *pane_media, drm_ctx *d, char *pfifo_buf, int *pfifo_len,
+                                      bool use_mpv, bool debug) {
     struct timespec ts_now;
     clock_gettime(CLOCK_MONOTONIC, &ts_now);
     ui_update_fs_cycle(ui, opt->pane_count, opt->fs_cycle_sec, ts_now.tv_sec + ts_now.tv_nsec / 1e9);
 
     if (use_mpv && (rt->pfds[RUNTIME_POLL_MPV_WAKEUP].revents & POLLIN)) {
         media_handle_wakeup(m, debug, &rt->mpv_needs_render);
+    }
+    for (int i = 0; i < opt->pane_count; ++i) {
+        if (pane_media && pane_media[i].mpv && runtime_pane_media_ready(rt, opt, i)) {
+            int pane_needs_render = 0;
+            media_handle_wakeup(&pane_media[i], debug, &pane_needs_render);
+        }
     }
     if (m->playlist_fifo_fd >= 0 && (rt->pfds[RUNTIME_POLL_PLAYLIST_FIFO].revents & POLLIN)) {
         media_handle_playlist_fifo(m, opt, pfifo_buf, pfifo_len);
@@ -319,7 +368,8 @@ static void app_update_layout(const options_t *opt, ui_state *ui, pane_runtime *
     mosaic_layout active_layout = {0};
     if (!mosaic_layout_init(&active_layout, KMS_MOSAIC_SLOT_PANE_BASE + scene->pane_count)) app_die("mosaic_layout_init");
     compute_mosaic_layout(scene->screen_w, scene->screen_h, opt->layout_mode, opt->right_frac_pct,
-                          opt->pane_split_pct, scene->pane_count, opt->rotation, ui->perm, ui->overlay_swap,
+                          opt->pane_split_pct, scene->pane_count, opt->split_tree_spec,
+                          opt->rotation, ui->perm, ui->overlay_swap,
                           ui->fullscreen, ui->fs_pane, &active_layout);
     for (int i = 0; i < KMS_MOSAIC_SLOT_PANE_BASE + scene->pane_count; ++i) scene->slot_layouts[i] = active_layout.role_layouts[i];
     for (int i = 0; i < scene->pane_count; ++i) scene->pane_layouts[i] = scene->slot_layouts[KMS_MOSAIC_SLOT_PANE_BASE + i];
@@ -343,8 +393,12 @@ static void app_update_layout(const options_t *opt, ui_state *ui, pane_runtime *
     panes_compute_font_sizes(opt, scene->pane_layouts, scene->pane_count, scene->pane_font_px);
 }
 
-static void app_cleanup(const options_t *opt, media_ctx *m, render_gl_ctx *rg, drm_ctx *d,
+static void app_cleanup(const options_t *opt, media_ctx *m, media_ctx *pane_media, render_gl_ctx *rg, drm_ctx *d,
                         gbm_ctx *g, egl_ctx *e, pane_runtime *panes) {
+    if (pane_media) {
+        for (int i = 0; i < opt->pane_count; ++i) media_shutdown(&pane_media[i]);
+        free(pane_media);
+    }
     media_shutdown(m);
     render_gl_destroy(rg);
     if (d->orig_crtc) {
@@ -381,6 +435,7 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
 
     pane_runtime panes = {0};
     media_ctx m = {0};
+    media_ctx *pane_media = NULL;
     drm_ctx d = {0};
     gbm_ctx g = {0};
     egl_ctx e = {0};
@@ -389,6 +444,7 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     ui_state ui = {0};
     runtime_state rt = {0};
     config_watch cfg_watch = {0};
+    snapshot_watch snap_watch = {0};
     char pfifo_buf[1024];
     int pfifo_len = 0;
     int rc = 0;
@@ -410,6 +466,13 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     display_egl_init(&e, &g, *debug);
 
     bool use_mpv = media_init(&m, &opt, *debug);
+    pane_media = calloc((size_t)opt.pane_count, sizeof(*pane_media));
+    if (!pane_media) app_die("calloc pane_media");
+    for (int i = 0; i < opt.pane_count; ++i) {
+        if (opt.pane_media && opt.pane_media[i].enabled) {
+            (void)media_init_pane(&pane_media[i], &opt, &opt.pane_media[i], *debug);
+        }
+    }
     if (opt.diag) {
         rc = app_print_diag();
         goto cleanup;
@@ -437,6 +500,7 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
 
     if (!runtime_init(&rt, &opt, use_mpv, &m, d.fd)) app_die("runtime_init");
     app_config_watch_init(&cfg_watch, &opt);
+    app_snapshot_watch_init(&snap_watch);
 
     while (rt.running) {
         if (*stop_flag) {
@@ -444,24 +508,28 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
             break;
         }
         if (*debug && rt.frame < 5) fprintf(stderr, "Loop frame %d start\n", rt.frame);
-        if (!app_poll_runtime(&rt, &opt, &panes)) app_die("poll");
-        if (!app_handle_input_ready(&rt, &ui, &opt, use_mpv, &panes, &m, *debug)) break;
-        app_handle_runtime_events(&rt, &ui, &opt, &m, &d, pfifo_buf, &pfifo_len, use_mpv, *debug);
+        if (!app_poll_runtime_with_media(&rt, &opt, &panes, pane_media)) app_die("poll");
+        if (!app_handle_input_ready(&rt, &ui, &opt, use_mpv, &panes, &m, pane_media, *debug)) break;
+        app_handle_runtime_events(&rt, &ui, &opt, &m, pane_media, &d, pfifo_buf, &pfifo_len, use_mpv, *debug);
         if (app_config_watch_poll(&cfg_watch)) {
             fprintf(stderr, "Config file changed: %s\n", cfg_watch.path);
             rc = APP_RUN_RELOAD;
             break;
         }
+        app_snapshot_watch_poll(&snap_watch);
 
         bool *pane_ready = calloc((size_t)scene.pane_count, sizeof(*pane_ready));
         if (!pane_ready) app_die("calloc pane_ready");
         app_collect_pane_ready(&opt, &rt, pane_ready);
         app_update_layout(&opt, &ui, &panes, &scene, *debug);
         if (!eglMakeCurrent(e.dpy, e.surf, e.surf, e.ctx)) app_die("eglMakeCurrent loop");
-        frame_render(&opt, &rt, &rg, &m, &d, &g, &e, &panes, &ui,
+        bool snapshot_written = false;
+        frame_render(&opt, &rt, &rg, &m, pane_media, &d, &g, &e, &panes, &ui,
                      scene.slot_layouts, scene.pane_layouts, scene.pane_count, scene.logical_w, scene.logical_h,
                      scene.fb_w, scene.fb_h, scene.screen_w, scene.screen_h, scene.pane_font_px,
-                     use_mpv, pane_ready, *debug);
+                     use_mpv, pane_ready, *debug,
+                     snap_watch.pending ? snap_watch.output_path : NULL, &snapshot_written);
+        if (snapshot_written) snap_watch.pending = false;
         free(pane_ready);
     }
 
@@ -469,7 +537,7 @@ cleanup:
     ui_state_destroy(&ui);
     runtime_destroy(&rt);
     app_scene_destroy(&scene);
-    app_cleanup(&opt, &m, &rg, &d, &g, &e, &panes);
+    app_cleanup(&opt, &m, pane_media, &rg, &d, &g, &e, &panes);
     options_destroy(&opt);
     return rc;
 }

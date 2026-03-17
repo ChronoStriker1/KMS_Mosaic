@@ -82,6 +82,11 @@ void panes_create(pane_runtime *panes, const options_t *opt, const pane_layout *
 
     panes_compute_font_sizes(opt, layouts, panes->count, font_sizes);
     for (int i = 0; i < panes->count; ++i) {
+        if (opt->pane_media && opt->pane_media[i].enabled) {
+            panes->last_font_px[i] = font_sizes[i];
+            panes->prev[i] = layouts[i];
+            continue;
+        }
         int cell_w = 8;
         int cell_h = 16;
         term_measure_cell(font_sizes[i], &cell_w, &cell_h);

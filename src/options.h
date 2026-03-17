@@ -25,6 +25,15 @@ typedef struct {
 } video_item;
 
 typedef struct {
+    bool enabled;
+    video_item *videos;
+    int video_count;
+    int video_cap;
+    const char *playlist_path;
+    const char *playlist_ext;
+} pane_media_config;
+
+typedef struct {
     const char *video_path;
     video_item *videos;
     int video_count;
@@ -39,7 +48,9 @@ typedef struct {
     int right_frac_pct;
     int pane_split_pct;
     int video_frac_pct;
+    const char *split_tree_spec;
     const char **pane_cmds;
+    pane_media_config *pane_media;
     int pane_cap;
     const char *pane_a_cmd;
     const char *pane_b_cmd;
@@ -84,6 +95,7 @@ int parse_layout_mode(const char *s);
 const char *layout_mode_name(int mode);
 bool parse_roles_string(const char *s, int *roles, int role_count);
 void push_video(options_t *opt, const char *path);
+void push_pane_video(pane_media_config *pane_media, const char *path);
 void push_video_opt(video_item *vi, const char *kv);
 const char *trim(char *s);
 void parse_playlist_ext(options_t *opt, const char *file);
