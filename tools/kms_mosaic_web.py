@@ -56,6 +56,9 @@ def empty_state() -> dict[str, Any]:
         "pane_playlists": ["", ""],
         "pane_playlist_extended": ["", ""],
         "pane_playlist_fifos": ["", ""],
+        "pane_mpv_outs": ["", ""],
+        "pane_video_rotate": ["", ""],
+        "pane_panscan": ["", ""],
         "pane_video_paths": [[], []],
         "pane_mpv_opts": [[], []],
         "video_paths": [],
@@ -90,6 +93,9 @@ def ensure_panes(state: dict[str, Any]) -> None:
     pane_playlists = list(state.get("pane_playlists", []))
     pane_playlist_extended = list(state.get("pane_playlist_extended", []))
     pane_playlist_fifos = list(state.get("pane_playlist_fifos", []))
+    pane_mpv_outs = list(state.get("pane_mpv_outs", []))
+    pane_video_rotate = list(state.get("pane_video_rotate", []))
+    pane_panscan = list(state.get("pane_panscan", []))
     pane_video_paths = [list(paths) for paths in state.get("pane_video_paths", [])]
     pane_mpv_opts = [list(opts) for opts in state.get("pane_mpv_opts", [])]
     while len(pane_commands) < pane_count:
@@ -102,6 +108,12 @@ def ensure_panes(state: dict[str, Any]) -> None:
         pane_playlist_extended.append("")
     while len(pane_playlist_fifos) < pane_count:
         pane_playlist_fifos.append("")
+    while len(pane_mpv_outs) < pane_count:
+        pane_mpv_outs.append("")
+    while len(pane_video_rotate) < pane_count:
+        pane_video_rotate.append("")
+    while len(pane_panscan) < pane_count:
+        pane_panscan.append("")
     while len(pane_video_paths) < pane_count:
         pane_video_paths.append([])
     while len(pane_mpv_opts) < pane_count:
@@ -111,6 +123,9 @@ def ensure_panes(state: dict[str, Any]) -> None:
     state["pane_playlists"] = pane_playlists[:pane_count]
     state["pane_playlist_extended"] = pane_playlist_extended[:pane_count]
     state["pane_playlist_fifos"] = pane_playlist_fifos[:pane_count]
+    state["pane_mpv_outs"] = pane_mpv_outs[:pane_count]
+    state["pane_video_rotate"] = pane_video_rotate[:pane_count]
+    state["pane_panscan"] = pane_panscan[:pane_count]
     state["pane_video_paths"] = pane_video_paths[:pane_count]
     state["pane_mpv_opts"] = pane_mpv_opts[:pane_count]
 
@@ -217,6 +232,27 @@ def parse_config_text(text: str) -> dict[str, Any]:
                 ensure_panes(state)
                 state["pane_types"][pane_index] = "mpv"
                 state["pane_playlist_fifos"][pane_index] = tokens[i + 2]
+                i += 3
+            elif tok == "--pane-mpv-out" and i + 2 < len(tokens):
+                pane_index = max(0, int(tokens[i + 1]) - 1)
+                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
+                ensure_panes(state)
+                state["pane_types"][pane_index] = "mpv"
+                state["pane_mpv_outs"][pane_index] = tokens[i + 2]
+                i += 3
+            elif tok == "--pane-video-rotate" and i + 2 < len(tokens):
+                pane_index = max(0, int(tokens[i + 1]) - 1)
+                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
+                ensure_panes(state)
+                state["pane_types"][pane_index] = "mpv"
+                state["pane_video_rotate"][pane_index] = tokens[i + 2]
+                i += 3
+            elif tok == "--pane-panscan" and i + 2 < len(tokens):
+                pane_index = max(0, int(tokens[i + 1]) - 1)
+                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
+                ensure_panes(state)
+                state["pane_types"][pane_index] = "mpv"
+                state["pane_panscan"][pane_index] = tokens[i + 2]
                 i += 3
             elif tok == "--pane-video" and i + 2 < len(tokens):
                 pane_index = max(0, int(tokens[i + 1]) - 1)
@@ -347,6 +383,9 @@ def serialize_config(state: dict[str, Any]) -> str:
     pane_playlists = list(state.get("pane_playlists", []))
     pane_playlist_extended = list(state.get("pane_playlist_extended", []))
     pane_playlist_fifos = list(state.get("pane_playlist_fifos", []))
+    pane_mpv_outs = list(state.get("pane_mpv_outs", []))
+    pane_video_rotate = list(state.get("pane_video_rotate", []))
+    pane_panscan = list(state.get("pane_panscan", []))
     pane_video_paths = [list(paths) for paths in state.get("pane_video_paths", [])]
     pane_mpv_opts = [list(opts) for opts in state.get("pane_mpv_opts", [])]
     for idx, cmd in enumerate(pane_commands):
@@ -356,6 +395,9 @@ def serialize_config(state: dict[str, Any]) -> str:
             playlist = pane_playlists[idx] if idx < len(pane_playlists) else ""
             playlist_ext = pane_playlist_extended[idx] if idx < len(pane_playlist_extended) else ""
             playlist_fifo = pane_playlist_fifos[idx] if idx < len(pane_playlist_fifos) else ""
+            pane_mpv_out = pane_mpv_outs[idx] if idx < len(pane_mpv_outs) else ""
+            pane_rotate = pane_video_rotate[idx] if idx < len(pane_video_rotate) else ""
+            pane_panscan_value = pane_panscan[idx] if idx < len(pane_panscan) else ""
             videos = pane_video_paths[idx] if idx < len(pane_video_paths) else []
             mpv_opts = pane_mpv_opts[idx] if idx < len(pane_mpv_opts) else []
             if playlist:
@@ -364,6 +406,12 @@ def serialize_config(state: dict[str, Any]) -> str:
                 lines.append(f"--pane-playlist-extended {idx + 1} {shlex.quote(str(playlist_ext))}")
             if playlist_fifo:
                 lines.append(f"--pane-playlist-fifo {idx + 1} {shlex.quote(str(playlist_fifo))}")
+            if pane_mpv_out:
+                lines.append(f"--pane-mpv-out {idx + 1} {shlex.quote(str(pane_mpv_out))}")
+            if str(pane_rotate).strip():
+                lines.append(f"--pane-video-rotate {idx + 1} {str(pane_rotate).strip()}")
+            if str(pane_panscan_value).strip():
+                lines.append(f"--pane-panscan {idx + 1} {shlex.quote(str(pane_panscan_value))}")
             for video_path in videos:
                 if str(video_path).strip():
                     lines.append(f"--pane-video {idx + 1} {shlex.quote(str(video_path))}")
@@ -1603,20 +1651,32 @@ HTML = r"""<!doctype html>
       const groups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
       mediaEditor.innerHTML = `
         <div class="grid">
+          <label>Connector
+            <input id="mediaPaneConnector" type="text" value="${(state.connector || "").replace(/"/g, "&quot;")}" placeholder="HDMI-A-1" disabled />
+          </label>
           <label>Playlist
             <input id="mediaPanePlaylist" type="text" value="${(state.pane_playlists?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="/path/to/list.txt" />
           </label>
           <label>Playlist Extended
             <input id="mediaPanePlaylistExtended" type="text" value="${(state.pane_playlist_extended?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="/path/to/extended-playlist.txt" />
           </label>
-          <label>Playlist FIFO
-            <input id="mediaPanePlaylistFifo" type="text" value="${(state.pane_playlist_fifos?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="/tmp/pane-playlist.fifo" />
-          </label>
-          <label>Audio Output
-            <select id="mediaPaneAudioMode">
-              <option value="">Default</option>
-              <option value="no-audio"${groups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
-            </select>
+            <label>Playlist FIFO
+              <input id="mediaPanePlaylistFifo" type="text" value="${(state.pane_playlist_fifos?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="/tmp/pane-playlist.fifo" />
+            </label>
+            <label>mpv Out
+              <input id="mediaPaneMpvOut" type="text" value="${(state.pane_mpv_outs?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="/tmp/pane-mpv.log" />
+            </label>
+            <label>Panscan
+              <input id="mediaPanePanscan" type="text" value="${(state.pane_panscan?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="1" />
+            </label>
+            <label>Video Rotate
+              <input id="mediaPaneVideoRotate" type="text" value="${(state.pane_video_rotate?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="270" />
+            </label>
+            <label>Audio Output
+              <select id="mediaPaneAudioMode">
+                <option value="">Default</option>
+                <option value="no-audio"${groups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
+              </select>
           </label>
           <label>Mute
             <select id="mediaPaneMuteMode">
@@ -1646,12 +1706,15 @@ HTML = r"""<!doctype html>
             <textarea id="mediaPaneOtherOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${groups.other.join("\n")}</textarea>
           </label>
         </div>
-        <p class="muted-note">This target controls ${roleTitle(playlistTargetRole)}. Connector, panscan, output log, and video-rotate are still main-pane-only fields.</p>
+        <p class="muted-note">This target controls ${roleTitle(playlistTargetRole)} with the same media field layout as ${roleTitle(0)}. The connector stays visible here for parity, but it remains a global-only field on ${roleTitle(0)}.</p>
       `;
       const syncPane = () => {
         state.pane_playlists[paneIndex] = document.getElementById("mediaPanePlaylist").value.trim();
         state.pane_playlist_extended[paneIndex] = document.getElementById("mediaPanePlaylistExtended").value.trim();
         state.pane_playlist_fifos[paneIndex] = document.getElementById("mediaPanePlaylistFifo").value.trim();
+        state.pane_mpv_outs[paneIndex] = document.getElementById("mediaPaneMpvOut").value.trim();
+        state.pane_panscan[paneIndex] = document.getElementById("mediaPanePanscan").value.trim();
+        state.pane_video_rotate[paneIndex] = document.getElementById("mediaPaneVideoRotate").value.trim();
         state.pane_mpv_opts[paneIndex] = buildMpvOptsFromParts({
           audioMode: document.getElementById("mediaPaneAudioMode").value,
           muteMode: document.getElementById("mediaPaneMuteMode").value,
@@ -1663,6 +1726,7 @@ HTML = r"""<!doctype html>
       };
       [
         "mediaPanePlaylist","mediaPanePlaylistExtended","mediaPanePlaylistFifo",
+        "mediaPaneMpvOut","mediaPanePanscan","mediaPaneVideoRotate",
         "mediaPaneAudioMode","mediaPaneMuteMode","mediaPaneLoopFile",
         "mediaPaneVideoMode","mediaPaneShaders","mediaPaneOtherOpts"
       ].forEach((id) => {

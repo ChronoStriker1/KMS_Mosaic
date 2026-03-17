@@ -32,6 +32,9 @@ typedef struct {
     const char *playlist_path;
     const char *playlist_ext;
     const char *playlist_fifo;
+    const char *mpv_out_path;
+    const char *panscan;
+    int video_rotate;
     const char **mpv_opts;
     int n_mpv_opts;
     int cap_mpv_opts;

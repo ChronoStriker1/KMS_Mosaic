@@ -60,6 +60,10 @@
 - Reworked the web Media section into the same explicit pane-targeted model as
   the playlist editor, so each mpv pane can be edited there instead of the
   section always pointing at the main pane.
+- Added pane-local media parity fields for mpv panes, including per-pane
+  playlist-extended, fifo, mpv-out log path, panscan, and video rotation, and
+  brought the web Media section to the same field layout across Pane C and the
+  extra mpv panes.
 - Added inline playlist previews in the web queue editor by serving media files
   through the web app and letting the browser extract still frames for list
   items.

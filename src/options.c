@@ -138,7 +138,7 @@ static bool options_ensure_pane_capacity(options_t *opt, int pane_count) {
     opt->pane_cap = pane_count;
     for (int i = old_cap; i < pane_count; ++i) {
         opt->pane_cmds[i] = NULL;
-        opt->pane_media[i] = (pane_media_config){0};
+        opt->pane_media[i] = (pane_media_config){ .video_rotate = -1 };
     }
     return true;
 }
@@ -401,6 +401,9 @@ static void print_usage(const char *exe) {
         "                           FIFO to append playlist entries into media pane N.\n"
         "  --pane-video N PATH      Add a video to media pane N (repeatable).\n"
         "  --pane-mpv-opt N K=V     Per-pane mpv option for media pane N (repeatable).\n"
+        "  --pane-mpv-out N FILE   Write pane-local mpv logs/events to FILE or FIFO.\n"
+        "  --pane-video-rotate N D Per-pane pass-through to mpv video-rotate.\n"
+        "  --pane-panscan N VAL    Per-pane pass-through to mpv panscan.\n"
         "  --split-tree SPEC        Explicit split-tree layout override.\n"
         "  --layout M              stack | row | 2x1 | 1x2 | 2over1 | 1over2 | overlay\n"
         "  --roles ORDER           Slot roles order; legacy CAB or numeric strings like 01234.\n"
@@ -640,6 +643,48 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
                 push_pane_mpv_opt(&opt->pane_media[pane_index], kv);
             }
         }
+        else if (!strcmp(argv[i], "--pane-mpv-out") && i + 2 < argc) {
+            int pane_index = atoi(argv[++i]) - 1;
+            const char *mpv_out_path = argv[++i];
+            if (pane_index >= 0) {
+                if (pane_index + 1 > opt->pane_count) opt->pane_count = pane_index + 1;
+                if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                    !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                    fprintf(stderr, "Failed to allocate pane storage.\n");
+                    return 1;
+                }
+                opt->pane_media[pane_index].enabled = true;
+                opt->pane_media[pane_index].mpv_out_path = mpv_out_path;
+            }
+        }
+        else if (!strcmp(argv[i], "--pane-video-rotate") && i + 2 < argc) {
+            int pane_index = atoi(argv[++i]) - 1;
+            int video_rotate = atoi(argv[++i]);
+            if (pane_index >= 0) {
+                if (pane_index + 1 > opt->pane_count) opt->pane_count = pane_index + 1;
+                if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                    !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                    fprintf(stderr, "Failed to allocate pane storage.\n");
+                    return 1;
+                }
+                opt->pane_media[pane_index].enabled = true;
+                opt->pane_media[pane_index].video_rotate = video_rotate;
+            }
+        }
+        else if (!strcmp(argv[i], "--pane-panscan") && i + 2 < argc) {
+            int pane_index = atoi(argv[++i]) - 1;
+            const char *panscan = argv[++i];
+            if (pane_index >= 0) {
+                if (pane_index + 1 > opt->pane_count) opt->pane_count = pane_index + 1;
+                if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                    !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                    fprintf(stderr, "Failed to allocate pane storage.\n");
+                    return 1;
+                }
+                opt->pane_media[pane_index].enabled = true;
+                opt->pane_media[pane_index].panscan = panscan;
+            }
+        }
         else if (!strcmp(argv[i], "--list-connectors")) opt->list_connectors = true;
         else if (!strcmp(argv[i], "--no-video")) opt->no_video = true;
         else if (!strcmp(argv[i], "--no-panes")) opt->no_panes = true;
@@ -762,6 +807,9 @@ void save_config(const options_t *opt, const char *path) {
         if (pm->playlist_path) fprintf(f, "--pane-playlist %d '%s'\n", i + 1, pm->playlist_path);
         if (pm->playlist_ext) fprintf(f, "--pane-playlist-extended %d '%s'\n", i + 1, pm->playlist_ext);
         if (pm->playlist_fifo) fprintf(f, "--pane-playlist-fifo %d '%s'\n", i + 1, pm->playlist_fifo);
+        if (pm->mpv_out_path) fprintf(f, "--pane-mpv-out %d '%s'\n", i + 1, pm->mpv_out_path);
+        if (pm->video_rotate >= 0) fprintf(f, "--pane-video-rotate %d %d\n", i + 1, pm->video_rotate);
+        if (pm->panscan) fprintf(f, "--pane-panscan %d '%s'\n", i + 1, pm->panscan);
         for (int vi = 0; vi < pm->video_count; ++vi) fprintf(f, "--pane-video %d '%s'\n", i + 1, pm->videos[vi].path);
         for (int oi = 0; oi < pm->n_mpv_opts; ++oi) fprintf(f, "--pane-mpv-opt %d '%s'\n", i + 1, pm->mpv_opts[oi]);
     }
