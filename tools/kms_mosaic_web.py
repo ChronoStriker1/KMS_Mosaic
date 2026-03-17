@@ -1450,10 +1450,13 @@ HTML = r"""<!doctype html>
     }
 
     function buildMpvOptsFromControls() {
+      const audioEl = document.getElementById("mpvAudioMode");
+      const shadersEl = document.getElementById("mpvShaders");
+      const otherEl = document.getElementById("mpvOpts");
       return buildMpvOptsFromParts({
-        audioMode: document.getElementById("mpvAudioMode").value,
-        shadersText: document.getElementById("mpvShaders").value,
-        otherText: document.getElementById("mpvOpts").value,
+        audioMode: audioEl ? audioEl.value : "",
+        shadersText: shadersEl ? shadersEl.value : "",
+        otherText: otherEl ? otherEl.value : "",
       });
     }
 
@@ -1473,9 +1476,12 @@ HTML = r"""<!doctype html>
         shadersText: shadersEl.value,
         otherText: otherEl.value,
       });
-      document.getElementById("mpvAudioMode").value = audioEl.value;
-      document.getElementById("mpvShaders").value = shadersEl.value;
-      document.getElementById("mpvOpts").value = otherEl.value;
+      const mpvAudioEl = document.getElementById("mpvAudioMode");
+      const mpvShadersEl = document.getElementById("mpvShaders");
+      const mpvOptsEl = document.getElementById("mpvOpts");
+      if (mpvAudioEl) mpvAudioEl.value = audioEl.value;
+      if (mpvShadersEl) mpvShadersEl.value = shadersEl.value;
+      if (mpvOptsEl) mpvOptsEl.value = otherEl.value;
     }
 
     function syncInspectorPaneMpvOpts(paneIndex) {
@@ -3242,7 +3248,8 @@ HTML = r"""<!doctype html>
 
     function syncFormToState() {
       const previousPaneCount = Array.isArray(state?.pane_commands) ? state.pane_commands.length : 0;
-      state.connector = document.getElementById("connector").value.trim();
+      const connectorEl = document.getElementById("connector");
+      if (connectorEl) state.connector = connectorEl.value.trim();
       state.mode = document.getElementById("mode").value.trim();
       state.rotation = readInt("rotation", 0);
       state.font_size = readInt("fontSize", 18);
