@@ -1,0 +1,174 @@
+#!/bin/bash
+set -euo pipefail
+
+PLUGIN="kms.mosaic"
+CFG="/boot/config/plugins/${PLUGIN}/${PLUGIN}.cfg"
+KMS_PIDFILE="/var/run/kms_mosaic.pid"
+WEB_PIDFILE="/var/run/kms_mosaic_web.pid"
+KMS_LOG="/tmp/start_kms_mosaic.log"
+WEB_LOG="/tmp/kms_mosaic_web.log"
+
+SERVICE="enable"
+WEB_SERVICE="enable"
+WEB_PORT="8788"
+CONFIG_PATH="/boot/config/kms_mosaic.conf"
+
+[ -r "$CFG" ] && source "$CFG"
+
+KMS_WRAPPER="/usr/local/bin/kms_mosaic"
+WEB_WRAPPER="/usr/local/bin/kms_mosaic_web"
+
+web_pid_from_system() {
+  pgrep -fo "/usr/local/bin/kms_mosaic_web.py --config ${CONFIG_PATH} --port ${WEB_PORT}" 2>/dev/null || true
+}
+
+is_kms_running() {
+  pgrep -x kms_mosaic.bin >/dev/null 2>&1
+}
+
+is_web_running() {
+  local pid=""
+  if [ -f "$WEB_PIDFILE" ]; then
+    pid="$(cat "$WEB_PIDFILE" 2>/dev/null || true)"
+  fi
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  pid="$(web_pid_from_system)"
+  [ -n "$pid" ] || return 1
+  write_pidfile "$WEB_PIDFILE" "$pid"
+  kill -0 "$pid" 2>/dev/null
+}
+
+write_pidfile() {
+  local file="$1"
+  local pid="$2"
+  printf '%s\n' "$pid" > "$file"
+}
+
+cleanup_pidfile() {
+  local file="$1"
+  [ -f "$file" ] && rm -f "$file"
+}
+
+post_start_ddc() {
+(
+  sleep 5
+  python3 - <<'PY'
+import fcntl
+import os
+import time
+
+I2C_SLAVE_FORCE = 0x0706
+BUS = "/dev/i2c-3"
+ADDR = 0x37
+
+def checksum(payload):
+    value = 0x6E
+    for byte in payload:
+        value ^= byte
+    return value
+
+def send(payload):
+    message = bytes(payload + [checksum(payload)])
+    fd = os.open(BUS, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, I2C_SLAVE_FORCE, ADDR)
+        os.write(fd, message)
+    finally:
+        os.close(fd)
+
+for payload in (
+    [0x51, 0x84, 0x03, 0x14, 0x00, 0x06],
+    [0x51, 0x84, 0x03, 0x10, 0x00, 0x64],
+    [0x51, 0x84, 0x03, 0x12, 0x00, 0x64],
+    [0x51, 0x81, 0x0C],
+):
+    send(payload)
+    time.sleep(0.2)
+PY
+) >/dev/null 2>&1 &
+}
+
+start_kms() {
+  [ "${SERVICE}" = "enable" ] || return 0
+  is_kms_running && return 0
+  nohup "$KMS_WRAPPER" --config "$CONFIG_PATH" >"$KMS_LOG" 2>&1 &
+  write_pidfile "$KMS_PIDFILE" "$!"
+  post_start_ddc
+}
+
+stop_kms() {
+  if is_kms_running; then
+    pkill -x kms_mosaic.bin || true
+    sleep 5
+  fi
+  cleanup_pidfile "$KMS_PIDFILE"
+}
+
+start_web() {
+  [ "${WEB_SERVICE}" = "enable" ] || return 0
+  is_web_running && return 0
+  nohup "$WEB_WRAPPER" --config "$CONFIG_PATH" --port "$WEB_PORT" >"$WEB_LOG" 2>&1 &
+  sleep 1
+  local pid="$!"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    pid="$(web_pid_from_system)"
+  fi
+  [ -n "$pid" ] && write_pidfile "$WEB_PIDFILE" "$pid"
+}
+
+stop_web() {
+  local pid=""
+  if is_web_running; then
+    pid="$(cat "$WEB_PIDFILE" 2>/dev/null || true)"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    sleep 2
+  fi
+  pid="$(web_pid_from_system)"
+  [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+  cleanup_pidfile "$WEB_PIDFILE"
+}
+
+status_json() {
+  local kms_pid=""
+  local web_pid=""
+  local kms_running="false"
+  local web_running="false"
+  if is_kms_running; then
+    kms_pid="$(pgrep -x kms_mosaic.bin | head -n1)"
+    kms_running="true"
+  fi
+  if is_web_running; then
+    web_pid="$(cat "$WEB_PIDFILE" 2>/dev/null || true)"
+    web_running="true"
+  fi
+  cat <<EOF
+{"service":"${SERVICE}","web_service":"${WEB_SERVICE}","web_port":"${WEB_PORT}","config_path":"${CONFIG_PATH}","kms_running":${kms_running},"web_running":${web_running},"kms_pid":"${kms_pid}","web_pid":"${web_pid}"}
+EOF
+}
+
+cmd="${1:-status}"
+case "$cmd" in
+  start)
+    start_kms
+    start_web
+    ;;
+  stop)
+    stop_web
+    stop_kms
+    ;;
+  restart)
+    stop_web
+    stop_kms
+    start_kms
+    start_web
+    ;;
+  status)
+    status_json
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart|status}" >&2
+    exit 1
+    ;;
+esac

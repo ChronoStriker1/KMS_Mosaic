@@ -84,3 +84,8 @@
 - Switched the web preview transport to a framed binary live stream and made
   compositor snapshot writes atomic so the browser stops seeing partially
   written frames.
+- Reworked the web preview into a WebRTC-driven live mirror path and removed
+  the older browser-side fallback preview code.
+- Added an Unraid plugin payload, service scripts, and an Unraid management page
+  so `kms_mosaic` and the web UI can be started, stopped, and configured from
+  the Unraid interface instead of the legacy userscript path.

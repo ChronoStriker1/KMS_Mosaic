@@ -231,7 +231,7 @@ void render_gl_draw_tex_to_rt(render_gl_ctx *ctx, GLuint tex, int x, int y, int 
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-bool render_gl_write_current_bmp(const char *path, int w, int h) {
+bool render_gl_write_current_rgba_frame(const char *path, int w, int h) {
     if (!path || w <= 0 || h <= 0) return false;
 
     size_t pixel_bytes = (size_t)w * (size_t)h * 4u;
@@ -258,46 +258,17 @@ bool render_gl_write_current_bmp(const char *path, int w, int h) {
         free(rgba);
         return false;
     }
-
-    int row_stride = w * 3;
-    int row_pad = (4 - (row_stride % 4)) % 4;
-    int image_size = (row_stride + row_pad) * h;
-    int file_size = 14 + 40 + image_size;
-    unsigned char file_header[14] = {
-        'B', 'M',
-        (unsigned char)(file_size), (unsigned char)(file_size >> 8),
-        (unsigned char)(file_size >> 16), (unsigned char)(file_size >> 24),
-        0, 0, 0, 0,
-        54, 0, 0, 0
-    };
-    unsigned char info_header[40] = {
-        40, 0, 0, 0,
+    unsigned char header[8] = {
         (unsigned char)(w), (unsigned char)(w >> 8), (unsigned char)(w >> 16), (unsigned char)(w >> 24),
         (unsigned char)(h), (unsigned char)(h >> 8), (unsigned char)(h >> 16), (unsigned char)(h >> 24),
-        1, 0, 24, 0
     };
-
-    bool ok = fwrite(file_header, 1, sizeof(file_header), f) == sizeof(file_header) &&
-              fwrite(info_header, 1, sizeof(info_header), f) == sizeof(info_header);
-    unsigned char pad[3] = {0, 0, 0};
-    if (ok) {
-        for (int y = 0; y < h && ok; ++y) {
-            const unsigned char *src = rgba + (size_t)y * (size_t)w * 4u;
-            for (int x = 0; x < w; ++x) {
-                unsigned char bgr[3] = {src[x * 4 + 2], src[x * 4 + 1], src[x * 4 + 0]};
-                if (fwrite(bgr, 1, sizeof(bgr), f) != sizeof(bgr)) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok && row_pad > 0 && fwrite(pad, 1, (size_t)row_pad, f) != (size_t)row_pad) ok = false;
-        }
-    }
+    bool ok = fwrite(header, 1, sizeof(header), f) == sizeof(header) &&
+              fwrite(rgba, 1, pixel_bytes, f) == pixel_bytes;
 
     if (fclose(f) != 0) ok = false;
     if (ok && rename(tmp_path, path) != 0) ok = false;
     if (!ok) {
-        fprintf(stderr, "snapshot write failed for %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "preview frame write failed for %s: %s\n", path, strerror(errno));
         remove(tmp_path);
     }
     free(rgba);

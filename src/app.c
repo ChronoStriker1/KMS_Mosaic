@@ -48,19 +48,27 @@ typedef struct {
 typedef struct {
     const char *path;
     struct timespec last_mtime;
+    struct timespec candidate_mtime;
     off_t last_size;
+    off_t candidate_size;
     double next_check_sec;
     bool enabled;
     bool exists;
+    bool candidate_exists;
+    bool candidate_pending;
 } config_watch;
 
 typedef struct {
     const char *request_path;
+    const char *lease_path;
     const char *output_path;
-    struct timespec last_mtime;
-    off_t last_size;
-    bool exists;
-    bool pending;
+    struct timespec request_last_mtime;
+    off_t request_last_size;
+    bool request_exists;
+    bool request_pending;
+    int stream_interval_ms;
+    double stream_next_frame_sec;
+    bool stream_active;
 } snapshot_watch;
 
 static bool app_scene_init(app_scene *scene, int pane_count) {
@@ -108,6 +116,10 @@ static void app_config_watch_init(config_watch *watch, const options_t *opt) {
     memset(watch, 0, sizeof(*watch));
     watch->path = app_config_watch_path(opt);
     watch->enabled = watch->path && *watch->path;
+    const char *disable_env = getenv("KMS_MOSAIC_DISABLE_CONFIG_WATCH");
+    if (disable_env && *disable_env && strcmp(disable_env, "0") != 0) {
+        watch->enabled = false;
+    }
     watch->next_check_sec = app_now_sec() + 1.0;
     if (!watch->enabled) return;
 
@@ -122,27 +134,66 @@ static void app_config_watch_init(config_watch *watch, const options_t *opt) {
 static void app_snapshot_watch_init(snapshot_watch *watch) {
     memset(watch, 0, sizeof(*watch));
     watch->request_path = "/tmp/kms_mosaic_snapshot.request";
-    watch->output_path = "/tmp/kms_mosaic_snapshot.bmp";
+    watch->lease_path = "/tmp/kms_mosaic_preview.active";
+    watch->output_path = "/tmp/kms_mosaic_preview.rgba";
+    watch->stream_interval_ms = 16;
+}
+
+static double app_now_real_sec(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+static int app_snapshot_watch_interval_ms(const snapshot_watch *watch) {
+    if (!watch) return 16;
+    if (watch->stream_interval_ms < 1) return 1;
+    if (watch->stream_interval_ms > 1000) return 1000;
+    return watch->stream_interval_ms;
 }
 
 static void app_snapshot_watch_poll(snapshot_watch *watch) {
-    if (!watch || !watch->request_path) return;
-    struct stat st;
-    bool exists = stat(watch->request_path, &st) == 0;
-    if (!exists) {
-        watch->exists = false;
-        memset(&watch->last_mtime, 0, sizeof(watch->last_mtime));
-        watch->last_size = 0;
-        return;
+    if (!watch) return;
+
+    if (watch->request_path) {
+        struct stat st;
+        bool exists = stat(watch->request_path, &st) == 0;
+        if (!exists) {
+            watch->request_exists = false;
+            memset(&watch->request_last_mtime, 0, sizeof(watch->request_last_mtime));
+            watch->request_last_size = 0;
+        } else {
+            bool changed = !watch->request_exists ||
+                           watch->request_last_size != st.st_size ||
+                           watch->request_last_mtime.tv_sec != st.st_mtim.tv_sec ||
+                           watch->request_last_mtime.tv_nsec != st.st_mtim.tv_nsec;
+            watch->request_exists = true;
+            watch->request_last_mtime = st.st_mtim;
+            watch->request_last_size = st.st_size;
+            if (changed) watch->request_pending = true;
+        }
     }
-    bool changed = !watch->exists ||
-                   watch->last_size != st.st_size ||
-                   watch->last_mtime.tv_sec != st.st_mtim.tv_sec ||
-                   watch->last_mtime.tv_nsec != st.st_mtim.tv_nsec;
-    watch->exists = true;
-    watch->last_mtime = st.st_mtim;
-    watch->last_size = st.st_size;
-    if (changed) watch->pending = true;
+
+    watch->stream_active = false;
+    if (!watch->lease_path) return;
+
+    struct stat lease_st;
+    if (stat(watch->lease_path, &lease_st) != 0) return;
+
+    double age_sec = app_now_real_sec() - (lease_st.st_mtim.tv_sec + lease_st.st_mtim.tv_nsec / 1e9);
+    if (age_sec < 0.0) age_sec = 0.0;
+    if (age_sec > 2.5) return;
+
+    FILE *fp = fopen(watch->lease_path, "r");
+    if (fp) {
+        char line[64] = {0};
+        if (fgets(line, sizeof(line), fp)) {
+            int parsed = atoi(line);
+            if (parsed > 0) watch->stream_interval_ms = parsed;
+        }
+        fclose(fp);
+    }
+    watch->stream_active = true;
 }
 
 static bool app_config_watch_poll(config_watch *watch) {
@@ -154,22 +205,36 @@ static bool app_config_watch_poll(config_watch *watch) {
 
     struct stat st;
     bool exists = stat(watch->path, &st) == 0;
-    if (!exists) {
-        bool changed = watch->exists;
-        watch->exists = false;
-        memset(&watch->last_mtime, 0, sizeof(watch->last_mtime));
-        watch->last_size = 0;
-        return changed;
+    bool changed = !watch->exists ||
+                   !exists ||
+                   watch->last_size != (exists ? st.st_size : 0) ||
+                   watch->last_mtime.tv_sec != (exists ? st.st_mtim.tv_sec : 0) ||
+                   watch->last_mtime.tv_nsec != (exists ? st.st_mtim.tv_nsec : 0);
+    if (!changed) {
+        watch->candidate_pending = false;
+        return false;
     }
 
-    bool changed = !watch->exists ||
-                   watch->last_size != st.st_size ||
-                   watch->last_mtime.tv_sec != st.st_mtim.tv_sec ||
-                   watch->last_mtime.tv_nsec != st.st_mtim.tv_nsec;
-    watch->exists = true;
-    watch->last_mtime = st.st_mtim;
-    watch->last_size = st.st_size;
-    return changed;
+    struct timespec current_mtime = exists ? st.st_mtim : (struct timespec){0};
+    off_t current_size = exists ? st.st_size : 0;
+    bool same_candidate = watch->candidate_pending &&
+                          watch->candidate_exists == exists &&
+                          watch->candidate_size == current_size &&
+                          watch->candidate_mtime.tv_sec == current_mtime.tv_sec &&
+                          watch->candidate_mtime.tv_nsec == current_mtime.tv_nsec;
+    if (!same_candidate) {
+        watch->candidate_pending = true;
+        watch->candidate_exists = exists;
+        watch->candidate_size = current_size;
+        watch->candidate_mtime = current_mtime;
+        return false;
+    }
+
+    watch->candidate_pending = false;
+    watch->exists = exists;
+    watch->last_size = current_size;
+    watch->last_mtime = current_mtime;
+    return true;
 }
 
 static int app_list_connectors(const drm_ctx *d) {
@@ -517,12 +582,16 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
 
     while (rt.running) {
         if (*stop_flag) {
+            fprintf(stderr, "Exiting main loop: stop flag set\n");
             rt.running = false;
             break;
         }
         if (*debug && rt.frame < 5) fprintf(stderr, "Loop frame %d start\n", rt.frame);
         if (!app_poll_runtime_with_media(&rt, &opt, &panes, pane_media)) app_die("poll");
-        if (!app_handle_input_ready(&rt, &ui, &opt, use_mpv, &panes, &m, pane_media, *debug)) break;
+        if (!app_handle_input_ready(&rt, &ui, &opt, use_mpv, &panes, &m, pane_media, *debug)) {
+            fprintf(stderr, "Exiting main loop: input handler requested stop\n");
+            break;
+        }
         app_handle_runtime_events(&rt, &ui, &opt, &m, pane_media, &d,
                                   pfifo_buf, &pfifo_len, pane_pfifo_bufs, pane_pfifo_lens,
                                   use_mpv, *debug);
@@ -539,14 +608,27 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
         app_update_layout(&opt, &ui, &panes, &scene, *debug);
         if (!eglMakeCurrent(e.dpy, e.surf, e.surf, e.ctx)) app_die("eglMakeCurrent loop");
         bool snapshot_written = false;
+        const char *snapshot_path = NULL;
+        if (snap_watch.request_pending) {
+            snapshot_path = snap_watch.output_path;
+        } else if (snap_watch.stream_active && app_now_sec() >= snap_watch.stream_next_frame_sec) {
+            snapshot_path = snap_watch.output_path;
+        }
         frame_render(&opt, &rt, &rg, &m, pane_media, &d, &g, &e, &panes, &ui,
                      scene.slot_layouts, scene.pane_layouts, scene.pane_count, scene.logical_w, scene.logical_h,
                      scene.fb_w, scene.fb_h, scene.screen_w, scene.screen_h, scene.pane_font_px,
                      use_mpv, pane_ready, *debug,
-                     snap_watch.pending ? snap_watch.output_path : NULL, &snapshot_written);
-        if (snapshot_written) snap_watch.pending = false;
+                     snapshot_path, &snapshot_written);
+        if (snapshot_written) {
+            if (snap_watch.request_pending) snap_watch.request_pending = false;
+            if (snap_watch.stream_active) {
+                snap_watch.stream_next_frame_sec = app_now_sec() + app_snapshot_watch_interval_ms(&snap_watch) / 1000.0;
+            }
+        }
         free(pane_ready);
     }
+
+    fprintf(stderr, "Main loop exited: rc=%d running=%d stop_flag=%d\n", rc, rt.running ? 1 : 0, *stop_flag ? 1 : 0);
 
 cleanup:
     ui_state_destroy(&ui);

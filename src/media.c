@@ -87,7 +87,7 @@ static void media_apply_options(media_ctx *m, const options_t *opt, const pane_m
                                 &user_set_tscale, &user_set_eflush, &user_set_shader_cache);
     }
 
-    if (!user_set_hwdec) mpv_set_option_string(m->mpv, "hwdec", "no");
+    if (!user_set_hwdec) mpv_set_option_string(m->mpv, "hwdec", "auto-copy-safe");
     if (opt->loop_file || opt->loop_flag) mpv_set_option_string(m->mpv, "loop-file", "inf");
     if (opt->loop_playlist) mpv_set_option_string(m->mpv, "loop-playlist", "yes");
     if (opt->shuffle) mpv_set_option_string(m->mpv, "shuffle", "yes");

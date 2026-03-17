@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+from fractions import Fraction
 import hashlib
+import io
 import json
 import mimetypes
 import os
@@ -11,13 +14,26 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import re
 from urllib.parse import parse_qs, urlparse
 from typing import Any
+
+try:
+    import av
+    from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+    from aiortc.rtcrtpsender import RTCRtpSender
+except ImportError:  # pragma: no cover
+    av = None
+    RTCPeerConnection = None
+    RTCSessionDescription = None
+    VideoStreamTrack = object
+    RTCRtpSender = None
 
 
 LAYOUT_NAMES = ["stack", "row", "2x1", "1x2", "2over1", "1over2", "overlay"]
@@ -473,8 +489,249 @@ class WebConfig:
     host: str
     port: int
     snapshot_request_path: Path
+    preview_lease_path: Path
     snapshot_output_path: Path
     thumb_cache_dir: Path
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix=".kms_mosaic.", dir=str(path.parent))
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.replace(temp_path, path)
+
+
+def write_preview_lease(app_config: WebConfig, interval_ms: int) -> None:
+    interval_ms = max(1, min(int(interval_ms), 1000))
+    write_text_atomic(app_config.preview_lease_path, f"{interval_ms}\n{time.time_ns()}\n")
+
+
+def read_latest_raw_preview_frame(app_config: WebConfig, last_mtime_ns: int = 0, interval_ms: int = 16,
+                                  timeout_sec: float = 3.0) -> tuple[bytes, int]:
+    output_path = app_config.snapshot_output_path
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        write_preview_lease(app_config, interval_ms)
+        if output_path.exists():
+            st = output_path.stat()
+            if st.st_size >= 8 and (last_mtime_ns <= 0 or st.st_mtime_ns > last_mtime_ns):
+                return output_path.read_bytes(), st.st_mtime_ns
+        time.sleep(0.01)
+    raise TimeoutError("Timed out waiting for kms_mosaic frame")
+
+
+def decode_raw_preview_frame(frame_bytes: bytes) -> tuple[int, int, bytes]:
+    if len(frame_bytes) < 8:
+        raise ValueError("Preview frame payload too short")
+    width = int.from_bytes(frame_bytes[0:4], "little")
+    height = int.from_bytes(frame_bytes[4:8], "little")
+    if width <= 0 or height <= 0:
+        raise ValueError("Preview frame dimensions missing")
+    expected = width * height * 4
+    payload = frame_bytes[8:8 + expected]
+    if len(payload) < expected:
+        raise ValueError("Preview frame payload truncated")
+    return width, height, payload
+
+
+def boost_h264_bitrate_sdp(sdp: str, start_kbps: int = 50000, max_kbps: int = 100000, min_kbps: int = 20000) -> str:
+    if not sdp:
+        return sdp
+    lines = sdp.splitlines()
+    h264_payloads: list[str] = []
+    for line in lines:
+        match = re.match(r"a=rtpmap:(\d+)\s+H264/90000", line, re.IGNORECASE)
+        if match:
+            h264_payloads.append(match.group(1))
+    if not h264_payloads:
+        return sdp
+
+    updated: list[str] = []
+    seen_fmtp: set[str] = set()
+    for line in lines:
+        fmtp_match = re.match(r"a=fmtp:(\d+)\s+(.+)", line, re.IGNORECASE)
+        if fmtp_match and fmtp_match.group(1) in h264_payloads:
+            payload = fmtp_match.group(1)
+            params = fmtp_match.group(2)
+            if "x-google-start-bitrate" not in params:
+                params += f";x-google-start-bitrate={start_kbps}"
+            if "x-google-min-bitrate" not in params:
+                params += f";x-google-min-bitrate={min_kbps}"
+            if "x-google-max-bitrate" not in params:
+                params += f";x-google-max-bitrate={max_kbps}"
+            updated.append(f"a=fmtp:{payload} {params}")
+            seen_fmtp.add(payload)
+            continue
+        updated.append(line)
+        rtpmap_match = re.match(r"a=rtpmap:(\d+)\s+H264/90000", line, re.IGNORECASE)
+        if rtpmap_match:
+            payload = rtpmap_match.group(1)
+            if payload not in seen_fmtp:
+                updated.append(
+                    f"a=fmtp:{payload} x-google-start-bitrate={start_kbps};x-google-min-bitrate={min_kbps};x-google-max-bitrate={max_kbps}"
+                )
+                seen_fmtp.add(payload)
+    return "\r\n".join(updated) + "\r\n"
+
+
+def codec_preference_key(codec: Any) -> tuple[int, str]:
+    mime = str(getattr(codec, "mimeType", "")).lower()
+    if mime == "video/vp9":
+        return (0, mime)
+    if mime == "video/h264":
+        return (1, mime)
+    if mime == "video/vp8":
+        return (2, mime)
+    if mime == "video/av1":
+        return (3, mime)
+    return (4, mime)
+
+
+class RawPreviewVideoTrack(VideoStreamTrack):
+    def __init__(self, app_config: WebConfig) -> None:
+        super().__init__()
+        self.app_config = app_config
+        self.interval_ms = 1
+        self.last_mtime_ns = 0
+        self.last_frame: av.VideoFrame | None = None
+        self.timestamp = 0
+        self.time_base = Fraction(1, 90000)
+        self.last_timestamp_time = time.monotonic()
+
+    async def recv(self) -> av.VideoFrame:
+        try:
+            frame_bytes, self.last_mtime_ns = await asyncio.to_thread(
+                read_latest_raw_preview_frame,
+                self.app_config,
+                self.last_mtime_ns,
+                self.interval_ms,
+                2.0,
+            )
+            width, height, rgba = decode_raw_preview_frame(frame_bytes)
+            frame = av.VideoFrame(width, height, "rgba")
+            frame.planes[0].update(rgba)
+            self.last_frame = frame.reformat(format="yuvj420p")
+        except Exception:
+            if self.last_frame is None:
+                fallback = av.VideoFrame(16, 9, "rgba")
+                fallback.planes[0].update(bytes(16 * 9 * 4))
+                self.last_frame = fallback.reformat(format="yuvj420p")
+        frame_out = self.last_frame
+        now = time.monotonic()
+        elapsed = max(now - self.last_timestamp_time, 1 / 90000)
+        self.last_timestamp_time = now
+        frame_out.pts = self.timestamp
+        frame_out.time_base = self.time_base
+        self.timestamp += max(1, int(90000 * elapsed))
+        return frame_out
+
+
+class WebRTCBridge:
+    def __init__(self, app_config: WebConfig) -> None:
+        self.app_config = app_config
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.thread: threading.Thread | None = None
+        self.peers: set[RTCPeerConnection] = set()
+
+    @property
+    def available(self) -> bool:
+        return RTCPeerConnection is not None and RTCSessionDescription is not None and av is not None
+
+    def start(self) -> None:
+        if not self.available or self.thread is not None:
+            return
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self._run_loop, name="kms-mosaic-webrtc", daemon=True)
+        self.thread.start()
+
+    def _run_loop(self) -> None:
+        assert self.loop is not None
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    async def _wait_for_ice_complete(self, pc: RTCPeerConnection) -> None:
+        if pc.iceGatheringState == "complete":
+            return
+        done = asyncio.Event()
+
+        @pc.on("icegatheringstatechange")
+        async def _on_ice_state() -> None:
+            if pc.iceGatheringState == "complete":
+                done.set()
+
+        await asyncio.wait_for(done.wait(), timeout=5.0)
+
+    async def _close_peer(self, pc: RTCPeerConnection) -> None:
+        if pc in self.peers:
+            self.peers.discard(pc)
+        if pc.connectionState != "closed":
+            await pc.close()
+
+    async def _create_answer(self, offer_sdp: str, offer_type: str) -> dict[str, str]:
+        if not self.available:
+            raise RuntimeError("WebRTC preview dependencies are not installed")
+        pc = RTCPeerConnection()
+        self.peers.add(pc)
+
+        @pc.on("connectionstatechange")
+        async def _on_connectionstatechange() -> None:
+            if pc.connectionState in {"failed", "closed", "disconnected"}:
+                await self._close_peer(pc)
+
+        transceiver = pc.addTransceiver("video", direction="sendonly")
+        if RTCRtpSender is not None:
+            capabilities = RTCRtpSender.getCapabilities("video")
+            codecs = list(capabilities.codecs) if capabilities else []
+            if codecs:
+                preferred = sorted(codecs, key=codec_preference_key)
+                if preferred:
+                    transceiver.setCodecPreferences(preferred)
+        pc.addTrack(RawPreviewVideoTrack(self.app_config))
+        sender = transceiver.sender
+        if sender is not None and hasattr(sender, "getParameters") and hasattr(sender, "setParameters"):
+            params = sender.getParameters()
+            if params.encodings:
+                for encoding in params.encodings:
+                    encoding.maxBitrate = 50_000_000
+            try:
+                await sender.setParameters(params)
+            except Exception:
+                pass
+        await pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type=offer_type))
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+        await self._wait_for_ice_complete(pc)
+        assert pc.localDescription is not None
+        return {
+            "sdp": boost_h264_bitrate_sdp(pc.localDescription.sdp),
+            "type": pc.localDescription.type,
+        }
+
+    def create_answer(self, offer_sdp: str, offer_type: str) -> dict[str, str]:
+        if not self.available or self.loop is None:
+            raise RuntimeError("WebRTC preview bridge is unavailable")
+        future = asyncio.run_coroutine_threadsafe(self._create_answer(offer_sdp, offer_type), self.loop)
+        return future.result(timeout=15.0)
+
+    async def _shutdown(self) -> None:
+        peers = list(self.peers)
+        for pc in peers:
+            await self._close_peer(pc)
+        if self.loop is not None:
+            self.loop.stop()
+
+    def close(self) -> None:
+        if self.loop is None:
+            return
+        future = asyncio.run_coroutine_threadsafe(self._shutdown(), self.loop)
+        try:
+            future.result(timeout=10.0)
+        finally:
+            if self.thread is not None:
+                self.thread.join(timeout=2.0)
+            self.thread = None
+            self.loop = None
 
 
 HTML = r"""<!doctype html>
@@ -631,6 +888,7 @@ HTML = r"""<!doctype html>
       border: 1px solid rgba(0,0,0,0.28);
       overflow: hidden;
       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04), 0 4px 12px rgba(0,0,0,0.18);
+      margin: 0 auto;
     }
     .preview-stage {
       position: absolute;
@@ -639,8 +897,14 @@ HTML = r"""<!doctype html>
       align-items: center;
       justify-content: center;
     }
-    .preview-canvas { width: 100%; height: 100%; display: block; background: #070605; }
-    .preview-image { display: none; }
+    .preview-video {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      object-position: center center;
+      background: #070605;
+    }
     .preview-bar {
       display: flex;
       align-items: center;
@@ -1202,8 +1466,7 @@ HTML = r"""<!doctype html>
         <div class="preview-layout" id="preview-outer">
           <div class="preview-wrap" id="preview">
             <div class="preview-stage">
-              <canvas id="previewCanvas" class="preview-canvas"></canvas>
-              <img id="previewImage" class="preview-image" alt="Current KMS Mosaic output" />
+              <video id="previewVideo" class="preview-video" autoplay playsinline muted></video>
             </div>
           </div>
         </div>
@@ -1364,9 +1627,7 @@ HTML = r"""<!doctype html>
 
   <script>
     const layoutNames = ["stack", "row", "2x1", "1x2", "2over1", "1over2", "overlay"];
-    const previewImage = document.getElementById("previewImage");
-    const previewCanvas = document.getElementById("previewCanvas");
-    const previewCtx = previewCanvas.getContext("2d");
+    const previewVideo = document.getElementById("previewVideo");
     const previewLayout = document.querySelector(".preview-layout");
     const layoutSelect = document.getElementById("layout");
     const paneList = document.getElementById("paneList");
@@ -1388,10 +1649,15 @@ HTML = r"""<!doctype html>
     let draggedStudioRole = null;
     let pendingNewPaneIndexes = new Set();
     let livePreviewTimer = null;
-    let livePreviewInFlight = false;
     let livePreviewController = null;
     let livePreviewUrl = null;
     let playlistDragIndex = null;
+    let playlistPreviewObserver = null;
+    let previewFrameWidth = 16;
+    let previewFrameHeight = 9;
+    let webrtcPeer = null;
+    let webrtcStream = null;
+    let webrtcRetryTimer = null;
     const layoutSuggestionCopy = {
       stack: "Vertical stack of the visible panes.",
       row: "Horizontal row of the visible panes.",
@@ -1837,6 +2103,41 @@ HTML = r"""<!doctype html>
       return `/api/media?path=${encodeURIComponent(value)}`;
     }
 
+    function playlistThumbCacheKey(path, metrics) {
+      return [
+        "kmsmosaic-thumb-v1",
+        String(path || "").trim(),
+        String(metrics.rotation || 0),
+        String(metrics.aspectRatio || ""),
+        metrics.cover ? "cover" : "contain",
+      ].join("|");
+    }
+
+    function readCachedPlaylistThumb(path, metrics) {
+      try {
+        const raw = localStorage.getItem(playlistThumbCacheKey(path, metrics));
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed.src !== "string" || !parsed.src) return null;
+        return parsed;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function writeCachedPlaylistThumb(path, metrics, src, duration) {
+      try {
+        const value = {
+          src,
+          duration: Number.isFinite(duration) && duration > 0 ? duration : null,
+          savedAt: Date.now(),
+        };
+        localStorage.setItem(playlistThumbCacheKey(path, metrics), JSON.stringify(value));
+      } catch (_) {
+        return;
+      }
+    }
+
     function isLikelyImagePath(path) {
       return /\.(avif|bmp|gif|jpe?g|png|webp)$/i.test(String(path || ""));
     }
@@ -1850,8 +2151,14 @@ HTML = r"""<!doctype html>
       const rects = computeStudioRects(state);
       const rawRect = rects?.[role] || { w: 16, h: 9 };
       const rect = transformStudioPaneRect(rawRect);
-      const width = Math.max(1, Number(rect?.w || 16));
-      const height = Math.max(1, Number(rect?.h || 9));
+      const pw = Math.max(1, Number(rect?.w || 16));
+      const ph = Math.max(1, Number(rect?.h || 9));
+      // Scale pane rect by the board's visual aspect ratio so portrait/landscape detection
+      // accounts for the display rotation (the studio board renders 9:16 at rotation 90/270).
+      const displayRotation = normalizedRotationDegrees();
+      const boardPortrait = displayRotation === 90 || displayRotation === 270;
+      const physW = pw * (boardPortrait ? 9 : 16);
+      const physH = ph * (boardPortrait ? 16 : 9);
       const paneIndex = role - 1;
       const panscanValue = role === 0
         ? String(state?.panscan || "").trim()
@@ -1859,9 +2166,9 @@ HTML = r"""<!doctype html>
       const panscan = Number.parseFloat(panscanValue || "0");
       return {
         rotation,
-        aspectRatio: `${width} / ${height}`,
+        aspectRatio: `${physW} / ${physH}`,
         cover: Number.isFinite(panscan) && panscan > 0,
-        isPortrait: height > width,
+        isPortrait: physH > physW,
       };
     }
 
@@ -1869,8 +2176,9 @@ HTML = r"""<!doctype html>
       const value = String(path || "").trim();
       if (!value) return "";
       const src = mediaUrl(value);
-      const total = metrics.rotation;
+      const total = metrics.rotation === 270 ? 0 : metrics.rotation;
       const quarterTurn = total === 90 || total === 270;
+      const cached = readCachedPlaylistThumb(value, metrics);
       let mediaStyle = "";
       if (total) {
         if (quarterTurn) {
@@ -1886,7 +2194,10 @@ HTML = r"""<!doctype html>
         return `<div class="playlist-thumb-media${quarterTurn ? " quarter-turn" : ""}"><img src="${src}" alt="Preview for queue item ${index + 1}" loading="lazy"${mediaStyle} /></div>`;
       }
       if (isLikelyVideoPath(value)) {
-        return `<div class="playlist-thumb-media${quarterTurn ? " quarter-turn" : ""}"><video data-preview-video="${index}" muted playsinline preload="metadata" src="${src}#t=5"${mediaStyle}></video></div>`;
+        if (cached?.src) {
+          return `<div class="playlist-thumb-media${quarterTurn ? " quarter-turn" : ""}"><img src="${cached.src}" alt="Preview for queue item ${index + 1}" loading="lazy"${mediaStyle} /></div>`;
+        }
+        return `<div class="playlist-thumb-media${quarterTurn ? " quarter-turn" : ""}"><video data-preview-video="${index}" data-preview-path="${value.replace(/"/g, "&quot;")}" data-preview-src="${src}#t=5" muted playsinline preload="metadata"${mediaStyle}></video></div>`;
       }
       return "";
     }
@@ -2918,7 +3229,46 @@ HTML = r"""<!doctype html>
           video.closest(".playlist-thumb")?.classList.add("empty");
           video.remove();
         }, { once: true });
+        observePlaylistPreviewVideo(video);
       });
+    }
+
+    function ensurePlaylistPreviewObserver() {
+      if (playlistPreviewObserver || typeof IntersectionObserver !== "function") return playlistPreviewObserver;
+      playlistPreviewObserver = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          const video = entry.target;
+          activatePlaylistPreviewVideo(video);
+          playlistPreviewObserver?.unobserve(video);
+        });
+      }, {
+        root: null,
+        rootMargin: "200px 0px",
+        threshold: 0.01,
+      });
+      return playlistPreviewObserver;
+    }
+
+    function activatePlaylistPreviewVideo(video) {
+      if (!video || video.src) return;
+      const src = video.dataset.previewSrc;
+      if (!src) return;
+      video.src = src;
+      try {
+        video.load();
+      } catch (_) {
+        // ignore
+      }
+    }
+
+    function observePlaylistPreviewVideo(video) {
+      const observer = ensurePlaylistPreviewObserver();
+      if (!observer) {
+        activatePlaylistPreviewVideo(video);
+        return;
+      }
+      observer.observe(video);
     }
 
     function moveQueueItem(index, delta) {
@@ -3109,110 +3459,116 @@ HTML = r"""<!doctype html>
       });
     }
 
-    async function refreshSnapshot() {
-      if (livePreviewInFlight) return;
-      livePreviewInFlight = true;
-      try {
-        previewImage.src = `/api/snapshot.bmp?t=${Date.now()}`;
-      } finally {
-        // release in onload/onerror so the next cycle waits for the actual image
-      }
-    }
-
-    function parseHeaderBlock(bytes) {
-      const text = new TextDecoder().decode(bytes);
-      const headers = {};
-      text.split("\r\n").forEach(line => {
-        const idx = line.indexOf(":");
-        if (idx <= 0) return;
-        headers[line.slice(0, idx).trim().toLowerCase()] = line.slice(idx + 1).trim();
+    function waitForIceGatheringComplete(pc) {
+      if (pc.iceGatheringState === "complete") return Promise.resolve();
+      return new Promise((resolve) => {
+        const checkState = () => {
+          if (pc.iceGatheringState === "complete") {
+            pc.removeEventListener("icegatheringstatechange", checkState);
+            resolve();
+          }
+        };
+        pc.addEventListener("icegatheringstatechange", checkState);
       });
-      return headers;
     }
 
-    function findBytes(haystack, needle, fromIndex = 0) {
-      outer: for (let i = fromIndex; i <= haystack.length - needle.length; i++) {
-        for (let j = 0; j < needle.length; j++) {
-          if (haystack[i + j] !== needle[j]) continue outer;
-        }
-        return i;
-      }
-      return -1;
-    }
-
-    function concatBytes(a, b) {
-      const merged = new Uint8Array(a.length + b.length);
-      merged.set(a, 0);
-      merged.set(b, a.length);
-      return merged;
-    }
-
-    async function drawFrameBytes(frameBytes) {
-      const blob = new Blob([frameBytes], { type: "image/bmp" });
-      const url = URL.createObjectURL(blob);
-      try {
-        previewImage.src = url;
-        await new Promise((resolve, reject) => {
-          previewImage.onload = () => resolve();
-          previewImage.onerror = () => reject(new Error("Failed to decode live preview frame"));
-        });
-      } finally {
-        URL.revokeObjectURL(url);
-      }
+    function syncWebRtcPreviewGeometry() {
+      if (!previewVideo || previewVideo.readyState < HTMLMediaElement.HAVE_METADATA) return;
+      const width = previewVideo.videoWidth || 0;
+      const height = previewVideo.videoHeight || 0;
+      if (!width || !height) return;
+      previewFrameWidth = width;
+      previewFrameHeight = height;
       applyPreviewGeometry();
     }
 
     async function startLivePreviewStream() {
       stopLivePreviewStream();
-      const delay = currentLivePreviewDelay();
-      if (delay == null) return;
-
-      livePreviewController = new AbortController();
-      livePreviewUrl = `/api/live.bin?interval=${delay}`;
-
+      if (document.hidden) return;
+      if (!window.RTCPeerConnection) {
+        throw new Error("This browser does not support the WebRTC preview");
+      }
       try {
-        const response = await fetch(livePreviewUrl, {
-          cache: "no-store",
-          signal: livePreviewController.signal
-        });
-        if (!response.ok || !response.body) throw new Error("Failed to open live preview stream");
-
-        const reader = response.body.getReader();
-        let buffer = new Uint8Array(0);
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          if (!value) continue;
-          buffer = concatBytes(buffer, value);
-
-          while (true) {
-            if (buffer.length < 4) break;
-            const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
-            const frameLength = view.getUint32(0, false);
-            if (!Number.isFinite(frameLength) || frameLength <= 0) {
-              buffer = buffer.slice(4);
-              continue;
-            }
-            if (buffer.length < 4 + frameLength) break;
-            const frameBytes = buffer.slice(4, 4 + frameLength);
-            buffer = buffer.slice(4 + frameLength);
-            await drawFrameBytes(frameBytes);
+        const pc = new RTCPeerConnection({ iceServers: [] });
+        webrtcPeer = pc;
+        const remoteStream = new MediaStream();
+        webrtcStream = remoteStream;
+        const transceiver = pc.addTransceiver("video", { direction: "recvonly" });
+        if (transceiver && transceiver.setCodecPreferences && window.RTCRtpReceiver?.getCapabilities) {
+          const capabilities = RTCRtpReceiver.getCapabilities("video");
+          if (capabilities?.codecs?.length) {
+            const codecRank = (mimeType) => {
+              if (mimeType === "video/AV1") return 0;
+              if (mimeType === "video/VP9") return 1;
+              if (mimeType === "video/VP8") return 2;
+              if (mimeType === "video/H264") return 3;
+              return 4;
+            };
+            const ordered = capabilities.codecs.slice().sort((a, b) => codecRank(a.mimeType) - codecRank(b.mimeType));
+            if (ordered.length) transceiver.setCodecPreferences(ordered);
           }
         }
+        pc.addEventListener("track", (event) => {
+          remoteStream.addTrack(event.track);
+          previewVideo.srcObject = remoteStream;
+          previewVideo.play().catch(() => {});
+          previewVideo.onloadedmetadata = () => syncWebRtcPreviewGeometry();
+          previewVideo.onresize = () => syncWebRtcPreviewGeometry();
+        });
+        pc.addEventListener("connectionstatechange", () => {
+          if (pc !== webrtcPeer) return;
+          if (pc.connectionState === "connected") {
+            setStatus("Live preview connected over WebRTC.", false, true);
+            return;
+          }
+          if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+            if (webrtcRetryTimer) clearTimeout(webrtcRetryTimer);
+            webrtcRetryTimer = setTimeout(() => {
+              startLivePreviewStream().catch(err => setStatus(err.message || "Live preview reconnect failed", true));
+            }, 800);
+          }
+        });
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        await waitForIceGatheringComplete(pc);
+        const response = await fetch("/api/webrtc-offer", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sdp: pc.localDescription?.sdp || "",
+            type: pc.localDescription?.type || "offer",
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "Failed to establish WebRTC preview");
+        await pc.setRemoteDescription(payload);
       } catch (err) {
-        if (livePreviewController?.signal.aborted) return;
-        setStatus(err.message || "Live preview stream failed", true);
-      } finally {
-        if (livePreviewController && !livePreviewController.signal.aborted) {
-          setTimeout(() => {
-            if (currentLivePreviewDelay() != null) startLivePreviewStream().catch(err => setStatus(err.message, true));
-          }, 500);
-        }
+        stopLivePreviewStream();
+        throw err;
       }
     }
 
     function stopLivePreviewStream() {
+      if (webrtcRetryTimer) {
+        clearTimeout(webrtcRetryTimer);
+        webrtcRetryTimer = null;
+      }
+      if (previewVideo) {
+        previewVideo.pause();
+        previewVideo.srcObject = null;
+        previewVideo.onloadedmetadata = null;
+        previewVideo.onresize = null;
+      }
+      if (webrtcStream) {
+        webrtcStream.getTracks().forEach(track => track.stop());
+        webrtcStream = null;
+      }
+      if (webrtcPeer) {
+        webrtcPeer.ontrack = null;
+        webrtcPeer.onconnectionstatechange = null;
+        webrtcPeer.close();
+        webrtcPeer = null;
+      }
       if (livePreviewController) {
         livePreviewController.abort();
         livePreviewController = null;
@@ -3233,11 +3589,7 @@ HTML = r"""<!doctype html>
     }
 
     function effectiveDisplayRotationDegrees() {
-      const rotation = Number(state?.rotation || 0);
-      const correction = getPreviewCorrection();
-      let total = ((360 - rotation) + correction) % 360;
-      if (total < 0) total += 360;
-      return total;
+      return 0;
     }
 
     function configuredVideoRotationDegrees(role = playlistTargetRole) {
@@ -3299,8 +3651,8 @@ HTML = r"""<!doctype html>
 
     function applyPreviewGeometry() {
       const total = effectiveDisplayRotationDegrees();
-      const naturalW = previewImage.naturalWidth || 16;
-      const naturalH = previewImage.naturalHeight || 9;
+      const naturalW = previewFrameWidth || 16;
+      const naturalH = previewFrameHeight || 9;
       const quarterTurn = total === 90 || total === 270;
       const displayW = quarterTurn ? naturalH : naturalW;
       const displayH = quarterTurn ? naturalW : naturalH;
@@ -3317,15 +3669,7 @@ HTML = r"""<!doctype html>
       preview.style.width = `${finalWidth}px`;
       preview.style.maxWidth = "100%";
       preview.style.maxHeight = `${availableHeight}px`;
-      previewCanvas.width = displayW;
-      previewCanvas.height = displayH;
-      if (!previewCtx || !previewImage.naturalWidth || !previewImage.naturalHeight) return;
-      previewCtx.save();
-      previewCtx.clearRect(0, 0, displayW, displayH);
-      previewCtx.translate(displayW / 2, displayH / 2);
-      previewCtx.rotate(total * Math.PI / 180);
-      previewCtx.drawImage(previewImage, -naturalW / 2, -naturalH / 2, naturalW, naturalH);
-      previewCtx.restore();
+      if (previewVideo) previewVideo.style.transform = total ? `rotate(${total}deg)` : "";
       applyStudioGeometry();
     }
 
@@ -3423,7 +3767,6 @@ HTML = r"""<!doctype html>
       if (!response.ok) throw new Error("Failed to load state");
       const payload = await response.json();
       fillForm(payload.state, payload.config_path, payload.raw_config);
-      await refreshSnapshot();
       scheduleLivePreview();
       setStatus(`Loaded ${payload.config_path}`, false, true);
     }
@@ -3438,7 +3781,6 @@ HTML = r"""<!doctype html>
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Failed to save config");
       fillForm(payload.state, payload.config_path, payload.raw_config);
-      await refreshSnapshot();
       scheduleLivePreview();
       setStatus(`Saved ${payload.config_path}. kms_mosaic will reload on file change.`, false, true);
     }
@@ -3453,7 +3795,6 @@ HTML = r"""<!doctype html>
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Failed to save raw config");
       fillForm(payload.state, payload.config_path, payload.raw_config);
-      await refreshSnapshot();
       scheduleLivePreview();
       setStatus(`Saved raw config to ${payload.config_path}.`, false, true);
     }
@@ -3464,13 +3805,17 @@ HTML = r"""<!doctype html>
     }
 
     function currentLivePreviewDelay() {
-      return 120;
+      return 180;
     }
 
     function scheduleLivePreview() {
       if (livePreviewTimer) {
         clearTimeout(livePreviewTimer);
         livePreviewTimer = null;
+      }
+      if (document.hidden) {
+        stopLivePreviewStream();
+        return;
       }
       const delay = currentLivePreviewDelay();
       if (delay == null) {
@@ -3551,16 +3896,16 @@ HTML = r"""<!doctype html>
       }
       setStatus("Rotated panels clockwise.", false);
     });
-    previewImage.addEventListener("load", () => {
-      livePreviewInFlight = false;
-      applyPreviewGeometry();
-    });
-    previewImage.addEventListener("error", () => {
-      livePreviewInFlight = false;
-    });
     window.addEventListener("resize", () => {
       applyPreviewGeometry();
       renderStudioBoard();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopLivePreviewStream();
+      } else {
+        scheduleLivePreview();
+      }
     });
     [
       "mode","rotation","fontSize","rightFrac","paneSplit",
@@ -3580,12 +3925,20 @@ HTML = r"""<!doctype html>
 """
 
 
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "KMSMosaicWeb/0.1"
 
     @property
     def app_config(self) -> WebConfig:
         return self.server.app_config  # type: ignore[attr-defined]
+
+    @property
+    def webrtc(self) -> WebRTCBridge:
+        return self.server.webrtc  # type: ignore[attr-defined]
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[web] {self.address_string()} - {fmt % args}")
@@ -3599,11 +3952,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _write_text_atomic(self, path: Path, text: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temp_path = tempfile.mkstemp(prefix=".kms_mosaic.", dir=str(path.parent))
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        os.replace(temp_path, path)
+        write_text_atomic(path, text)
 
     def _read_state(self) -> dict[str, Any]:
         path = self.app_config.config_path
@@ -3615,21 +3964,22 @@ class Handler(BaseHTTPRequestHandler):
         return path.read_text(encoding="utf-8") if path.exists() else ""
 
     def _request_snapshot(self) -> bytes:
-        request_path = self.app_config.snapshot_request_path
-        output_path = self.app_config.snapshot_output_path
-        output_mtime = output_path.stat().st_mtime_ns if output_path.exists() else 0
-        request_path.parent.mkdir(parents=True, exist_ok=True)
-        nonce = time.time_ns()
-        request_path.write_text(f"{nonce}\n{'#' * ((nonce % 31) + 1)}\n", encoding="utf-8")
+        data, _ = read_latest_raw_preview_frame(self.app_config, 0, 180, 3.0)
+        return data
 
-        deadline = time.time() + 3.0
+    def _write_preview_lease(self, interval_ms: int) -> None:
+        write_preview_lease(self.app_config, interval_ms)
+
+    def _wait_for_snapshot_update(self, last_mtime_ns: int, timeout_sec: float = 3.0) -> tuple[bytes, int]:
+        output_path = self.app_config.snapshot_output_path
+        deadline = time.time() + timeout_sec
         while time.time() < deadline:
             if output_path.exists():
-                new_mtime = output_path.stat().st_mtime_ns
-                if new_mtime > output_mtime:
-                    return output_path.read_bytes()
-            time.sleep(0.05)
-        raise TimeoutError("Timed out waiting for kms_mosaic snapshot")
+                st = output_path.stat()
+                if st.st_mtime_ns > last_mtime_ns and st.st_size > 0:
+                    return output_path.read_bytes(), st.st_mtime_ns
+            time.sleep(0.03)
+        raise TimeoutError("Timed out waiting for preview frame")
 
     def _thumbnail_cache_path(self, source: Path) -> Path:
         digest = hashlib.sha256(str(source).encode("utf-8")).hexdigest()
@@ -3734,20 +4084,25 @@ class Handler(BaseHTTPRequestHandler):
                 remaining -= len(chunk)
 
     def _stream_live_bin(self, interval_ms: int) -> None:
-        interval_sec = max(0.1, min(interval_ms / 1000.0, 5.0))
+        interval_ms = max(100, min(interval_ms, 1000))
+        heartbeat_sec = min(max(interval_ms / 1000.0, 0.15), 1.0)
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
 
+        output_path = self.app_config.snapshot_output_path
+        last_mtime_ns = output_path.stat().st_mtime_ns if output_path.exists() else 0
+
         try:
             while True:
-                frame = self._request_snapshot()
+                self._write_preview_lease(interval_ms)
+                frame, last_mtime_ns = self._wait_for_snapshot_update(last_mtime_ns)
                 self.wfile.write(len(frame).to_bytes(4, "big"))
                 self.wfile.write(frame)
                 self.wfile.flush()
-                time.sleep(interval_sec)
+                time.sleep(heartbeat_sec)
         except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout):
             return
 
@@ -3770,14 +4125,14 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
-        if parsed.path == "/api/snapshot.bmp":
+        if parsed.path == "/api/frame.bin":
             try:
                 data = self._request_snapshot()
             except Exception as exc:  # pragma: no cover
                 self._send_json({"error": str(exc)}, status=500)
                 return
             self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "image/bmp")
+            self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -3828,13 +4183,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         if self.path not in ("/api/config", "/api/raw_config"):
-            self._send_json({"error": "Not found"}, status=404)
-            return
+            if self.path != "/api/webrtc-offer":
+                self._send_json({"error": "Not found"}, status=404)
+                return
 
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
         try:
             payload = json.loads(body.decode("utf-8"))
+            if self.path == "/api/webrtc-offer":
+                answer = self.webrtc.create_answer(str(payload["sdp"]), str(payload["type"]))
+                self._send_json(answer)
+                return
             config_path = self.app_config.config_path
             if self.path == "/api/config":
                 state = payload["state"]
@@ -3865,20 +4225,25 @@ def parse_args() -> WebConfig:
         host=args.host,
         port=args.port,
         snapshot_request_path=Path("/tmp/kms_mosaic_snapshot.request"),
-        snapshot_output_path=Path("/tmp/kms_mosaic_snapshot.bmp"),
+        preview_lease_path=Path("/tmp/kms_mosaic_preview.active"),
+        snapshot_output_path=Path("/tmp/kms_mosaic_preview.rgba"),
         thumb_cache_dir=Path("/tmp/kms_mosaic_web_thumbs"),
     )
 
 
 def main() -> int:
     app_config = parse_args()
-    server = ThreadingHTTPServer((app_config.host, app_config.port), Handler)
+    server = ReusableThreadingHTTPServer((app_config.host, app_config.port), Handler)
     server.app_config = app_config  # type: ignore[attr-defined]
+    server.webrtc = WebRTCBridge(app_config)  # type: ignore[attr-defined]
+    server.webrtc.start()  # type: ignore[attr-defined]
     print(f"KMS Mosaic web UI serving {app_config.config_path} on http://{app_config.host}:{app_config.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         return 0
+    finally:
+        server.webrtc.close()  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":
