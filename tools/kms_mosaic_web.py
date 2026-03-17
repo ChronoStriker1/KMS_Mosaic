@@ -982,15 +982,14 @@ HTML = r"""<!doctype html>
       display: grid;
       place-items: center;
       overflow: hidden;
+      padding: 4px;
     }
     .playlist-thumb img, .playlist-thumb video {
-      width: 100%; height: 100%; object-fit: cover; display: block;
-    }
-    .playlist-thumb.quarter-turn img,
-    .playlist-thumb.quarter-turn video {
-      width: auto;
+      width: 100%;
       height: 100%;
-      min-width: 100%;
+      object-fit: contain;
+      display: block;
+      transform-origin: center center;
     }
     .playlist-thumb video { background: #0e0c0a; }
     .playlist-thumb.empty::after {
@@ -1054,6 +1053,30 @@ HTML = r"""<!doctype html>
       margin-top: 10px;
     }
     .playlist-mini-btn.danger { color: var(--danger); }
+    .playlist-bulk {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--r-sm);
+      background: rgba(255,255,255,0.02);
+      overflow: hidden;
+    }
+    .playlist-bulk summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 10px 12px;
+      font-family: "Menlo", "Consolas", monospace;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent-dark);
+      background: rgba(255,255,255,0.03);
+    }
+    .playlist-bulk summary::-webkit-details-marker { display: none; }
+    .playlist-bulk-body {
+      padding: 10px 12px 12px;
+      display: grid;
+      gap: 8px;
+    }
     /* ─── misc ────────────────────────────────────────── */
     .muted-note { color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: 7px; }
     .hidden { display: none !important; }
@@ -1159,13 +1182,19 @@ HTML = r"""<!doctype html>
           <h2 class="section-title" id="queueEditorTitle">Queue Editor</h2>
           <div class="playlist-targets" id="playlistTargets"></div>
           <div class="playlist-editor" id="playlistEditor"></div>
+          <details class="playlist-bulk" id="playlistBulk">
+            <summary>Bulk Add Videos</summary>
+            <div class="playlist-bulk-body">
+              <p class="muted-note">Paste one path or URL per line to replace the current queue for the selected playlist target.</p>
+              <label id="videoListWrap">Video Files
+                <textarea id="videoList" spellcheck="false" placeholder="/path/one.mp4&#10;/path/two.mp4"></textarea>
+              </label>
+            </div>
+          </details>
           <div class="actions tight">
             <button class="secondary" id="addQueueItemBtn">Add Video</button>
           </div>
           <p class="muted-note" id="queueEditorNote">Pick which mpv pane you want to edit.</p>
-          <label id="videoListWrap" class="hidden">Video Files
-            <textarea id="videoList" spellcheck="false" placeholder="/path/one.mp4&#10;/path/two.mp4"></textarea>
-          </label>
         </div>
 
         <div>
@@ -2464,7 +2493,7 @@ HTML = r"""<!doctype html>
         return;
       }
       if (!groups.length) {
-        playlistEditor.innerHTML = `<div class="studio-empty">No videos queued yet. Add one below or paste paths into the raw list.</div>`;
+        playlistEditor.innerHTML = `<div class="studio-empty">No videos queued yet. Add one below or open Bulk Add Videos.</div>`;
         return;
       }
       groups.forEach((group, index) => {

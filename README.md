@@ -121,6 +121,7 @@ That service:
 - exposes the same structured mpv controls on the main video pane and extra mpv panes so playlist, fifo, mute, loop-file, audio, video-only/audio-only mode, and shader settings stay consistent across all media panes
 - exposes structured pane-local mpv controls in the pane inspector for audio, mute, loop-file, video-only/audio-only mode, and shader stacks while preserving a smaller raw per-pane options box for anything else
 - rotates playlist preview thumbnails to match the effective mpv pane orientation instead of always rendering them upright
+- keeps playlist thumbnails fitted inside their preview frame instead of cropping them, and moves bulk queue editing into a collapsed section under the playlist editor
 - lets you split the selected pane vertically or horizontally from the studio itself
 - treats the old layout presets as starter suggestions instead of the main editing surface
 - moves scene rules, raw config, and raw mpv option text under Advanced
