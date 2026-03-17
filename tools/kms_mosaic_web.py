@@ -3536,10 +3536,18 @@ HTML = r"""<!doctype html>
         }
         pc.addEventListener("track", (event) => {
           remoteStream.addTrack(event.track);
+          previewVideo.muted = true;
+          previewVideo.autoplay = true;
+          previewVideo.playsInline = true;
+          previewVideo.setAttribute("muted", "");
+          previewVideo.setAttribute("autoplay", "");
+          previewVideo.setAttribute("playsinline", "");
           previewVideo.srcObject = remoteStream;
-          previewVideo.play().catch(() => {});
+          const ensurePlay = () => previewVideo.play().catch(() => {});
+          ensurePlay();
           previewVideo.onloadedmetadata = () => syncWebRtcPreviewGeometry();
           previewVideo.onresize = () => syncWebRtcPreviewGeometry();
+          previewVideo.oncanplay = () => ensurePlay();
         });
         pc.addEventListener("connectionstatechange", () => {
           if (pc !== webrtcPeer) return;
