@@ -121,8 +121,10 @@ That service:
 - exposes the same structured mpv controls on the video pane and extra mpv panes so playlist, playlist-extended, fifo, mute, loop-file, audio, video-only/audio-only mode, shader settings, mpv log output, panscan, and video rotation stay consistent across all media panes
 - gives the Media section its own pane target bar, so the same per-mpv-pane fields are editable there instead of only through the selected pane inspector
 - exposes structured pane-local mpv controls in the pane inspector for audio, mute, loop-file, video-only/audio-only mode, and shader stacks while preserving a smaller raw per-pane options box for anything else
-- rotates playlist preview thumbnails to match the effective mpv pane orientation instead of always rendering them upright
-- keeps playlist thumbnails fitted inside their preview frame instead of cropping them, and moves bulk queue editing into a collapsed section under the playlist editor
+- rotates playlist preview thumbnails to match the effective KMS rotation plus pane-specific video rotation instead of always rendering them upright
+- sizes playlist thumbnails from the selected pane's actual layout geometry and panscan behavior, including portrait-pane treatments
+- keeps playlist thumbnails fitted inside their preview frame, overlays video durations on the preview, and moves bulk queue editing into a collapsed section under the playlist editor
+- keeps the terminal-pane command editor focused on terminal panes only, so mpv panes are configured through the playlist/media surfaces instead of the Panes section
 - lets you split the selected pane vertically or horizontally from the studio itself
 - treats the old layout presets as starter suggestions instead of the main editing surface
 - moves scene rules, raw config, and raw mpv option text under Advanced

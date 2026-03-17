@@ -72,6 +72,11 @@
 - Changed playlist thumbnails to fit within their preview frame instead of
   cropping, and restored bulk queue editing as a collapsed section beneath the
   playlist list.
+- Tightened playlist thumbnails further so they follow pane geometry, pane
+  panscan, effective KMS rotation, pane-local video rotation, and inline
+  duration overlays.
+- Updated the web Panes section to show terminal panes only, keeping mpv pane
+  editing on the dedicated playlist and media surfaces.
 - Reworked the web UI around a split-tree-first Layout Studio, with live split
   buttons, rotation-aware studio geometry, layout suggestions, Advanced
   demotion for legacy scene/raw fields, and structured global mpv controls for
