@@ -239,7 +239,7 @@ with the Unraid `plugin install` command. The plugin:
 
 - installs the packaged `kms_mosaic` binary
 - installs the web UI under `/usr/local/bin/kms_mosaic_web.py`
-- adds an Unraid page at `Tools -> KMS Mosaic`, and the Plugins tab launches that page directly
+- adds an Unraid settings entry for `KMS Mosaic`, and the Plugins tab launches that same page directly
 - proxies the standalone editor APIs through the plugin page so the full layout/media/playlist editor runs inside the Unraid settings page instead of an iframe
 - manages boot/start/stop/restart for both `kms_mosaic` and the web UI
 - stores plugin settings in `/boot/config/plugins/kms.mosaic/kms.mosaic.cfg`
