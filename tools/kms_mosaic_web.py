@@ -1654,6 +1654,7 @@ HTML = r"""<!doctype html>
   <script>
     const layoutNames = ["stack", "row", "2x1", "1x2", "2over1", "1over2", "overlay"];
     const previewVideo = document.getElementById("previewVideo");
+    const previewStage = document.querySelector(".preview-stage");
     const previewLayout = document.querySelector(".preview-layout");
     const layoutSelect = document.getElementById("layout");
     const paneList = document.getElementById("paneList");
@@ -3508,12 +3509,19 @@ HTML = r"""<!doctype html>
       applyPreviewGeometry();
     }
 
+    function setPreviewStageState(message, idle) {
+      if (!previewStage) return;
+      previewStage.dataset.previewStatus = message || "";
+      previewStage.classList.toggle("is-idle", !!idle);
+    }
+
     async function startLivePreviewStream() {
       stopLivePreviewStream();
       if (document.hidden) return;
       if (!window.RTCPeerConnection) {
         throw new Error("This browser does not support the WebRTC preview");
       }
+      setPreviewStageState("Connecting preview…", true);
       try {
         const pc = new RTCPeerConnection({ iceServers: [] });
         webrtcPeer = pc;
@@ -3548,14 +3556,17 @@ HTML = r"""<!doctype html>
           previewVideo.onloadedmetadata = () => syncWebRtcPreviewGeometry();
           previewVideo.onresize = () => syncWebRtcPreviewGeometry();
           previewVideo.oncanplay = () => ensurePlay();
+          setPreviewStageState("", false);
         });
         pc.addEventListener("connectionstatechange", () => {
           if (pc !== webrtcPeer) return;
           if (pc.connectionState === "connected") {
             setStatus("Live preview connected over WebRTC.", false, true);
+            setPreviewStageState("", false);
             return;
           }
           if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+            setPreviewStageState("Preview reconnecting…", true);
             if (webrtcRetryTimer) clearTimeout(webrtcRetryTimer);
             webrtcRetryTimer = setTimeout(() => {
               startLivePreviewStream().catch(err => setStatus(err.message || "Live preview reconnect failed", true));
@@ -3578,6 +3589,7 @@ HTML = r"""<!doctype html>
         await pc.setRemoteDescription(payload);
       } catch (err) {
         stopLivePreviewStream();
+        setPreviewStageState("Preview unavailable", true);
         throw err;
       }
     }
@@ -3592,6 +3604,7 @@ HTML = r"""<!doctype html>
         previewVideo.srcObject = null;
         previewVideo.onloadedmetadata = null;
         previewVideo.onresize = null;
+        previewVideo.oncanplay = null;
       }
       if (webrtcStream) {
         webrtcStream.getTracks().forEach(track => track.stop());
@@ -3608,6 +3621,7 @@ HTML = r"""<!doctype html>
         livePreviewController = null;
       }
       if (livePreviewUrl) livePreviewUrl = null;
+      setPreviewStageState("Preview offline", true);
     }
 
     function getPreviewCorrection() {
