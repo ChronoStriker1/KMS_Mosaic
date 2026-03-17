@@ -3,7 +3,7 @@
   name="kms.mosaic"
   author="OpenAI / chronostriker1"
   version="2026.03.17"
-  launch="Settings/KMSMosaic"
+  launch="Tools/KMSMosaic"
   pluginURL="https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/unraid-plugin/kms.mosaic.plg"
   icon="desktop">
 
