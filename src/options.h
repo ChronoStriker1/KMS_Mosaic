@@ -31,6 +31,9 @@ typedef struct {
     int video_cap;
     const char *playlist_path;
     const char *playlist_ext;
+    const char **mpv_opts;
+    int n_mpv_opts;
+    int cap_mpv_opts;
 } pane_media_config;
 
 typedef struct {
@@ -97,6 +100,7 @@ bool parse_roles_string(const char *s, int *roles, int role_count);
 void push_video(options_t *opt, const char *path);
 void push_pane_video(pane_media_config *pane_media, const char *path);
 void push_video_opt(video_item *vi, const char *kv);
+void push_pane_mpv_opt(pane_media_config *pane_media, const char *kv);
 const char *trim(char *s);
 void parse_playlist_ext(options_t *opt, const char *file);
 void mpv_append_line(mpv_handle *mpv, const char *line);

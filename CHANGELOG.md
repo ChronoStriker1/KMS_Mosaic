@@ -39,6 +39,8 @@
   groundwork for the future split-tree editor.
 - Added pane-local mpv support so non-primary panes can now be configured as
   media panes with their own playlist or video inputs.
+- Added pane-local mpv option support so each mpv pane can now override the
+  global `--mpv-opt` set with its own repeatable `--pane-mpv-opt N K=V` flags.
 - Wired pane-local mpv wakeups into the compositor poll loop and disabled the
   direct-render shortcut when pane-local media is active, avoiding multi-pane
   media regressions.

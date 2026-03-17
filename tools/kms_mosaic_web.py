@@ -56,6 +56,7 @@ def empty_state() -> dict[str, Any]:
         "pane_playlists": ["", ""],
         "pane_playlist_extended": ["", ""],
         "pane_video_paths": [[], []],
+        "pane_mpv_opts": [[], []],
         "video_paths": [],
         "playlist": "",
         "playlist_extended": "",
@@ -88,6 +89,7 @@ def ensure_panes(state: dict[str, Any]) -> None:
     pane_playlists = list(state.get("pane_playlists", []))
     pane_playlist_extended = list(state.get("pane_playlist_extended", []))
     pane_video_paths = [list(paths) for paths in state.get("pane_video_paths", [])]
+    pane_mpv_opts = [list(opts) for opts in state.get("pane_mpv_opts", [])]
     while len(pane_commands) < pane_count:
         pane_commands.append(DEFAULT_PANE_COMMANDS[0] if len(pane_commands) == 0 else "")
     while len(pane_types) < pane_count:
@@ -98,11 +100,14 @@ def ensure_panes(state: dict[str, Any]) -> None:
         pane_playlist_extended.append("")
     while len(pane_video_paths) < pane_count:
         pane_video_paths.append([])
+    while len(pane_mpv_opts) < pane_count:
+        pane_mpv_opts.append([])
     state["pane_commands"] = pane_commands[:pane_count]
     state["pane_types"] = pane_types[:pane_count]
     state["pane_playlists"] = pane_playlists[:pane_count]
     state["pane_playlist_extended"] = pane_playlist_extended[:pane_count]
     state["pane_video_paths"] = pane_video_paths[:pane_count]
+    state["pane_mpv_opts"] = pane_mpv_opts[:pane_count]
 
 
 def parse_config_text(text: str) -> dict[str, Any]:
@@ -207,6 +212,13 @@ def parse_config_text(text: str) -> dict[str, Any]:
                 ensure_panes(state)
                 state["pane_types"][pane_index] = "mpv"
                 state["pane_video_paths"][pane_index].append(tokens[i + 2])
+                i += 3
+            elif tok == "--pane-mpv-opt" and i + 2 < len(tokens):
+                pane_index = max(0, int(tokens[i + 1]) - 1)
+                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
+                ensure_panes(state)
+                state["pane_types"][pane_index] = "mpv"
+                state["pane_mpv_opts"][pane_index].append(tokens[i + 2])
                 i += 3
             elif tok == "--layout" and nxt is not None:
                 state["layout"] = nxt
@@ -323,6 +335,7 @@ def serialize_config(state: dict[str, Any]) -> str:
     pane_playlists = list(state.get("pane_playlists", []))
     pane_playlist_extended = list(state.get("pane_playlist_extended", []))
     pane_video_paths = [list(paths) for paths in state.get("pane_video_paths", [])]
+    pane_mpv_opts = [list(opts) for opts in state.get("pane_mpv_opts", [])]
     for idx, cmd in enumerate(pane_commands):
         pane_type = pane_types[idx] if idx < len(pane_types) else "terminal"
         if pane_type == "mpv":
@@ -330,6 +343,7 @@ def serialize_config(state: dict[str, Any]) -> str:
             playlist = pane_playlists[idx] if idx < len(pane_playlists) else ""
             playlist_ext = pane_playlist_extended[idx] if idx < len(pane_playlist_extended) else ""
             videos = pane_video_paths[idx] if idx < len(pane_video_paths) else []
+            mpv_opts = pane_mpv_opts[idx] if idx < len(pane_mpv_opts) else []
             if playlist:
                 lines.append(f"--pane-playlist {idx + 1} {shlex.quote(str(playlist))}")
             if playlist_ext:
@@ -337,6 +351,9 @@ def serialize_config(state: dict[str, Any]) -> str:
             for video_path in videos:
                 if str(video_path).strip():
                     lines.append(f"--pane-video {idx + 1} {shlex.quote(str(video_path))}")
+            for opt in mpv_opts:
+                if str(opt).strip():
+                    lines.append(f"--pane-mpv-opt {idx + 1} {shlex.quote(str(opt))}")
             continue
         if not cmd:
             continue
@@ -405,133 +422,142 @@ HTML = r"""<!doctype html>
   <title>KMS Mosaic — Config</title>
   <style>
     :root {
-      --paper: rgba(255, 251, 244, 0.88);
-      --ink: #191816;
-      --muted: #6f6a62;
-      --line: rgba(34, 31, 26, 0.12);
+      --paper: rgba(255, 251, 244, 0.92);
+      --ink: #1a1714;
+      --muted: #72685e;
+      --line: rgba(34, 31, 26, 0.11);
+      --line-strong: rgba(34, 31, 26, 0.22);
       --accent: #b5532f;
       --accent-dark: #6d2f17;
       --danger: #b3412b;
-      --shadow: 0 20px 48px rgba(54, 43, 32, 0.10);
-      --surface: rgba(255, 255, 255, 0.46);
-      --surface-high: rgba(255, 255, 255, 0.70);
-      --surface-input: rgba(255, 255, 255, 0.76);
+      --shadow: 0 16px 40px rgba(54, 43, 32, 0.10), 0 2px 8px rgba(54, 43, 32, 0.06);
+      --surface: rgba(255, 255, 255, 0.42);
+      --surface-high: rgba(255, 255, 255, 0.68);
+      --surface-input: rgba(255, 255, 255, 0.72);
       --surface-input-focus: #fffdf8;
-      --surface-pill: rgba(255, 255, 255, 0.50);
-      --hero-grad: linear-gradient(120deg, rgba(181,83,47,0.08), rgba(255,255,255,0.18) 40%, rgba(109,47,23,0.04)),
-        linear-gradient(180deg, rgba(255,255,255,0.64), rgba(255,255,255,0.08));
+      --r: 22px;
+      --r-sm: 12px;
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --paper: rgba(22, 18, 14, 0.92);
+        --paper: rgba(21, 17, 13, 0.94);
         --ink: #ede7dd;
         --muted: #847c72;
-        --line: rgba(255, 240, 210, 0.10);
+        --line: rgba(255, 240, 210, 0.09);
+        --line-strong: rgba(255, 240, 210, 0.18);
         --accent: #cf7853;
         --accent-dark: #e8a07a;
         --danger: #d96b4e;
-        --shadow: 0 20px 48px rgba(0, 0, 0, 0.45);
+        --shadow: 0 16px 40px rgba(0, 0, 0, 0.50), 0 2px 8px rgba(0, 0, 0, 0.30);
         --surface: rgba(255, 255, 255, 0.05);
         --surface-high: rgba(255, 255, 255, 0.09);
         --surface-input: rgba(255, 255, 255, 0.07);
         --surface-input-focus: rgba(255, 255, 255, 0.11);
-        --surface-pill: rgba(255, 255, 255, 0.07);
-        --hero-grad: linear-gradient(120deg, rgba(181,83,47,0.12), rgba(255,255,255,0.03) 40%, rgba(109,47,23,0.07)),
-          linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
       }
       body {
         background:
-          radial-gradient(circle at top left, rgba(181, 83, 47, 0.11), transparent 28%),
-          radial-gradient(circle at bottom right, rgba(109, 47, 23, 0.09), transparent 32%),
-          linear-gradient(180deg, #100d09 0%, #070504 100%);
+          radial-gradient(ellipse at 20% 0%, rgba(181, 83, 47, 0.14) 0%, transparent 55%),
+          radial-gradient(ellipse at 80% 100%, rgba(109, 47, 23, 0.10) 0%, transparent 50%),
+          #0a0806;
       }
       #rawConfig {
-        background: #0e0c0a;
+        background: #0c0a08;
         border-color: rgba(255,255,255,0.10);
       }
+      .app-header {
+        background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
+        border-bottom-color: rgba(255,240,210,0.08);
+      }
+      .accent-bar { background: linear-gradient(180deg, rgba(207,120,83,0.8), rgba(181,83,47,0.6)); }
     }
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      margin: 0;
       color: var(--ink);
       background:
-        radial-gradient(circle at top left, rgba(181, 83, 47, 0.10), transparent 24%),
-        radial-gradient(circle at bottom right, rgba(109, 47, 23, 0.08), transparent 30%),
-        linear-gradient(180deg, #f8f4ee 0%, #ebe5db 100%);
+        radial-gradient(ellipse at 20% 0%, rgba(181, 83, 47, 0.09) 0%, transparent 55%),
+        radial-gradient(ellipse at 80% 100%, rgba(109, 47, 23, 0.07) 0%, transparent 50%),
+        #f0ebe2;
       font-family: -apple-system, BlinkMacSystemFont, "Avenir Next", "Helvetica Neue", sans-serif;
       min-height: 100vh;
+      font-size: 13px;
+      line-height: 1.5;
     }
+    /* ─── layout ─────────────────────────────────────── */
     .grain::before {
       content: "";
       position: fixed;
       inset: 0;
       background-image:
-        linear-gradient(rgba(24,20,16,0.02) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(24,20,16,0.02) 1px, transparent 1px);
-      background-size: 32px 32px;
+        linear-gradient(rgba(24,20,16,0.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(24,20,16,0.018) 1px, transparent 1px);
+      background-size: 28px 28px;
       pointer-events: none;
-      opacity: 0.7;
     }
     .shell {
-      width: min(1540px, calc(100vw - 32px));
-      margin: 16px auto 28px;
+      width: min(1520px, calc(100vw - 24px));
+      margin: 12px auto 24px;
       display: grid;
-      grid-template-columns: 1.28fr 0.92fr;
-      gap: 16px;
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+      gap: 12px;
       align-items: start;
     }
     .card {
       background: var(--paper);
       border: 1px solid var(--line);
-      border-radius: 24px;
+      border-radius: var(--r);
       box-shadow: var(--shadow);
-      backdrop-filter: blur(16px);
+      backdrop-filter: blur(20px);
       overflow: hidden;
     }
-    .left-rail {
-      position: sticky;
-      top: 16px;
-    }
-    .hero {
-      padding: 24px 24px 18px;
-      background: var(--hero-grad);
-      border-bottom: 1px solid var(--line);
-    }
-    .eyebrow {
-      color: var(--accent);
-      font-family: "Menlo", "Consolas", monospace;
-      letter-spacing: 0.20em;
-      font-size: 11px;
-      text-transform: uppercase;
-      margin-bottom: 14px;
-    }
-    .meta {
+    .left-rail { position: sticky; top: 12px; }
+    /* ─── app header ──────────────────────────────────── */
+    .app-header {
       display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px 0 0;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0.25));
+      min-height: 44px;
+      overflow: hidden;
     }
-    .pill {
-      padding: 7px 12px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      background: var(--surface-pill);
-      color: var(--accent-dark);
+    .accent-bar {
+      width: 4px;
+      align-self: stretch;
+      flex-shrink: 0;
+      background: linear-gradient(180deg, rgba(181,83,47,0.9), rgba(109,47,23,0.7));
+    }
+    .app-name {
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      white-space: nowrap;
+    }
+    .config-path {
       font-family: "Menlo", "Consolas", monospace;
       font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      flex: 1;
     }
-    .stage {
-      padding: 18px 20px 20px;
-    }
+    /* ─── preview ─────────────────────────────────────── */
+    .stage { padding: 12px; }
+    .preview-layout { display: block; }
+    .preview-layout.portrait .preview-wrap { aspect-ratio: 9 / 16; max-height: 440px; margin: 0 auto; }
+    .preview-layout.landscape .preview-wrap { aspect-ratio: 16 / 9; }
     .preview-wrap {
       position: relative;
-      width: min(100%, 560px);
+      width: 100%;
       aspect-ratio: 16 / 9;
-      border-radius: 18px;
-      background: linear-gradient(180deg, #1c1a18, #0d0c0b);
-      border: 1px solid rgba(0,0,0,0.25);
+      border-radius: 14px;
+      background: linear-gradient(180deg, #1a1714, #0c0b09);
+      border: 1px solid rgba(0,0,0,0.28);
       overflow: hidden;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
-      margin: 0 auto;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04), 0 4px 12px rgba(0,0,0,0.18);
     }
     .preview-stage {
       position: absolute;
@@ -540,243 +566,241 @@ HTML = r"""<!doctype html>
       align-items: center;
       justify-content: center;
     }
-    .preview-canvas {
-      width: 100%;
-      height: 100%;
-      display: block;
-      background: #080706;
+    .preview-canvas { width: 100%; height: 100%; display: block; background: #070605; }
+    .preview-image { display: none; }
+    .preview-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
     }
-    .preview-image {
-      display: none;
-    }
-    .preview-controls {
-      margin-top: 10px;
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 220px));
-      gap: 10px;
-    }
-    .panel-body {
-      padding: 18px;
-      display: grid;
-      gap: 14px;
-    }
-    .panel-body > div {
-      border: 1px solid var(--line);
-      background: var(--surface);
-      border-radius: 18px;
-      padding: 15px;
-    }
-    .panel-wide {
-      grid-column: 1 / -1;
-    }
-    .section-title {
-      margin: 0 0 11px;
+    .preview-bar label {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted);
       font-size: 11px;
-      letter-spacing: 0.16em;
+      font-weight: 500;
+    }
+    .preview-bar select {
+      width: auto;
+      padding: 5px 8px;
+      font-size: 12px;
+      border-radius: 8px;
+    }
+    /* ─── panel ───────────────────────────────────────── */
+    .panel-body {
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .panel-body > div,
+    details.advanced-block {
+      border: none;
+      border-radius: 0;
+      background: none;
+      padding: 12px 14px;
+      border-top: 1px solid var(--line);
+    }
+    .panel-body > div:first-child,
+    details.advanced-block:first-child { border-top: none; }
+    .panel-body > div.panel-wide { border-top: 1px solid var(--line); }
+    .panel-wide { width: 100%; }
+    /* ─── section headings ────────────────────────────── */
+    .section-title {
+      font-size: 10px;
+      letter-spacing: 0.15em;
       text-transform: uppercase;
       color: var(--accent);
       font-family: "Menlo", "Consolas", monospace;
+      margin-bottom: 9px;
     }
+    /* ─── advanced block ──────────────────────────────── */
     details.advanced-block {
-      border: 1px solid var(--line);
-      background: var(--surface);
-      border-radius: 18px;
-      padding: 0;
       overflow: hidden;
     }
     details.advanced-block > summary {
       list-style: none;
       cursor: pointer;
-      padding: 15px 15px 14px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
       font-family: "Menlo", "Consolas", monospace;
-      letter-spacing: 0.16em;
+      letter-spacing: 0.15em;
       text-transform: uppercase;
       color: var(--accent);
-      font-size: 11px;
+      font-size: 10px;
+      padding: 0;
+      margin: 0;
     }
     details.advanced-block > summary::-webkit-details-marker { display: none; }
-    details.advanced-block > summary::after {
-      content: "+";
-      font-size: 15px;
-      letter-spacing: 0;
-    }
-    details.advanced-block[open] > summary::after {
-      content: "−";
-    }
+    details.advanced-block > summary::after { content: "+"; font-size: 14px; letter-spacing: 0; }
+    details.advanced-block[open] > summary::after { content: "−"; }
     .advanced-body {
-      display: grid;
-      gap: 14px;
-      padding: 0 15px 15px;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      margin-top: 12px;
     }
+    .advanced-body > div {
+      padding: 12px 0 0;
+      border-top: 1px solid var(--line);
+    }
+    /* ─── grid layouts ────────────────────────────────── */
     .grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 11px;
+      gap: 9px;
     }
     .suggestion-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-      gap: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 7px;
     }
     .suggestion-btn {
       text-align: left;
-      border-radius: 14px;
+      border-radius: var(--r-sm);
       border: 1px solid var(--line);
       background: var(--surface-high);
-      padding: 11px 12px 10px;
-      transition: opacity 120ms ease, transform 120ms ease;
+      padding: 9px 10px 8px;
+      transition: transform 100ms ease, box-shadow 100ms ease;
+      cursor: pointer;
     }
-    .suggestion-btn:hover { transform: translateY(-1px); }
-    .suggestion-btn strong {
-      display: block;
-      font-size: 13px;
-      margin-bottom: 4px;
+    .suggestion-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(181,83,47,0.12);
     }
-    .suggestion-btn span {
-      display: block;
-      color: var(--muted);
-      font-size: 11px;
-      line-height: 1.4;
-    }
+    .suggestion-btn strong { display: block; font-size: 13px; margin-bottom: 3px; }
+    .suggestion-btn span { display: block; color: var(--muted); font-size: 11px; line-height: 1.35; }
+    /* ─── forms ───────────────────────────────────────── */
     label {
       display: grid;
-      gap: 6px;
+      gap: 5px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 500;
+      letter-spacing: 0.01em;
     }
     input, select, textarea {
       width: 100%;
-      border-radius: 11px;
-      border: 1px solid var(--line);
+      border-radius: var(--r-sm);
+      border: 1px solid var(--line-strong);
       background: var(--surface-input);
       color: var(--ink);
-      padding: 10px 12px;
+      padding: 8px 11px;
       font: inherit;
       font-size: 13px;
       outline: none;
-      transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+      transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
     }
     textarea {
-      min-height: 120px;
+      min-height: 100px;
       resize: vertical;
       font-family: "Menlo", "Consolas", monospace;
       font-size: 12px;
       line-height: 1.6;
     }
     input:focus, select:focus, textarea:focus {
-      border-color: rgba(181,83,47,0.50);
+      border-color: var(--accent);
       background: var(--surface-input-focus);
-      box-shadow: 0 0 0 3px rgba(181,83,47,0.09);
+      box-shadow: 0 0 0 3px rgba(181,83,47,0.10);
     }
-    .pane-list {
-      display: grid;
-      gap: 9px;
-    }
+    /* ─── pane list ───────────────────────────────────── */
+    .pane-list { display: grid; gap: 7px; }
     .pane-item {
       border: 1px solid var(--line);
-      border-radius: 14px;
+      border-radius: var(--r-sm);
       background: var(--surface-high);
-      padding: 12px;
+      padding: 10px 11px;
     }
     .pane-head {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 9px;
+      margin-bottom: 8px;
     }
     .pane-name {
       font-family: "Menlo", "Consolas", monospace;
-      font-size: 11px;
+      font-size: 10px;
       letter-spacing: 0.12em;
       color: var(--accent-dark);
       text-transform: uppercase;
     }
-    .mini {
-      color: var(--muted);
-      font-size: 12px;
-    }
+    .mini { color: var(--muted); font-size: 12px; }
+    /* ─── checkboxes ──────────────────────────────────── */
     .checks {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 6px 14px;
+      gap: 2px 12px;
     }
     .check {
       display: flex;
       align-items: center;
-      gap: 9px;
-      padding: 6px 0;
+      gap: 8px;
+      padding: 5px 0;
       color: var(--ink);
       font-size: 13px;
     }
-    .check input {
-      width: 15px;
-      height: 15px;
-      margin: 0;
-      accent-color: var(--accent);
-    }
-    .actions {
-      display: flex;
-      gap: 9px;
-      flex-wrap: wrap;
-    }
-    .actions.tight {
-      gap: 7px;
-    }
+    .check input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+    /* ─── buttons ─────────────────────────────────────── */
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .actions.tight { gap: 6px; }
     button {
       border: 1px solid transparent;
-      border-radius: 999px;
-      padding: 10px 16px 9px;
+      border-radius: 7px;
+      padding: 7px 13px;
       font: inherit;
-      font-size: 13px;
+      font-size: 12px;
       cursor: pointer;
-      transition: transform 120ms ease, opacity 120ms ease, background 120ms ease, border-color 120ms ease;
+      transition: transform 100ms ease, box-shadow 100ms ease;
       font-weight: 600;
+      white-space: nowrap;
     }
-    button:hover { transform: translateY(-1px); }
+    button:hover { transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0,0,0,0.10); }
     .primary {
-      background: linear-gradient(135deg, var(--accent), #cf7853);
+      background: linear-gradient(135deg, var(--accent) 0%, #d4764e 100%);
       color: #fff9f4;
-      border-color: rgba(109,47,23,0.14);
+      border-color: rgba(109,47,23,0.18);
+      box-shadow: 0 2px 6px rgba(181,83,47,0.22);
     }
+    .primary:hover { box-shadow: 0 4px 14px rgba(181,83,47,0.32); }
     .secondary {
       background: var(--surface-high);
       color: var(--ink);
-      border-color: var(--line);
+      border-color: var(--line-strong);
     }
     .status {
-      min-height: 20px;
+      min-height: 18px;
       color: var(--muted);
-      font-size: 13px;
-      padding: 2px 2px 0;
+      font-size: 12px;
+      padding: 2px 0 0;
     }
     .status.error { color: var(--danger); }
+    /* ─── raw config ──────────────────────────────────── */
     #rawConfig {
-      min-height: 300px;
-      background: #171513;
-      color: #f5efe6;
-      border-color: rgba(255,255,255,0.08);
+      min-height: 280px;
+      background: #161310;
+      color: #f0ead9;
+      border-color: rgba(255,255,255,0.07);
     }
+    /* ─── studio ──────────────────────────────────────── */
     .studio-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.9fr);
-      gap: 14px;
+      grid-template-columns: minmax(0, 1.5fr) minmax(260px, 0.85fr);
+      gap: 10px;
       align-items: start;
     }
     .studio-board {
       position: relative;
-      min-height: 360px;
       aspect-ratio: 16 / 9;
-      border-radius: 20px;
+      border-radius: 16px;
       overflow: hidden;
       border: 1px solid var(--line);
       background:
-        radial-gradient(circle at top left, rgba(207,120,83,0.16), transparent 44%),
-        linear-gradient(180deg, #140f0c, #211813 65%, #120e0c);
+        radial-gradient(circle at 25% 25%, rgba(207,120,83,0.18), transparent 50%),
+        linear-gradient(160deg, #160f0b 0%, #0f0b09 100%);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
     }
     .studio-board::before {
@@ -784,276 +808,222 @@ HTML = r"""<!doctype html>
       position: absolute;
       inset: 0;
       background-image:
-        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
-      background-size: 32px 32px;
+        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+      background-size: 28px 28px;
       pointer-events: none;
     }
     .studio-handle {
       position: absolute;
       border: 0;
       padding: 0;
-      margin: 0;
       background: rgba(255, 247, 230, 0.92);
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.18), 0 8px 20px rgba(0,0,0,0.20);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.18), 0 6px 16px rgba(0,0,0,0.18);
       z-index: 3;
       touch-action: none;
     }
-    .studio-handle.col {
-      width: 12px;
-      margin-left: -6px;
-      cursor: ew-resize;
-      border-radius: 999px;
-    }
-    .studio-handle.row {
-      height: 12px;
-      margin-top: -6px;
-      cursor: ns-resize;
-      border-radius: 999px;
-    }
+    .studio-handle.col { width: 10px; margin-left: -5px; cursor: ew-resize; border-radius: 999px; }
+    .studio-handle.row { height: 10px; margin-top: -5px; cursor: ns-resize; border-radius: 999px; }
     .studio-handle::after {
       content: "";
       position: absolute;
       inset: 2px;
       border-radius: inherit;
-      background: linear-gradient(180deg, rgba(181,83,47,0.95), rgba(109,47,23,0.95));
+      background: linear-gradient(180deg, var(--accent), var(--accent-dark));
     }
     .studio-card {
       position: absolute;
-      border-radius: 17px;
+      border-radius: 14px;
       border: 1px solid rgba(255,255,255,0.08);
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03), 0 16px 36px rgba(0,0,0,0.22);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03), 0 12px 28px rgba(0,0,0,0.24);
       overflow: hidden;
       cursor: pointer;
-      transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
       display: grid;
       align-content: space-between;
-      padding: 12px;
+      padding: 10px;
     }
-    .studio-card:hover {
-      transform: translateY(-2px);
-      border-color: rgba(255,255,255,0.18);
-    }
+    .studio-card:hover { border-color: rgba(255,255,255,0.20); }
     .studio-card.selected {
-      border-color: rgba(255,244,221,0.72);
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12), 0 0 0 3px rgba(207,120,83,0.22), 0 16px 36px rgba(0,0,0,0.28);
+      border-color: rgba(255,240,200,0.70);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10), 0 0 0 2px rgba(207,120,83,0.28), 0 12px 28px rgba(0,0,0,0.30);
     }
-    .studio-card.video {
-      background: linear-gradient(145deg, rgba(109,47,23,0.72), rgba(46,24,15,0.94));
-      color: #fff8f0;
-    }
-    .studio-card.terminal {
-      background: linear-gradient(145deg, rgba(26,33,29,0.9), rgba(10,14,13,0.98));
-      color: #e4f7ec;
-    }
+    .studio-card.video { background: linear-gradient(145deg, rgba(109,47,23,0.75), rgba(46,24,15,0.96)); color: #fff8f0; }
+    .studio-card.terminal { background: linear-gradient(145deg, rgba(22,30,26,0.92), rgba(8,12,11,0.98)); color: #d8f0e2; }
     .studio-top {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
+      gap: 8px;
       font-family: "Menlo", "Consolas", monospace;
-      font-size: 11px;
+      font-size: 10px;
       letter-spacing: 0.12em;
       text-transform: uppercase;
     }
     .studio-tag {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      padding: 5px 9px;
-      border-radius: 999px;
+      gap: 4px;
+      padding: 4px 8px;
+      border-radius: 5px;
       background: rgba(255,255,255,0.08);
       backdrop-filter: blur(6px);
     }
-    .studio-card-body {
-      display: grid;
-      gap: 7px;
-      align-self: end;
-    }
-    .studio-split-actions {
-      display: flex;
-      gap: 6px;
-      margin-top: 8px;
-      flex-wrap: wrap;
-    }
+    .studio-card-body { display: grid; gap: 5px; align-self: end; }
+    .studio-split-actions { display: flex; gap: 5px; margin-top: 6px; flex-wrap: wrap; }
     .studio-split-btn {
       border: 1px solid rgba(255,255,255,0.14);
       background: rgba(255,255,255,0.10);
       color: inherit;
-      padding: 6px 9px;
-      border-radius: 999px;
-      font-size: 11px;
+      padding: 5px 8px;
+      border-radius: 6px;
+      font-size: 10px;
       font-family: "Menlo", "Consolas", monospace;
     }
-    .studio-card-title {
-      font-size: 18px;
-      font-weight: 700;
-      line-height: 1.05;
-      letter-spacing: -0.03em;
-    }
-    .studio-card-meta {
-      font-size: 12px;
-      opacity: 0.82;
-      line-height: 1.45;
-      max-width: 28ch;
-    }
+    .studio-card-title { font-size: 16px; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; }
+    .studio-card-meta { font-size: 11px; opacity: 0.80; line-height: 1.4; max-width: 26ch; }
     .studio-inspector {
-      border-radius: 18px;
+      border-radius: var(--r-sm);
       border: 1px solid var(--line);
       background: var(--surface-high);
-      padding: 14px;
+      padding: 12px;
       display: grid;
-      gap: 12px;
+      gap: 10px;
     }
-    .studio-empty {
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.5;
-    }
-    .playlist-editor {
-      display: grid;
-      gap: 9px;
-    }
+    .studio-empty { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    /* ─── playlist ────────────────────────────────────── */
+    .playlist-editor { display: grid; gap: 7px; }
     .playlist-item {
       border: 1px solid var(--line);
-      border-radius: 14px;
+      border-radius: var(--r-sm);
       background: var(--surface-high);
-      padding: 11px;
+      padding: 9px 10px;
       display: grid;
-      gap: 9px;
+      gap: 8px;
     }
-    .playlist-item.dragging {
-      opacity: 0.55;
-      border-color: rgba(181,83,47,0.45);
-      transform: scale(0.995);
-    }
-    .playlist-item.drag-over {
-      border-color: rgba(181,83,47,0.65);
-      box-shadow: 0 0 0 3px rgba(181,83,47,0.12);
+    .playlist-item.dragging { opacity: 0.5; transform: scale(0.99); }
+    .playlist-item.drag-over { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(181,83,47,0.14); }
+    .playlist-media-cell { width: 120px; display: grid; gap: 4px; align-self: start; }
+    .playlist-duration {
+      color: var(--muted);
+      font-family: "Menlo", "Consolas", monospace;
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      text-align: center;
     }
     .playlist-thumb {
-      width: 132px;
+      width: 120px;
       aspect-ratio: 16 / 9;
-      border-radius: 11px;
+      border-radius: 9px;
       overflow: hidden;
       background:
-        linear-gradient(140deg, rgba(181,83,47,0.18), rgba(25,24,22,0.08)),
-        linear-gradient(180deg, rgba(255,255,255,0.8), rgba(232,224,214,0.55));
+        linear-gradient(140deg, rgba(181,83,47,0.15), transparent),
+        var(--surface-high);
       border: 1px solid var(--line);
       position: relative;
     }
-    .playlist-thumb img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
+    .playlist-thumb img, .playlist-thumb video {
+      width: 100%; height: 100%; object-fit: cover; display: block;
     }
-    .playlist-thumb video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-      background: #110f0d;
-    }
+    .playlist-thumb video { background: #0e0c0a; }
     .playlist-thumb.empty::after {
-      content: "No Preview";
+      content: "—";
       position: absolute;
       inset: 0;
       display: grid;
       place-items: center;
-      color: var(--accent-dark);
-      font-family: "Menlo", "Consolas", monospace;
-      font-size: 11px;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      opacity: 0.72;
+      color: var(--muted);
+      font-size: 16px;
+      opacity: 0.5;
     }
     .playlist-row {
       display: grid;
-      grid-template-columns: auto 132px minmax(0, 1fr) 88px auto auto auto;
-      gap: 9px;
+      grid-template-columns: auto 120px 80px auto auto auto;
+      gap: 8px;
       align-items: center;
     }
+    .playlist-path { width: 100%; grid-column: 1 / -1; margin-top: 1px; }
     .playlist-index {
-      width: 30px;
-      height: 30px;
-      border-radius: 999px;
+      width: 26px; height: 26px;
+      border-radius: 6px;
       display: grid;
       place-items: center;
-      background: rgba(207,120,83,0.14);
+      background: rgba(207,120,83,0.13);
       color: var(--accent-dark);
       font-family: "Menlo", "Consolas", monospace;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 700;
     }
-    .playlist-row input {
-      min-width: 0;
-    }
+    .playlist-row input { min-width: 0; }
     .playlist-repeat {
       text-align: center;
       font-family: "Menlo", "Consolas", monospace;
+      height: 30px;
+      padding: 6px 8px;
     }
+    .playlist-repeat-wrap {
+      display: grid;
+      gap: 3px;
+      align-items: center;
+      justify-items: center;
+      color: var(--muted);
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-family: "Menlo", "Consolas", monospace;
+      width: 80px;
+    }
+    .playlist-repeat-wrap span { display: block; line-height: 9px; }
     .playlist-mini-btn {
-      padding: 8px 11px;
-      border-radius: 10px;
+      padding: 6px 9px;
+      border-radius: 6px;
       background: var(--surface-high);
       border: 1px solid var(--line);
       color: var(--ink);
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 10px;
     }
-    .playlist-mini-btn.danger {
-      color: var(--danger);
-    }
-    .muted-note {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.55;
-    }
-    .hidden {
-      display: none !important;
-    }
+    .playlist-mini-btn.danger { color: var(--danger); }
+    /* ─── misc ────────────────────────────────────────── */
+    .muted-note { color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: 7px; }
+    .hidden { display: none !important; }
+    /* ─── responsive ──────────────────────────────────── */
     @media (max-width: 1100px) {
       .shell { grid-template-columns: 1fr; }
       .left-rail { position: static; }
       .studio-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 680px) {
+      .shell { margin: 8px auto 16px; }
       .grid, .checks { grid-template-columns: 1fr; }
-      .hero { padding: 18px 16px 14px; }
-      .stage, .panel-body { padding: 14px; }
-      .panel-body > div { padding: 13px; }
+      .panel-body > div, details.advanced-block { padding: 10px 12px; }
       .playlist-row { grid-template-columns: auto 1fr; }
-      .playlist-thumb { width: 100%; }
+      .playlist-media-cell, .playlist-thumb { width: 100%; }
     }
   </style>
 </head>
 <body class="grain">
   <div class="shell">
     <section class="card left-rail">
-      <div class="hero">
-        <div class="eyebrow">KMS Mosaic</div>
-        <div class="meta">
-          <div class="pill" id="configPath">Config: ...</div>
-          <div class="pill" id="reloadMode">Reload: watched file reexec</div>
-          <div class="pill" id="visiblePaneCount">Visible Panes: ...</div>
-        </div>
+      <div class="app-header">
+        <div class="accent-bar"></div>
+        <span class="app-name">KMS Mosaic</span>
+        <span id="configPath" class="config-path">—</span>
       </div>
       <div class="stage">
-        <h2 class="section-title">Preview</h2>
-        <div class="preview-wrap" id="preview">
-          <div class="preview-stage">
-            <canvas id="previewCanvas" class="preview-canvas"></canvas>
-            <img id="previewImage" class="preview-image" alt="Current KMS Mosaic output" />
+        <div class="preview-layout" id="preview-outer">
+          <div class="preview-wrap" id="preview">
+            <div class="preview-stage">
+              <canvas id="previewCanvas" class="preview-canvas"></canvas>
+              <img id="previewImage" class="preview-image" alt="Current KMS Mosaic output" />
+            </div>
           </div>
         </div>
-        <div class="preview-controls">
-          <label>Preview Correction
-            <select id="previewCorrection">
-              <option value="0">None</option>
-              <option value="90">Rotate 90</option>
-              <option value="180">Rotate 180</option>
-              <option value="270">Rotate 270</option>
-            </select>
-          </label>
+        <div class="preview-bar">
           <label>Live Preview
             <select id="livePreviewRate">
               <option value="off">Off</option>
@@ -1072,7 +1042,7 @@ HTML = r"""<!doctype html>
           <h2 class="section-title">Layout Studio</h2>
           <div class="studio-grid">
             <div>
-              <div class="actions tight" style="margin-bottom: 12px;">
+              <div class="actions tight" style="margin-bottom:10px;">
                 <button class="secondary" id="addPaneBtn">Add Pane</button>
                 <button class="secondary" id="removePaneBtn">Remove Selected Pane</button>
                 <button class="secondary" id="splitVerticalBtn">Split Vertical</button>
@@ -1244,7 +1214,7 @@ HTML = r"""<!doctype html>
     const previewImage = document.getElementById("previewImage");
     const previewCanvas = document.getElementById("previewCanvas");
     const previewCtx = previewCanvas.getContext("2d");
-    const previewCorrectionEl = document.getElementById("previewCorrection");
+    const previewLayout = document.querySelector(".preview-layout");
     const livePreviewRateEl = document.getElementById("livePreviewRate");
     const layoutSelect = document.getElementById("layout");
     const paneList = document.getElementById("paneList");
@@ -1256,11 +1226,9 @@ HTML = r"""<!doctype html>
     const queueEditorNoteEl = document.getElementById("queueEditorNote");
     const addQueueItemBtn = document.getElementById("addQueueItemBtn");
     const statusEl = document.getElementById("status");
-    const visiblePaneCountEl = document.getElementById("visiblePaneCount");
     let state = null;
     let rawConfigText = "";
     let selectedRole = 0;
-    const previewCorrectionKey = "kms_mosaic_preview_correction";
     const livePreviewRateKey = "kms_mosaic_live_preview_rate";
     let livePreviewTimer = null;
     let livePreviewInFlight = false;
@@ -1362,9 +1330,11 @@ HTML = r"""<!doctype html>
       }
       const playlistPath = state.pane_playlists?.[paneIndex] || "";
       const playlistExtended = state.pane_playlist_extended?.[paneIndex] || "";
+      const paneMpvOpts = Array.isArray(state.pane_mpv_opts?.[paneIndex]) ? state.pane_mpv_opts[paneIndex].slice() : [];
       const noteParts = ["This queue controls the selected mpv pane."];
       if (playlistPath) noteParts.push(`Playlist: ${playlistPath}`);
       if (playlistExtended) noteParts.push(`Extended: ${playlistExtended}`);
+      if (paneMpvOpts.length) noteParts.push(`${paneMpvOpts.length} pane-local mpv option${paneMpvOpts.length === 1 ? "" : "s"}.`);
       return {
         title: `${roleTitle(selectedRole)} Queue`,
         note: noteParts.join(" "),
@@ -1404,6 +1374,17 @@ HTML = r"""<!doctype html>
       return "";
     }
 
+    function formatMediaDuration(totalSeconds) {
+      const seconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const secs = seconds % 60;
+      if (hours > 0) {
+        return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+      }
+      return `${minutes}:${String(secs).padStart(2, "0")}`;
+    }
+
     function compressPlaylistPaths(paths) {
       const input = Array.isArray(paths) ? paths : [];
       const groups = [];
@@ -1433,12 +1414,6 @@ HTML = r"""<!doctype html>
       return role === 0 ? "Main mpv Pane" : slotName(role);
     }
 
-    function visiblePaneCount(nextState) {
-      const videoCount = nextState?.flags?.no_video ? 0 : 1;
-      const terminalCount = nextState?.flags?.no_panes ? 0 : Math.max(1, Number(nextState?.pane_count || 2));
-      return videoCount + terminalCount;
-    }
-
     function readInt(id, fallback) {
       const value = parseInt(document.getElementById(id).value, 10);
       return Number.isFinite(value) ? value : fallback;
@@ -1454,11 +1429,15 @@ HTML = r"""<!doctype html>
       nextState.pane_video_paths = Array.isArray(nextState.pane_video_paths)
         ? nextState.pane_video_paths.slice(0, count).map(paths => Array.isArray(paths) ? paths.slice() : [])
         : [];
+      nextState.pane_mpv_opts = Array.isArray(nextState.pane_mpv_opts)
+        ? nextState.pane_mpv_opts.slice(0, count).map(opts => Array.isArray(opts) ? opts.slice() : [])
+        : [];
       while (nextState.pane_commands.length < count) nextState.pane_commands.push("");
       while (nextState.pane_types.length < count) nextState.pane_types.push("terminal");
       while (nextState.pane_playlists.length < count) nextState.pane_playlists.push("");
       while (nextState.pane_playlist_extended.length < count) nextState.pane_playlist_extended.push("");
       while (nextState.pane_video_paths.length < count) nextState.pane_video_paths.push([]);
+      while (nextState.pane_mpv_opts.length < count) nextState.pane_mpv_opts.push([]);
     }
 
     function skipTreeWs(spec, index) {
@@ -1795,8 +1774,8 @@ HTML = r"""<!doctype html>
           paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
         } else if (mode === 4) {
           const htop = Math.floor(screen.h * splitPct / 100);
-          slots[0] = { x: 0, y: 0, w: screen.w, h: screen.h - htop };
           const paneRects = tileRects({ x: 0, y: screen.h - htop, w: screen.w, h: htop }, paneCount);
+          slots[0] = { x: 0, y: 0, w: screen.w, h: screen.h - htop };
           paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
         } else if (mode === 5) {
           const htop = Math.floor(screen.h * splitPct / 100);
@@ -1823,41 +1802,49 @@ HTML = r"""<!doctype html>
             s.push({ x: 0, y: 0, w: screen.w, h: screen.h - htop });
           }
         } else if (mode === 0) {
-          const h1 = Math.floor(screen.h / 3);
-          const h2 = h1;
-          s.push({ x: 0, y: screen.h - h1, w: screen.w, h: h1 });
-          s.push({ x: 0, y: screen.h - h1 - h2, w: screen.w, h: h2 });
-          s.push({ x: 0, y: 0, w: screen.w, h: screen.h - h1 - h2 });
+          const h = Math.floor(screen.h / 3);
+          const h2 = h;
+          s.push({ x: 0, y: screen.h - h, w: screen.w, h });
+          s.push({ x: 0, y: screen.h - h - h2, w: screen.w, h: h2 });
+          s.push({ x: 0, y: 0, w: screen.w, h: screen.h - h - h2 });
         } else if (mode === 1) {
-          const w1 = Math.floor(screen.w / 3);
-          const w2 = w1;
-          s.push({ x: 0, y: 0, w: w1, h: screen.h });
-          s.push({ x: w1, y: 0, w: w2, h: screen.h });
-          s.push({ x: w1 + w2, y: 0, w: screen.w - w1 - w2, h: screen.h });
+          const w = Math.floor(screen.w / 3);
+          const w2 = w;
+          s.push({ x: 0, y: 0, w, h: screen.h });
+          s.push({ x: w, y: 0, w: w2, h: screen.h });
+          s.push({ x: w + w2, y: 0, w: screen.w - w - w2, h: screen.h });
         } else if (mode === 2) {
           const wleft = Math.floor(screen.w * colPct / 100);
+          const wright = screen.w - wleft;
           const htop = Math.floor(screen.h * splitPct / 100);
+          const hbot = screen.h - htop;
           s.push({ x: 0, y: screen.h - htop, w: wleft, h: htop });
-          s.push({ x: 0, y: 0, w: wleft, h: screen.h - htop });
-          s.push({ x: wleft, y: 0, w: screen.w - wleft, h: screen.h });
+          s.push({ x: 0, y: 0, w: wleft, h: hbot });
+          s.push({ x: wleft, y: 0, w: wright, h: screen.h });
         } else if (mode === 3) {
           const wleft = Math.floor(screen.w * colPct / 100);
+          const wright = screen.w - wleft;
           const htop = Math.floor(screen.h * splitPct / 100);
+          const hbot = screen.h - htop;
           s.push({ x: 0, y: 0, w: wleft, h: screen.h });
-          s.push({ x: wleft, y: screen.h - htop, w: screen.w - wleft, h: htop });
-          s.push({ x: wleft, y: 0, w: screen.w - wleft, h: screen.h - htop });
+          s.push({ x: wleft, y: screen.h - htop, w: wright, h: htop });
+          s.push({ x: wleft, y: 0, w: wright, h: hbot });
         } else if (mode === 4) {
           const wleft = Math.floor(screen.w * colPct / 100);
+          const wright = screen.w - wleft;
           const htop = Math.floor(screen.h * splitPct / 100);
+          const hbot = screen.h - htop;
           s.push({ x: 0, y: screen.h - htop, w: wleft, h: htop });
-          s.push({ x: wleft, y: screen.h - htop, w: screen.w - wleft, h: htop });
-          s.push({ x: 0, y: 0, w: screen.w, h: screen.h - htop });
+          s.push({ x: wleft, y: screen.h - htop, w: wright, h: htop });
+          s.push({ x: 0, y: 0, w: screen.w, h: hbot });
         } else {
           const wleft = Math.floor(screen.w * colPct / 100);
+          const wright = screen.w - wleft;
           const htop = Math.floor(screen.h * splitPct / 100);
+          const hbot = screen.h - htop;
           s.push({ x: 0, y: screen.h - htop, w: screen.w, h: htop });
-          s.push({ x: 0, y: 0, w: wleft, h: screen.h - htop });
-          s.push({ x: wleft, y: 0, w: screen.w - wleft, h: screen.h - htop });
+          s.push({ x: 0, y: 0, w: wleft, h: hbot });
+          s.push({ x: wleft, y: 0, w: wright, h: hbot });
         }
         slots = s;
       }
@@ -1865,8 +1852,7 @@ HTML = r"""<!doctype html>
       return Array.from({ length: roleCount }, (_, role) => slots[perm[role]] || screen);
     }
 
-    function transformStudioRect(rect) {
-      const total = normalizedRotationDegrees();
+    function transformRectByDegrees(rect, total) {
       if (total === 90) {
         return { x: 100 - (rect.y + rect.h), y: rect.x, w: rect.h, h: rect.w };
       }
@@ -1879,12 +1865,27 @@ HTML = r"""<!doctype html>
       return rect;
     }
 
-    function studioDisplayPointToLogical(x, y) {
-      const total = normalizedRotationDegrees();
+    function inversePointByDegrees(x, y, total) {
       if (total === 90) return { x: y, y: 100 - x };
       if (total === 180) return { x: 100 - x, y: 100 - y };
       if (total === 270) return { x: 100 - y, y: x };
       return { x, y };
+    }
+
+    function transformStudioPaneRect(rect) {
+      return transformRectByDegrees(rect, studioRotationDegrees());
+    }
+
+    function studioDisplayPointToLogical(x, y) {
+      return inversePointByDegrees(x, y, studioRotationDegrees());
+    }
+
+    function transformStudioDividerRect(rect) {
+      return transformRectByDegrees(rect, 180);
+    }
+
+    function studioDividerDisplayPointToLogicalDisplay(x, y) {
+      return inversePointByDegrees(x, y, 180);
     }
 
     function applyStudioGeometry() {
@@ -1892,10 +1893,41 @@ HTML = r"""<!doctype html>
       studioBoard.style.aspectRatio = (total === 90 || total === 270) ? "9 / 16" : "16 / 9";
     }
 
-    function studioDisplayHandleKind(kind) {
-      const total = normalizedRotationDegrees();
-      if (total === 90 || total === 270) return kind === "col" ? "row" : "col";
-      return kind;
+    function sharedDividerBetweenRects(first, second) {
+      const eps = 0.001;
+      if (Math.abs((first.x + first.w) - second.x) < eps || Math.abs((second.x + second.w) - first.x) < eps) {
+        const x = Math.abs((first.x + first.w) - second.x) < eps ? second.x : first.x;
+        const y = Math.max(first.y, second.y);
+        const h = Math.max(0, Math.min(first.y + first.h, second.y + second.h) - y);
+        return { kind: "col", rect: { x, y, w: 0, h } };
+      }
+      if (Math.abs((first.y + first.h) - second.y) < eps || Math.abs((second.y + second.h) - first.y) < eps) {
+        const y = Math.abs((first.y + first.h) - second.y) < eps ? second.y : first.y;
+        const x = Math.max(first.x, second.x);
+        const w = Math.max(0, Math.min(first.x + first.w, second.x + second.w) - x);
+        return { kind: "row", rect: { x, y, w, h: 0 } };
+      }
+      return null;
+    }
+
+    function collectStudioDisplayHandles(node, area, out, path = "") {
+      if (!node || node.leaf) return;
+      const pct = Math.max(10, Math.min(90, Number(node.pct || 50)));
+      let firstArea;
+      let secondArea;
+      if (node.kind === "row") {
+        const firstH = area.h * pct / 100;
+        firstArea = { x: area.x, y: area.y, w: area.w, h: firstH };
+        secondArea = { x: area.x, y: area.y + firstH, w: area.w, h: area.h - firstH };
+      } else {
+        const firstW = area.w * pct / 100;
+        firstArea = { x: area.x, y: area.y, w: firstW, h: area.h };
+        secondArea = { x: area.x + firstW, y: area.y, w: area.w - firstW, h: area.h };
+      }
+      const divider = sharedDividerBetweenRects(transformStudioPaneRect(firstArea), transformStudioPaneRect(secondArea));
+      if (divider) out.push({ path, kind: divider.kind, logicalKind: node.kind, rect: divider.rect });
+      collectStudioDisplayHandles(node.first, firstArea, out, `${path}0`);
+      collectStudioDisplayHandles(node.second, secondArea, out, `${path}1`);
     }
 
     function renderLayoutSuggestions() {
@@ -1936,7 +1968,8 @@ HTML = r"""<!doctype html>
       if (!boardRect.width || !boardRect.height) return;
       const displayX = ((clientX - boardRect.left) / boardRect.width) * 100;
       const displayY = ((clientY - boardRect.top) / boardRect.height) * 100;
-      const logical = studioDisplayPointToLogical(displayX, displayY);
+      const dividerDisplay = studioDividerDisplayPointToLogicalDisplay(displayX, displayY);
+      const logical = studioDisplayPointToLogical(dividerDisplay.x, dividerDisplay.y);
       const handles = [];
       splitTreeCollectHandles(tree, { x: 0, y: 0, w: 100, h: 100 }, handles);
       const handle = handles.find(entry => entry.path === studioDragState.path);
@@ -1967,7 +2000,7 @@ HTML = r"""<!doctype html>
       const rects = computeStudioRects(state);
       studioBoard.innerHTML = "";
       rects.forEach((rect, role) => {
-        const displayRect = transformStudioRect(rect);
+        const displayRect = transformStudioPaneRect(rect);
         const card = document.createElement("button");
         card.type = "button";
         card.className = `studio-card ${roleType(role)}${selectedRole === role ? " selected" : ""}`;
@@ -1981,12 +2014,10 @@ HTML = r"""<!doctype html>
           : (paneType === "mpv"
               ? `${(state.pane_video_paths?.[role - 1] || []).length} queued video${(state.pane_video_paths?.[role - 1] || []).length === 1 ? "" : "s"}`
               : (state.pane_commands?.[role - 1] || "No command"));
-        const splitActions = selectedRole === role
-          ? `<div class="studio-split-actions">
+        const splitActions = `<div class="studio-split-actions">
                <button type="button" class="studio-split-btn" data-studio-split="col">Split V</button>
                <button type="button" class="studio-split-btn" data-studio-split="row">Split H</button>
-             </div>`
-          : "";
+             </div>`;
         card.innerHTML = `
           <div class="studio-top">
             <span class="studio-tag">${paneType === "mpv" ? "mpv" : "shell"}</span>
@@ -2007,6 +2038,7 @@ HTML = r"""<!doctype html>
           button.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
+            selectedRole = role;
             if (!splitSelectedRole(button.dataset.studioSplit)) {
               setStatus("Could not split the selected pane.", true);
               return;
@@ -2018,14 +2050,13 @@ HTML = r"""<!doctype html>
       });
 
       const handles = [];
-      splitTreeCollectHandles(ensureSplitTreeModel(), { x: 0, y: 0, w: 100, h: 100 }, handles);
+      collectStudioDisplayHandles(ensureSplitTreeModel(), { x: 0, y: 0, w: 100, h: 100 }, handles);
       handles.forEach((entry) => {
-        const displayRect = transformStudioRect(entry.logical);
-        const displayKind = studioDisplayHandleKind(entry.kind);
+        const displayRect = transformStudioDividerRect(entry.rect);
         const handle = document.createElement("button");
         handle.type = "button";
-        handle.className = `studio-handle ${displayKind}`;
-        if (displayKind === "col") {
+        handle.className = `studio-handle ${entry.kind}`;
+        if (entry.kind === "col") {
           handle.style.left = `${displayRect.x}%`;
           handle.style.top = `${displayRect.y}%`;
           handle.style.height = `${displayRect.h}%`;
@@ -2034,7 +2065,7 @@ HTML = r"""<!doctype html>
           handle.style.top = `${displayRect.y}%`;
           handle.style.width = `${displayRect.w}%`;
         }
-        handle.title = entry.kind === "col" ? "Drag to resize vertical split" : "Drag to resize horizontal split";
+        handle.title = entry.logicalKind === "col" ? "Drag to resize vertical split" : "Drag to resize horizontal split";
         handle.addEventListener("pointerdown", (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -2083,6 +2114,7 @@ HTML = r"""<!doctype html>
         const panePlaylist = state.pane_playlists?.[paneIndex] || "";
         const panePlaylistExtended = state.pane_playlist_extended?.[paneIndex] || "";
         const paneVideos = (state.pane_video_paths?.[paneIndex] || []).join("\n");
+        const paneMpvOpts = (state.pane_mpv_opts?.[paneIndex] || []).join("\n");
         studioInspector.innerHTML = `
           <div>
             <h2 class="section-title">Selected Pane</h2>
@@ -2102,6 +2134,9 @@ HTML = r"""<!doctype html>
           </label>
           <label>Videos
             <textarea id="inspectorPaneVideos" spellcheck="false" placeholder="/path/one.mp4&#10;/path/two.mp4">${paneVideos}</textarea>
+          </label>
+          <label>Pane mpv Options
+            <textarea id="inspectorPaneMpvOpts" spellcheck="false" placeholder="mute=yes&#10;vid=no">${paneMpvOpts}</textarea>
           </label>
           <p class="muted-note">This pane writes its own per-pane mpv config and queue.</p>
         `;
@@ -2123,6 +2158,11 @@ HTML = r"""<!doctype html>
         });
         document.getElementById("inspectorPaneVideos").addEventListener("input", (event) => {
           state.pane_video_paths[paneIndex] = event.target.value.split("\n").map(v => v.trim()).filter(Boolean);
+          renderStudioBoard();
+          renderPlaylistEditor();
+        });
+        document.getElementById("inspectorPaneMpvOpts").addEventListener("input", (event) => {
+          state.pane_mpv_opts[paneIndex] = event.target.value.split("\n").map(v => v.trim()).filter(Boolean);
           renderStudioBoard();
           renderPlaylistEditor();
         });
@@ -2179,6 +2219,7 @@ HTML = r"""<!doctype html>
       }
       groups.forEach((group, index) => {
         const thumb = playlistThumbMarkup(group.path, index);
+        const durationLabel = isLikelyVideoPath(group.path) ? "Loading..." : "";
         const item = document.createElement("div");
         item.className = "playlist-item";
         item.draggable = true;
@@ -2186,14 +2227,20 @@ HTML = r"""<!doctype html>
         item.innerHTML = `
           <div class="playlist-row">
             <div class="playlist-index">${index + 1}</div>
-            <div class="playlist-thumb${thumb ? "" : " empty"}">
-              ${thumb}
+            <div class="playlist-media-cell">
+              <div class="playlist-duration" data-video-duration="${index}">${durationLabel}</div>
+              <div class="playlist-thumb${thumb ? "" : " empty"}">
+                ${thumb}
+              </div>
             </div>
-            <input type="text" data-video-group-index="${index}" value="${group.path.replace(/"/g, "&quot;")}" placeholder="/path/to/video.mp4" />
-            <input class="playlist-repeat" type="number" min="1" step="1" data-video-group-repeat="${index}" value="${group.count}" title="Repeat count" />
+            <label class="playlist-repeat-wrap" title="How many times this video repeats in a row">
+              <span>Repeat</span>
+              <input class="playlist-repeat" type="number" min="1" step="1" data-video-group-repeat="${index}" value="${group.count}" title="Repeat count" />
+            </label>
             <button class="playlist-mini-btn" data-video-group-up="${index}">Up</button>
             <button class="playlist-mini-btn" data-video-group-down="${index}">Down</button>
             <button class="playlist-mini-btn danger" data-video-group-remove="${index}">Remove</button>
+            <input class="playlist-path" type="text" data-video-group-index="${index}" value="${group.path.replace(/"/g, "&quot;")}" placeholder="/path/to/video.mp4" />
           </div>
         `;
         item.addEventListener("dragstart", () => {
@@ -2241,8 +2288,10 @@ HTML = r"""<!doctype html>
         button.addEventListener("click", () => removeQueueGroup(Number(button.dataset.videoGroupRemove)));
       });
       playlistEditor.querySelectorAll("video[data-preview-video]").forEach((video) => {
+        const durationEl = playlistEditor.querySelector(`[data-video-duration="${video.dataset.previewVideo}"]`);
         const seekToPreview = () => {
           if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+          if (durationEl) durationEl.textContent = formatMediaDuration(video.duration);
           try {
             video.currentTime = Math.min(5, Math.max(0.1, video.duration / 3));
           } catch (_) {
@@ -2254,6 +2303,7 @@ HTML = r"""<!doctype html>
           video.pause();
         }, { once: true });
         video.addEventListener("error", () => {
+          if (durationEl) durationEl.textContent = "";
           video.closest(".playlist-thumb")?.classList.add("empty");
           video.remove();
         }, { once: true });
@@ -2353,6 +2403,7 @@ HTML = r"""<!doctype html>
       while (state.pane_playlists.length < state.pane_count) state.pane_playlists.push("");
       while (state.pane_playlist_extended.length < state.pane_count) state.pane_playlist_extended.push("");
       while (state.pane_video_paths.length < state.pane_count) state.pane_video_paths.push([]);
+      while (state.pane_mpv_opts.length < state.pane_count) state.pane_mpv_opts.push([]);
       const changed = splitTreeReplaceLeaf(tree, targetRole, (leaf) => ({
         leaf: false,
         kind,
@@ -2367,6 +2418,7 @@ HTML = r"""<!doctype html>
         state.pane_playlists.pop();
         state.pane_playlist_extended.pop();
         state.pane_video_paths.pop();
+        state.pane_mpv_opts.pop();
         return false;
       }
       state.splitTreeModel = tree;
@@ -2377,7 +2429,6 @@ HTML = r"""<!doctype html>
       renderPlaylistEditor();
       renderStudioBoard();
       renderStudioInspector();
-      visiblePaneCountEl.textContent = `Visible Panes: ${visiblePaneCount(state)}`;
       return true;
     }
 
@@ -2400,6 +2451,7 @@ HTML = r"""<!doctype html>
       state.pane_playlists.splice(paneIndex, 1);
       state.pane_playlist_extended.splice(paneIndex, 1);
       state.pane_video_paths.splice(paneIndex, 1);
+      state.pane_mpv_opts.splice(paneIndex, 1);
       state.pane_count = Math.max(1, state.pane_count - 1);
       state.splitTreeModel = tree;
       syncSplitTreeState();
@@ -2409,7 +2461,6 @@ HTML = r"""<!doctype html>
       renderPlaylistEditor();
       renderStudioBoard();
       renderStudioInspector();
-      visiblePaneCountEl.textContent = `Visible Panes: ${visiblePaneCount(state)}`;
     }
 
     function renderPaneList(nextState) {
@@ -2550,8 +2601,7 @@ HTML = r"""<!doctype html>
     }
 
     function getPreviewCorrection() {
-      const value = Number(previewCorrectionEl.value || localStorage.getItem(previewCorrectionKey) || 0);
-      return Number.isFinite(value) ? value : 0;
+      return 0;
     }
 
     function normalizedRotationDegrees() {
@@ -2562,15 +2612,40 @@ HTML = r"""<!doctype html>
       return total;
     }
 
+    function effectiveDisplayRotationDegrees() {
+      const rotation = Number(state?.rotation || 0);
+      const correction = getPreviewCorrection();
+      let total = ((360 - rotation) + correction) % 360;
+      if (total < 0) total += 360;
+      return total;
+    }
+
+    function studioRotationDegrees() {
+      let total = (normalizedRotationDegrees() + 270) % 360;
+      if (total < 0) total += 360;
+      return total;
+    }
+
     function applyPreviewGeometry() {
-      const total = normalizedRotationDegrees();
+      const total = effectiveDisplayRotationDegrees();
       const naturalW = previewImage.naturalWidth || 16;
       const naturalH = previewImage.naturalHeight || 9;
       const quarterTurn = total === 90 || total === 270;
       const displayW = quarterTurn ? naturalH : naturalW;
       const displayH = quarterTurn ? naturalW : naturalH;
       const preview = document.getElementById("preview");
+      previewLayout?.classList.toggle("portrait", quarterTurn);
+      previewLayout?.classList.toggle("landscape", !quarterTurn);
       preview.style.aspectRatio = `${displayW} / ${displayH}`;
+      const previewTop = preview.getBoundingClientRect().top;
+      const viewportPadding = 24;
+      const availableHeight = Math.max(220, Math.floor(window.innerHeight - previewTop - viewportPadding));
+      const parentWidth = preview.parentElement ? preview.parentElement.clientWidth : 560;
+      const maxWidthByHeight = Math.floor(availableHeight * (displayW / displayH));
+      const finalWidth = Math.max(180, Math.min(560, parentWidth, maxWidthByHeight));
+      preview.style.width = `${finalWidth}px`;
+      preview.style.maxWidth = "100%";
+      preview.style.maxHeight = `${availableHeight}px`;
       previewCanvas.width = displayW;
       previewCanvas.height = displayH;
       if (!previewCtx || !previewImage.naturalWidth || !previewImage.naturalHeight) return;
@@ -2622,7 +2697,6 @@ HTML = r"""<!doctype html>
         queueCtx.apply(queuePaths);
       }
       state.mpv_opts = buildMpvOptsFromControls();
-      visiblePaneCountEl.textContent = `Visible Panes: ${visiblePaneCount(state)}`;
       ensurePaneCommands(state);
       const treeRoles = [];
       splitTreeCollectRoles(normalizeSplitTreeState(), treeRoles);
@@ -2644,7 +2718,6 @@ HTML = r"""<!doctype html>
       ensurePaneCommands(state);
       state.splitTreeModel = parseSplitTreeSpec(state.split_tree || "");
       document.getElementById("configPath").textContent = `Config: ${configPath}`;
-      visiblePaneCountEl.textContent = `Visible Panes: ${visiblePaneCount(state)}`;
       document.getElementById("connector").value = state.connector || "";
       document.getElementById("mode").value = state.mode || "";
       document.getElementById("rotation").value = String(state.rotation || 0);
@@ -2813,17 +2886,16 @@ HTML = r"""<!doctype html>
       scheduleLivePreview();
       setStatus(`Live preview rate set to ${livePreviewRateEl.value}.`, false);
     });
-    previewCorrectionEl.addEventListener("change", () => {
-      localStorage.setItem(previewCorrectionKey, previewCorrectionEl.value);
-      applyPreviewGeometry();
-      setStatus(`Preview correction set to ${previewCorrectionEl.value} degrees.`, false);
-    });
     previewImage.addEventListener("load", () => {
       livePreviewInFlight = false;
       applyPreviewGeometry();
     });
     previewImage.addEventListener("error", () => {
       livePreviewInFlight = false;
+    });
+    window.addEventListener("resize", () => {
+      applyPreviewGeometry();
+      renderStudioBoard();
     });
     window.addEventListener("pointermove", (event) => {
       if (!studioDragState) return;
@@ -2843,8 +2915,6 @@ HTML = r"""<!doctype html>
       document.getElementById(id).addEventListener("input", () => syncFormToState());
       document.getElementById(id).addEventListener("change", () => syncFormToState());
     });
-
-    previewCorrectionEl.value = localStorage.getItem(previewCorrectionKey) || "0";
     livePreviewRateEl.value = localStorage.getItem(livePreviewRateKey) || "120";
     loadState().catch(err => setStatus(err.message, true));
     window.addEventListener("beforeunload", () => stopLivePreviewStream());

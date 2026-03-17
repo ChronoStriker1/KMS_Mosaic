@@ -37,7 +37,35 @@ static int media_key_matches(const char *kv, const char *key) {
     return kl == strlen(key) && strncmp(kv, key, kl) == 0;
 }
 
-static void media_apply_global_options(media_ctx *m, const options_t *opt) {
+static void media_apply_option_list(media_ctx *m, const char *const *opts, int count,
+                                    bool *user_set_hwdec, bool *user_set_vsync,
+                                    bool *user_set_keepaspect, bool *user_set_rotate,
+                                    bool *user_set_panscan, bool *user_set_interpolation,
+                                    bool *user_set_tscale, bool *user_set_eflush,
+                                    bool *user_set_shader_cache) {
+    for (int i = 0; i < count; i++) {
+        const char *kv = opts[i];
+        const char *eq = strchr(kv, '=');
+        if (!eq) continue;
+        char key[128];
+        size_t kl = (size_t)(eq - kv);
+        if (kl >= sizeof(key)) kl = sizeof(key) - 1;
+        memcpy(key, kv, kl);
+        key[kl] = '\0';
+        mpv_set_option_string(m->mpv, key, eq + 1);
+        if (strcmp(key, "hwdec") == 0) *user_set_hwdec = true;
+        if (media_key_matches(kv, "video-sync")) *user_set_vsync = true;
+        else if (media_key_matches(kv, "keepaspect")) *user_set_keepaspect = true;
+        else if (media_key_matches(kv, "video-rotate")) *user_set_rotate = true;
+        else if (media_key_matches(kv, "panscan")) *user_set_panscan = true;
+        else if (media_key_matches(kv, "interpolation")) *user_set_interpolation = true;
+        else if (media_key_matches(kv, "tscale")) *user_set_tscale = true;
+        else if (media_key_matches(kv, "opengl-early-flush")) *user_set_eflush = true;
+        else if (media_key_matches(kv, "gpu-shader-cache")) *user_set_shader_cache = true;
+    }
+}
+
+static void media_apply_options(media_ctx *m, const options_t *opt, const pane_media_config *pane_media) {
     bool user_set_hwdec = false;
     bool user_set_vsync = false;
     bool user_set_keepaspect = false;
@@ -48,25 +76,15 @@ static void media_apply_global_options(media_ctx *m, const options_t *opt) {
     bool user_set_eflush = false;
     bool user_set_shader_cache = false;
 
-    for (int i = 0; i < opt->n_mpv_opts; i++) {
-        const char *kv = opt->mpv_opts[i];
-        const char *eq = strchr(kv, '=');
-        if (!eq) continue;
-        char key[128];
-        size_t kl = (size_t)(eq - kv);
-        if (kl >= sizeof(key)) kl = sizeof(key) - 1;
-        memcpy(key, kv, kl);
-        key[kl] = '\0';
-        mpv_set_option_string(m->mpv, key, eq + 1);
-        if (strcmp(key, "hwdec") == 0) user_set_hwdec = true;
-        if (media_key_matches(kv, "video-sync")) user_set_vsync = true;
-        else if (media_key_matches(kv, "keepaspect")) user_set_keepaspect = true;
-        else if (media_key_matches(kv, "video-rotate")) user_set_rotate = true;
-        else if (media_key_matches(kv, "panscan")) user_set_panscan = true;
-        else if (media_key_matches(kv, "interpolation")) user_set_interpolation = true;
-        else if (media_key_matches(kv, "tscale")) user_set_tscale = true;
-        else if (media_key_matches(kv, "opengl-early-flush")) user_set_eflush = true;
-        else if (media_key_matches(kv, "gpu-shader-cache")) user_set_shader_cache = true;
+    media_apply_option_list(m, opt->mpv_opts, opt->n_mpv_opts,
+                            &user_set_hwdec, &user_set_vsync, &user_set_keepaspect,
+                            &user_set_rotate, &user_set_panscan, &user_set_interpolation,
+                            &user_set_tscale, &user_set_eflush, &user_set_shader_cache);
+    if (pane_media && pane_media->n_mpv_opts > 0) {
+        media_apply_option_list(m, pane_media->mpv_opts, pane_media->n_mpv_opts,
+                                &user_set_hwdec, &user_set_vsync, &user_set_keepaspect,
+                                &user_set_rotate, &user_set_panscan, &user_set_interpolation,
+                                &user_set_tscale, &user_set_eflush, &user_set_shader_cache);
     }
 
     if (!user_set_hwdec) mpv_set_option_string(m->mpv, "hwdec", "no");
@@ -289,7 +307,7 @@ static bool media_init_source(media_ctx *m, const options_t *opt, const pane_med
     mpv_set_option_string(m->mpv, "keep-open", "yes");
     const char *glver = (const char *)glGetString(GL_VERSION);
     if (glver && strstr(glver, "OpenGL ES")) mpv_set_option_string(m->mpv, "opengl-es", "yes");
-    media_apply_global_options(m, opt);
+    media_apply_options(m, opt, pane_media);
     if (debug) mpv_request_log_messages(m->mpv, "debug");
     if (mpv_initialize(m->mpv) < 0) {
         fprintf(stderr, "mpv_initialize failed\n");
