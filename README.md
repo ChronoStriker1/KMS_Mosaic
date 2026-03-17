@@ -92,6 +92,7 @@ Examples:
 ./kms_mosaic --pane-count 6 --pane 5 "watch -n1 sensors" --pane 6 "iftop"
 ./kms_mosaic --pane-media 2 --pane-video 2 /mnt/user/video/clip.mp4
 ./kms_mosaic --pane-media 3 --pane-playlist 3 /boot/config/pane3.m3u
+./kms_mosaic --pane-media 2 --pane-mpv-opt 2 mute=yes --pane-mpv-opt 2 video-rotate=90
 ./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle
 ./kms_mosaic --playlist-fifo /tmp/mosaic.fifo --mpv-out /tmp/mpv.log
 ./kms_mosaic --config /path/profile.conf
@@ -114,6 +115,7 @@ That service:
 - streams live compositor frames into the browser preview over a framed binary HTTP stream
 - exposes a pane-oriented "Layout Studio" that edits the saved `--split-tree` when present
 - lets you add/remove panes, switch panes between terminal and mpv, and edit the selected pane's media queue from the page
+- lets you attach pane-local mpv options to mpv panes so each media pane can override the global mpv defaults
 - lets you split the selected pane vertically or horizontally from the studio itself
 - treats the old layout presets as starter suggestions instead of the main editing surface
 - moves scene rules, raw config, and raw mpv option text under Advanced
