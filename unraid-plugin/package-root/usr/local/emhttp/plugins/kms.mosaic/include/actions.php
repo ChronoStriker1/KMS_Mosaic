@@ -111,6 +111,46 @@ function proxy_backend_request($method, $url, $body = null, $content_type = null
   ];
 }
 
+function proxy_backend_json_post($url, $json_text) {
+  $headers = [
+    'Content-Type: application/json',
+    'Content-Length: ' . strlen($json_text),
+  ];
+  $context = stream_context_create([
+    'http' => [
+      'method' => 'POST',
+      'header' => implode("\r\n", $headers) . "\r\n",
+      'content' => $json_text,
+      'ignore_errors' => true,
+      'timeout' => 120,
+    ],
+  ]);
+
+  $body = @file_get_contents($url, false, $context);
+  if ($body === false) {
+    throw new RuntimeException('Unable to reach preview backend');
+  }
+
+  $status = 200;
+  $content_type = 'application/json';
+  $response_headers = $http_response_header ?? [];
+  foreach ($response_headers as $line) {
+    if (preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $m)) {
+      $status = (int)$m[1];
+      continue;
+    }
+    if (stripos($line, 'Content-Type:') === 0) {
+      $content_type = trim(substr($line, strlen('Content-Type:')));
+    }
+  }
+
+  return [
+    'status' => $status,
+    'headers' => ['content-type' => $content_type],
+    'body' => $body,
+  ];
+}
+
 function output_proxy_response($result, $allowed_headers = []) {
   http_response_code($result['status']);
   foreach ($allowed_headers as $name) {
@@ -164,12 +204,8 @@ try {
   }
 
   if ($action === 'backend_webrtc_offer') {
-    $result = proxy_backend_request(
-      'POST',
-      $backend . '/api/webrtc-offer',
-      file_get_contents('php://input'),
-      $_SERVER['CONTENT_TYPE'] ?? 'application/json'
-    );
+    $json_payload = $_POST['payload'] ?? $_GET['payload'] ?? file_get_contents('php://input');
+    $result = proxy_backend_json_post($backend . '/api/webrtc-offer', (string)$json_payload);
     output_proxy_response($result, ['Content-Type']);
   }
 
@@ -180,12 +216,13 @@ try {
   }
 
   if ($action === 'save') {
-    $cfg['SERVICE'] = (($_POST['SERVICE'] ?? 'enable') === 'enable') ? 'enable' : 'disable';
-    $cfg['WEB_SERVICE'] = (($_POST['WEB_SERVICE'] ?? 'enable') === 'enable') ? 'enable' : 'disable';
-    $port = (int)($_POST['WEB_PORT'] ?? 8788);
+    $request = array_merge($_GET, $_POST);
+    $cfg['SERVICE'] = (($request['SERVICE'] ?? 'enable') === 'enable') ? 'enable' : 'disable';
+    $cfg['WEB_SERVICE'] = (($request['WEB_SERVICE'] ?? 'enable') === 'enable') ? 'enable' : 'disable';
+    $port = (int)($request['WEB_PORT'] ?? 8788);
     if ($port < 1 || $port > 65535) $port = 8788;
     $cfg['WEB_PORT'] = (string)$port;
-    $cfg['CONFIG_PATH'] = trim((string)($_POST['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf'));
+    $cfg['CONFIG_PATH'] = trim((string)($request['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf'));
     if ($cfg['CONFIG_PATH'] === '') $cfg['CONFIG_PATH'] = '/boot/config/kms_mosaic.conf';
     write_plugin_cfg_file($cfg_file, $cfg);
     run_service_command($service_script, 'restart');

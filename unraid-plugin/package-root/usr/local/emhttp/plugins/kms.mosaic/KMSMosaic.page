@@ -10,7 +10,6 @@ $web_service = $cfg['WEB_SERVICE'] ?? 'enable';
 $web_port = $cfg['WEB_PORT'] ?? '8788';
 $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
 $service_script = "/usr/local/emhttp/plugins/{$plugin}/scripts/kms_mosaic-service";
-$web_wrapper = "/usr/local/bin/kms_mosaic_web";
 $initial_status = [
   'service' => $service,
   'web_service' => $web_service,
@@ -29,21 +28,6 @@ if (is_string($service_status_raw) && trim($service_status_raw) !== '') {
   }
 }
 $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-$embedded_html = '';
-$embedded_payload_json = 'null';
-$embedded_cmd = escapeshellcmd($web_wrapper) . ' --config ' . escapeshellarg($config_path) . ' --print-html 2>/dev/null';
-$embedded_html_raw = @shell_exec($embedded_cmd);
-if (is_string($embedded_html_raw) && trim($embedded_html_raw) !== '') {
-  $embedded_html = $embedded_html_raw;
-}
-$embedded_payload_cmd = escapeshellcmd($web_wrapper) . ' --config ' . escapeshellarg($config_path) . ' --dump-state 2>/dev/null';
-$embedded_payload_raw = @shell_exec($embedded_payload_cmd);
-if (is_string($embedded_payload_raw) && trim($embedded_payload_raw) !== '') {
-  $decoded_payload = json_decode($embedded_payload_raw, true);
-  if (is_array($decoded_payload)) {
-    $embedded_payload_json = json_encode($decoded_payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-  }
-}
 ?>
 <style>
   .kms-page {
@@ -231,8 +215,6 @@ if (is_string($embedded_payload_raw) && trim($embedded_payload_raw) !== '') {
 <script>
 const kmsActionUrl = '/plugins/kms.mosaic/include/actions.php';
 const kmsInitialStatus = <?=$initial_status_json ?: '{}';?>;
-const kmsEmbeddedHtml = <?=json_encode($embedded_html, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);?>;
-const kmsEmbeddedInitialPayload = <?=$embedded_payload_json;?>;
 let kmsEmbeddedLoaded = false;
 let kmsEmbeddedStylesInstalled = false;
 let kmsEmbeddedLoadPromise = null;
@@ -246,8 +228,26 @@ function kmsRewriteBackendHtml(html) {
     .replaceAll('/api/state', `${kmsActionUrl}?action=backend_state`)
     .replaceAll('/api/config', `${kmsActionUrl}?action=backend_config`)
     .replaceAll('/api/raw_config', `${kmsActionUrl}?action=backend_raw_config`)
-    .replaceAll('/api/webrtc-offer', `${kmsActionUrl}?action=backend_webrtc_offer`)
-    .replaceAll('/api/media?path=', `${kmsActionUrl}?action=backend_media&path=`);
+      .replaceAll('/api/webrtc-offer', `${kmsActionUrl}?action=backend_webrtc_offer`)
+      .replaceAll('/api/media?path=', `${kmsActionUrl}?action=backend_media&path=`);
+}
+
+function kmsInstallFetchShim() {
+  if (window.__kmsFetchShimInstalled) return;
+  const originalFetch = window.fetch.bind(window);
+  window.fetch = (input, init = undefined) => {
+    const url = typeof input === 'string' ? input : (input?.url || '');
+    if (url.includes('action=backend_webrtc_offer')) {
+      const payload = typeof init?.body === 'string' ? init.body : '';
+      const qs = new URLSearchParams({ action: 'backend_webrtc_offer', payload }).toString();
+      return originalFetch(`${kmsActionUrl}?${qs}`, {
+        method: 'GET',
+        credentials: init?.credentials,
+      });
+    }
+    return originalFetch(input, init);
+  };
+  window.__kmsFetchShimInstalled = true;
 }
 
 function kmsEmbeddedOverrides() {
@@ -475,12 +475,8 @@ async function kmsPost(action, extra = {}, jsonBody = false) {
       body: JSON.stringify(extra)
     });
   } else {
-    const body = new URLSearchParams({ action, ...extra });
-    response = await fetch(kmsActionUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body
-    });
+    const qs = new URLSearchParams({ action, ...extra }).toString();
+    response = await fetch(`${kmsActionUrl}?${qs}`, { method: 'GET' });
   }
   const contentType = response.headers.get('content-type') || '';
   const data = contentType.includes('application/json') ? await response.json() : await response.text();
@@ -535,8 +531,15 @@ async function kmsEnsureEmbeddedLoaded() {
   const mount = document.getElementById('kmsUiMount');
   kmsEmbeddedLoadPromise = (async () => {
     try {
-      if (!kmsEmbeddedHtml) throw new Error('Embedded editor payload is empty');
-      const rewritten = kmsRewriteBackendHtml(kmsEmbeddedHtml)
+      const [htmlResponse, stateResponse] = await Promise.all([
+        fetch(kmsEmbeddedUrl('backend_html')),
+        fetch(kmsEmbeddedUrl('backend_state'))
+      ]);
+      const html = await htmlResponse.text();
+      if (!htmlResponse.ok) throw new Error(html || 'Unable to load editor');
+      const statePayload = await stateResponse.json();
+      if (!stateResponse.ok) throw new Error(statePayload.error || 'Unable to load editor state');
+      const rewritten = kmsRewriteBackendHtml(html)
         .replace(
           'document.getElementById("configPath").textContent = `Config: ${configPath}`;',
           'const configPathNode = document.getElementById("configPath"); if (configPathNode) configPathNode.textContent = `Config: ${configPath}`;'
@@ -551,7 +554,8 @@ async function kmsEnsureEmbeddedLoaded() {
       doc.querySelectorAll('script').forEach((script) => script.remove());
       mount.className = '';
       mount.innerHTML = doc.body.innerHTML;
-      window.__kmsEmbeddedInitialPayload = kmsEmbeddedInitialPayload;
+      window.__kmsEmbeddedInitialPayload = statePayload;
+      kmsInstallFetchShim();
       scripts.forEach((text) => {
         const script = document.createElement('script');
         script.textContent = text;
