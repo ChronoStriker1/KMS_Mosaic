@@ -55,6 +55,7 @@ def empty_state() -> dict[str, Any]:
         "pane_commands": DEFAULT_PANE_COMMANDS.copy(),
         "pane_playlists": ["", ""],
         "pane_playlist_extended": ["", ""],
+        "pane_playlist_fifos": ["", ""],
         "pane_video_paths": [[], []],
         "pane_mpv_opts": [[], []],
         "video_paths": [],
@@ -88,6 +89,7 @@ def ensure_panes(state: dict[str, Any]) -> None:
     pane_types = list(state.get("pane_types", []))
     pane_playlists = list(state.get("pane_playlists", []))
     pane_playlist_extended = list(state.get("pane_playlist_extended", []))
+    pane_playlist_fifos = list(state.get("pane_playlist_fifos", []))
     pane_video_paths = [list(paths) for paths in state.get("pane_video_paths", [])]
     pane_mpv_opts = [list(opts) for opts in state.get("pane_mpv_opts", [])]
     while len(pane_commands) < pane_count:
@@ -98,6 +100,8 @@ def ensure_panes(state: dict[str, Any]) -> None:
         pane_playlists.append("")
     while len(pane_playlist_extended) < pane_count:
         pane_playlist_extended.append("")
+    while len(pane_playlist_fifos) < pane_count:
+        pane_playlist_fifos.append("")
     while len(pane_video_paths) < pane_count:
         pane_video_paths.append([])
     while len(pane_mpv_opts) < pane_count:
@@ -106,6 +110,7 @@ def ensure_panes(state: dict[str, Any]) -> None:
     state["pane_types"] = pane_types[:pane_count]
     state["pane_playlists"] = pane_playlists[:pane_count]
     state["pane_playlist_extended"] = pane_playlist_extended[:pane_count]
+    state["pane_playlist_fifos"] = pane_playlist_fifos[:pane_count]
     state["pane_video_paths"] = pane_video_paths[:pane_count]
     state["pane_mpv_opts"] = pane_mpv_opts[:pane_count]
 
@@ -205,6 +210,13 @@ def parse_config_text(text: str) -> dict[str, Any]:
                 ensure_panes(state)
                 state["pane_types"][pane_index] = "mpv"
                 state["pane_playlist_extended"][pane_index] = tokens[i + 2]
+                i += 3
+            elif tok == "--pane-playlist-fifo" and i + 2 < len(tokens):
+                pane_index = max(0, int(tokens[i + 1]) - 1)
+                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
+                ensure_panes(state)
+                state["pane_types"][pane_index] = "mpv"
+                state["pane_playlist_fifos"][pane_index] = tokens[i + 2]
                 i += 3
             elif tok == "--pane-video" and i + 2 < len(tokens):
                 pane_index = max(0, int(tokens[i + 1]) - 1)
@@ -334,6 +346,7 @@ def serialize_config(state: dict[str, Any]) -> str:
     pane_types = list(state.get("pane_types", []))
     pane_playlists = list(state.get("pane_playlists", []))
     pane_playlist_extended = list(state.get("pane_playlist_extended", []))
+    pane_playlist_fifos = list(state.get("pane_playlist_fifos", []))
     pane_video_paths = [list(paths) for paths in state.get("pane_video_paths", [])]
     pane_mpv_opts = [list(opts) for opts in state.get("pane_mpv_opts", [])]
     for idx, cmd in enumerate(pane_commands):
@@ -342,12 +355,15 @@ def serialize_config(state: dict[str, Any]) -> str:
             lines.append(f"--pane-media {idx + 1}")
             playlist = pane_playlists[idx] if idx < len(pane_playlists) else ""
             playlist_ext = pane_playlist_extended[idx] if idx < len(pane_playlist_extended) else ""
+            playlist_fifo = pane_playlist_fifos[idx] if idx < len(pane_playlist_fifos) else ""
             videos = pane_video_paths[idx] if idx < len(pane_video_paths) else []
             mpv_opts = pane_mpv_opts[idx] if idx < len(pane_mpv_opts) else []
             if playlist:
                 lines.append(f"--pane-playlist {idx + 1} {shlex.quote(str(playlist))}")
             if playlist_ext:
                 lines.append(f"--pane-playlist-extended {idx + 1} {shlex.quote(str(playlist_ext))}")
+            if playlist_fifo:
+                lines.append(f"--pane-playlist-fifo {idx + 1} {shlex.quote(str(playlist_fifo))}")
             for video_path in videos:
                 if str(video_path).strip():
                     lines.append(f"--pane-video {idx + 1} {shlex.quote(str(video_path))}")
@@ -1378,10 +1394,12 @@ HTML = r"""<!doctype html>
       }
       const playlistPath = state.pane_playlists?.[paneIndex] || "";
       const playlistExtended = state.pane_playlist_extended?.[paneIndex] || "";
+      const playlistFifo = state.pane_playlist_fifos?.[paneIndex] || "";
       const paneMpvOpts = Array.isArray(state.pane_mpv_opts?.[paneIndex]) ? state.pane_mpv_opts[paneIndex].slice() : [];
       const noteParts = ["This queue controls the selected mpv pane."];
       if (playlistPath) noteParts.push(`Playlist: ${playlistPath}`);
       if (playlistExtended) noteParts.push(`Extended: ${playlistExtended}`);
+      if (playlistFifo) noteParts.push(`FIFO: ${playlistFifo}`);
       if (paneMpvOpts.length) noteParts.push(`${paneMpvOpts.length} pane-local mpv option${paneMpvOpts.length === 1 ? "" : "s"}.`);
       return {
         title: `${roleTitle(selectedRole)} Queue`,
@@ -1474,6 +1492,7 @@ HTML = r"""<!doctype html>
       nextState.pane_types = Array.isArray(nextState.pane_types) ? nextState.pane_types.slice(0, count) : [];
       nextState.pane_playlists = Array.isArray(nextState.pane_playlists) ? nextState.pane_playlists.slice(0, count) : [];
       nextState.pane_playlist_extended = Array.isArray(nextState.pane_playlist_extended) ? nextState.pane_playlist_extended.slice(0, count) : [];
+      nextState.pane_playlist_fifos = Array.isArray(nextState.pane_playlist_fifos) ? nextState.pane_playlist_fifos.slice(0, count) : [];
       nextState.pane_video_paths = Array.isArray(nextState.pane_video_paths)
         ? nextState.pane_video_paths.slice(0, count).map(paths => Array.isArray(paths) ? paths.slice() : [])
         : [];
@@ -1484,6 +1503,7 @@ HTML = r"""<!doctype html>
       while (nextState.pane_types.length < count) nextState.pane_types.push("terminal");
       while (nextState.pane_playlists.length < count) nextState.pane_playlists.push("");
       while (nextState.pane_playlist_extended.length < count) nextState.pane_playlist_extended.push("");
+      while (nextState.pane_playlist_fifos.length < count) nextState.pane_playlist_fifos.push("");
       while (nextState.pane_video_paths.length < count) nextState.pane_video_paths.push([]);
       while (nextState.pane_mpv_opts.length < count) nextState.pane_mpv_opts.push([]);
     }
@@ -2161,6 +2181,7 @@ HTML = r"""<!doctype html>
       if (paneType === "mpv") {
         const panePlaylist = state.pane_playlists?.[paneIndex] || "";
         const panePlaylistExtended = state.pane_playlist_extended?.[paneIndex] || "";
+        const panePlaylistFifo = state.pane_playlist_fifos?.[paneIndex] || "";
         const paneVideos = (state.pane_video_paths?.[paneIndex] || []).join("\n");
         const paneMpvGroups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
         studioInspector.innerHTML = `
@@ -2179,6 +2200,9 @@ HTML = r"""<!doctype html>
           </label>
           <label>Playlist Extended
             <input id="inspectorPanePlaylistExtended" type="text" value="${panePlaylistExtended.replace(/"/g, "&quot;")}" placeholder="/path/to/extended.txt" />
+          </label>
+          <label>Playlist FIFO
+            <input id="inspectorPanePlaylistFifo" type="text" value="${panePlaylistFifo.replace(/"/g, "&quot;")}" placeholder="/tmp/pane-playlist.fifo" />
           </label>
           <label>Audio Output
             <select id="inspectorPaneAudioMode">
@@ -2231,6 +2255,11 @@ HTML = r"""<!doctype html>
         });
         document.getElementById("inspectorPanePlaylistExtended").addEventListener("input", (event) => {
           state.pane_playlist_extended[paneIndex] = event.target.value;
+          renderStudioBoard();
+          renderPlaylistEditor();
+        });
+        document.getElementById("inspectorPanePlaylistFifo").addEventListener("input", (event) => {
+          state.pane_playlist_fifos[paneIndex] = event.target.value;
           renderStudioBoard();
           renderPlaylistEditor();
         });
@@ -2495,6 +2524,7 @@ HTML = r"""<!doctype html>
       while (state.pane_types.length < state.pane_count) state.pane_types.push("terminal");
       while (state.pane_playlists.length < state.pane_count) state.pane_playlists.push("");
       while (state.pane_playlist_extended.length < state.pane_count) state.pane_playlist_extended.push("");
+      while (state.pane_playlist_fifos.length < state.pane_count) state.pane_playlist_fifos.push("");
       while (state.pane_video_paths.length < state.pane_count) state.pane_video_paths.push([]);
       while (state.pane_mpv_opts.length < state.pane_count) state.pane_mpv_opts.push([]);
       const changed = splitTreeReplaceLeaf(tree, targetRole, (leaf) => ({
@@ -2510,6 +2540,7 @@ HTML = r"""<!doctype html>
         state.pane_types.pop();
         state.pane_playlists.pop();
         state.pane_playlist_extended.pop();
+        state.pane_playlist_fifos.pop();
         state.pane_video_paths.pop();
         state.pane_mpv_opts.pop();
         return false;
@@ -2543,6 +2574,7 @@ HTML = r"""<!doctype html>
       state.pane_types.splice(paneIndex, 1);
       state.pane_playlists.splice(paneIndex, 1);
       state.pane_playlist_extended.splice(paneIndex, 1);
+      state.pane_playlist_fifos.splice(paneIndex, 1);
       state.pane_video_paths.splice(paneIndex, 1);
       state.pane_mpv_opts.splice(paneIndex, 1);
       state.pane_count = Math.max(1, state.pane_count - 1);
