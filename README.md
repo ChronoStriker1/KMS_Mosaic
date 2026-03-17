@@ -115,7 +115,7 @@ That service:
 - reads the active `kms_mosaic.conf`
 - streams live compositor frames into the browser preview over a framed binary HTTP stream
 - exposes a pane-oriented "Layout Studio" that edits the saved `--split-tree` when present
-- lets you add/remove panes, switch panes between terminal and mpv, and edit the selected pane's media queue from the page
+- lets you add/remove panes, switch panes between terminal and mpv, and edit each mpv pane's media queue from an explicit playlist target bar instead of tying queue edits to the selected studio pane
 - lets you attach pane-local mpv options to mpv panes so each media pane can override the global mpv defaults
 - lets each mpv pane keep its own playlist file or playlist FIFO so multiple mpv panes do not share one live queue
 - exposes structured pane-local mpv controls in the pane inspector for audio, mute, loop-file, video-only/audio-only mode, and shader stacks while preserving a smaller raw per-pane options box for anything else
