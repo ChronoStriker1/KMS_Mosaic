@@ -577,12 +577,12 @@ HTML = r"""<!doctype html>
     /* ─── app header ──────────────────────────────────── */
     .app-header {
       display: flex;
-      align-items: center;
-      gap: 10px;
+      align-items: stretch;
+      gap: 12px;
       padding: 0 14px 0 0;
       border-bottom: 1px solid var(--line);
       background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0.25));
-      min-height: 44px;
+      min-height: 64px;
       overflow: hidden;
     }
     .accent-bar {
@@ -590,6 +590,14 @@ HTML = r"""<!doctype html>
       align-self: stretch;
       flex-shrink: 0;
       background: linear-gradient(180deg, rgba(181,83,47,0.9), rgba(109,47,23,0.7));
+    }
+    .app-title-block {
+      min-width: 0;
+      flex: 1;
+      display: grid;
+      align-content: center;
+      gap: 2px;
+      padding: 10px 0;
     }
     .app-name {
       font-weight: 700;
@@ -606,7 +614,7 @@ HTML = r"""<!doctype html>
       overflow: hidden;
       text-overflow: ellipsis;
       min-width: 0;
-      flex: 1;
+      display: block;
     }
     /* ─── preview ─────────────────────────────────────── */
     .stage { padding: 12px; }
@@ -1152,8 +1160,10 @@ HTML = r"""<!doctype html>
     <section class="card left-rail">
       <div class="app-header">
         <div class="accent-bar"></div>
-        <span class="app-name">KMS Mosaic</span>
-        <span id="configPath" class="config-path">—</span>
+        <div class="app-title-block">
+          <span class="app-name">KMS Mosaic</span>
+          <span id="configPath" class="config-path">—</span>
+        </div>
       </div>
       <div class="stage">
         <div class="preview-layout" id="preview-outer">
@@ -1385,7 +1395,7 @@ HTML = r"""<!doctype html>
       (Array.isArray(opts) ? opts : []).forEach((opt) => {
         const value = String(opt || "").trim();
         if (!value) return;
-        if (value === "no-audio" || value === "audio=no" || value === "mpv-out=no-audio") {
+        if (value === "no-audio" || value === "audio=no" || value === "ao=null" || value === "mpv-out=no-audio") {
           groups.audioMode = "no-audio";
           return;
         }
@@ -1415,7 +1425,7 @@ HTML = r"""<!doctype html>
     function buildMpvOptsFromParts(parts) {
       const opts = [];
       if (parts.audioMode === "no-audio") {
-        opts.push("mpv-out=no-audio");
+        opts.push("audio=no");
       }
       if (parts.muteMode === "yes" || parts.muteMode === "no") {
         opts.push(`mute=${parts.muteMode}`);
@@ -1430,7 +1440,7 @@ HTML = r"""<!doctype html>
         .split("\n")
         .map(v => v.trim())
         .filter(Boolean)
-        .forEach(shader => opts.push(`mpv-out=glsl-shaders=${shader}`));
+        .forEach(shader => opts.push(`glsl-shaders=${shader}`));
       String(parts.otherText || "")
         .split("\n")
         .map(v => v.trim())
@@ -3141,16 +3151,21 @@ HTML = r"""<!doctype html>
       return total;
     }
 
-    function configuredVideoRotationDegrees() {
-      const raw = parseInt(String(state?.video_rotate || "0"), 10);
+    function configuredVideoRotationDegrees(role = playlistTargetRole) {
+      let rawValue = state?.video_rotate || "0";
+      if (Number(role) > 0) {
+        const paneIndex = Number(role) - 1;
+        rawValue = state?.pane_video_rotate?.[paneIndex] || "0";
+      }
+      const raw = parseInt(String(rawValue || "0"), 10);
       if (!Number.isFinite(raw)) return 0;
       let total = raw % 360;
       if (total < 0) total += 360;
       return total;
     }
 
-    function effectivePlaylistThumbRotationDegrees() {
-      let total = (effectiveDisplayRotationDegrees() + configuredVideoRotationDegrees()) % 360;
+    function effectivePlaylistThumbRotationDegrees(role = playlistTargetRole) {
+      let total = (effectiveDisplayRotationDegrees() + configuredVideoRotationDegrees(role)) % 360;
       if (total < 0) total += 360;
       return total;
     }
@@ -3514,7 +3529,8 @@ class Handler(BaseHTTPRequestHandler):
         output_path = self.app_config.snapshot_output_path
         output_mtime = output_path.stat().st_mtime_ns if output_path.exists() else 0
         request_path.parent.mkdir(parents=True, exist_ok=True)
-        request_path.write_text(f"{time.time_ns()}\n", encoding="utf-8")
+        nonce = time.time_ns()
+        request_path.write_text(f"{nonce}\n{'#' * ((nonce % 31) + 1)}\n", encoding="utf-8")
 
         deadline = time.time() + 3.0
         while time.time() < deadline:
