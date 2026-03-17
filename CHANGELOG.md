@@ -48,9 +48,9 @@
   media regressions.
 - Added compositor-side `--split-tree` layout parsing so explicit split trees
   can override the legacy preset-layout geometry.
-- Updated the web queue editor so it follows the currently selected pane,
-  allowing pane-local mpv queues to be edited directly instead of only through
-  raw text fields.
+- Updated the web queue editor to expose explicit playlist targets for the
+  main mpv pane and each extra mpv pane, so pane-local queues no longer depend
+  on whichever pane is currently selected in the studio.
 - Expanded the web pane inspector with structured pane-local mpv controls for
   common overrides like audio, mute, loop-file, video disable, and shader
   stacks, while keeping raw per-pane mpv options for everything else.

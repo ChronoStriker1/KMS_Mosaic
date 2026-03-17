@@ -672,24 +672,47 @@ HTML = r"""<!doctype html>
     }
     .suggestion-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      gap: 7px;
+      grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+      gap: 9px;
+      align-items: stretch;
     }
     .suggestion-btn {
       text-align: left;
       border-radius: var(--r-sm);
       border: 1px solid var(--line);
       background: var(--surface-high);
-      padding: 9px 10px 8px;
+      padding: 10px 11px 9px;
       transition: transform 100ms ease, box-shadow 100ms ease;
       cursor: pointer;
+      min-height: 92px;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      gap: 4px;
+      overflow: hidden;
     }
     .suggestion-btn:hover {
       transform: translateY(-1px);
       box-shadow: 0 4px 12px rgba(181,83,47,0.12);
     }
-    .suggestion-btn strong { display: block; font-size: 13px; margin-bottom: 3px; }
-    .suggestion-btn span { display: block; color: var(--muted); font-size: 11px; line-height: 1.35; }
+    .suggestion-btn strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 1px;
+      line-height: 1.2;
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: break-word;
+    }
+    .suggestion-btn span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.42;
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: break-word;
+    }
     /* ─── forms ───────────────────────────────────────── */
     label {
       display: grid;
@@ -829,24 +852,6 @@ HTML = r"""<!doctype html>
       background-size: 28px 28px;
       pointer-events: none;
     }
-    .studio-handle {
-      position: absolute;
-      border: 0;
-      padding: 0;
-      background: rgba(255, 247, 230, 0.92);
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.18), 0 6px 16px rgba(0,0,0,0.18);
-      z-index: 3;
-      touch-action: none;
-    }
-    .studio-handle.col { width: 10px; margin-left: -5px; cursor: ew-resize; border-radius: 999px; }
-    .studio-handle.row { height: 10px; margin-top: -5px; cursor: ns-resize; border-radius: 999px; }
-    .studio-handle::after {
-      content: "";
-      position: absolute;
-      inset: 2px;
-      border-radius: inherit;
-      background: linear-gradient(180deg, var(--accent), var(--accent-dark));
-    }
     .studio-card {
       position: absolute;
       border-radius: 14px;
@@ -858,8 +863,14 @@ HTML = r"""<!doctype html>
       display: grid;
       align-content: space-between;
       padding: 10px;
+      user-select: none;
     }
     .studio-card:hover { border-color: rgba(255,255,255,0.20); }
+    .studio-card.dragging { opacity: 0.58; transform: scale(0.99); }
+    .studio-card.drop-target {
+      border-color: rgba(255,240,200,0.70);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10), 0 0 0 2px rgba(207,120,83,0.28), 0 12px 28px rgba(0,0,0,0.30);
+    }
     .studio-card.selected {
       border-color: rgba(255,240,200,0.70);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10), 0 0 0 2px rgba(207,120,83,0.28), 0 12px 28px rgba(0,0,0,0.30);
@@ -909,6 +920,29 @@ HTML = r"""<!doctype html>
     .studio-empty { color: var(--muted); font-size: 12px; line-height: 1.5; }
     /* ─── playlist ────────────────────────────────────── */
     .playlist-editor { display: grid; gap: 7px; }
+    .playlist-targets {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .playlist-target-btn {
+      border: 1px solid var(--line);
+      background: var(--surface-high);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 11px;
+      font-family: "Menlo", "Consolas", monospace;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .playlist-target-btn.active {
+      color: #fff8f0;
+      border-color: rgba(255,240,200,0.48);
+      background: linear-gradient(135deg, rgba(181,83,47,0.92), rgba(132,58,31,0.96));
+      box-shadow: 0 4px 12px rgba(181,83,47,0.18);
+    }
     .playlist-item {
       border: 1px solid var(--line);
       border-radius: var(--r-sm);
@@ -1039,16 +1073,6 @@ HTML = r"""<!doctype html>
             </div>
           </div>
         </div>
-        <div class="preview-bar">
-          <label>Live Preview
-            <select id="livePreviewRate">
-              <option value="off">Off</option>
-              <option value="500">Light</option>
-              <option value="250">Balanced</option>
-              <option value="120" selected>Mirror</option>
-            </select>
-          </label>
-        </div>
       </div>
     </section>
 
@@ -1063,6 +1087,8 @@ HTML = r"""<!doctype html>
                 <button class="secondary" id="removePaneBtn">Remove Selected Pane</button>
                 <button class="secondary" id="splitVerticalBtn">Split Vertical</button>
                 <button class="secondary" id="splitHorizontalBtn">Split Horizontal</button>
+                <button class="secondary" id="rotatePanelsCcwBtn">Rotate Panels CCW</button>
+                <button class="secondary" id="rotatePanelsCwBtn">Rotate Panels CW</button>
               </div>
               <div class="studio-board" id="studioBoard"></div>
             </div>
@@ -1115,12 +1141,13 @@ HTML = r"""<!doctype html>
 
         <div class="panel-wide">
           <h2 class="section-title" id="queueEditorTitle">Queue Editor</h2>
+          <div class="playlist-targets" id="playlistTargets"></div>
           <div class="playlist-editor" id="playlistEditor"></div>
           <div class="actions tight">
             <button class="secondary" id="addQueueItemBtn">Add Video</button>
           </div>
-          <p class="muted-note" id="queueEditorNote">Follows the selected pane. Not applicable to terminal panes.</p>
-          <label>Video Files
+          <p class="muted-note" id="queueEditorNote">Pick which mpv pane you want to edit.</p>
+          <label id="videoListWrap" class="hidden">Video Files
             <textarea id="videoList" spellcheck="false" placeholder="/path/one.mp4&#10;/path/two.mp4"></textarea>
           </label>
         </div>
@@ -1231,12 +1258,12 @@ HTML = r"""<!doctype html>
     const previewCanvas = document.getElementById("previewCanvas");
     const previewCtx = previewCanvas.getContext("2d");
     const previewLayout = document.querySelector(".preview-layout");
-    const livePreviewRateEl = document.getElementById("livePreviewRate");
     const layoutSelect = document.getElementById("layout");
     const paneList = document.getElementById("paneList");
     const studioBoard = document.getElementById("studioBoard");
     const studioInspector = document.getElementById("studioInspector");
     const playlistEditor = document.getElementById("playlistEditor");
+    const playlistTargets = document.getElementById("playlistTargets");
     const layoutSuggestions = document.getElementById("layoutSuggestions");
     const queueEditorTitleEl = document.getElementById("queueEditorTitle");
     const queueEditorNoteEl = document.getElementById("queueEditorNote");
@@ -1245,12 +1272,13 @@ HTML = r"""<!doctype html>
     let state = null;
     let rawConfigText = "";
     let selectedRole = 0;
-    const livePreviewRateKey = "kms_mosaic_live_preview_rate";
+    let playlistTargetRole = 0;
+    let draggedStudioRole = null;
+    let pendingNewPaneIndexes = new Set();
     let livePreviewTimer = null;
     let livePreviewInFlight = false;
     let livePreviewController = null;
     let livePreviewUrl = null;
-    let studioDragState = null;
     let playlistDragIndex = null;
     const layoutSuggestionCopy = {
       stack: "Vertical stack of the visible panes.",
@@ -1342,6 +1370,21 @@ HTML = r"""<!doctype html>
       });
     }
 
+    function syncMainInspectorMpvOpts() {
+      const audioEl = document.getElementById("inspectorMainAudioMode");
+      const shadersEl = document.getElementById("inspectorMainShaders");
+      const otherEl = document.getElementById("inspectorMainMpvOpts");
+      if (!audioEl || !shadersEl || !otherEl) return;
+      state.mpv_opts = buildMpvOptsFromParts({
+        audioMode: audioEl.value,
+        shadersText: shadersEl.value,
+        otherText: otherEl.value,
+      });
+      document.getElementById("mpvAudioMode").value = audioEl.value;
+      document.getElementById("mpvShaders").value = shadersEl.value;
+      document.getElementById("mpvOpts").value = otherEl.value;
+    }
+
     function syncInspectorPaneMpvOpts(paneIndex) {
       if (!state || paneIndex < 0) return;
       const audioEl = document.getElementById("inspectorPaneAudioMode");
@@ -1366,13 +1409,54 @@ HTML = r"""<!doctype html>
       return state?.pane_types?.[role - 1] === "mpv" ? "video" : "terminal";
     }
 
+    function availablePlaylistTargets() {
+      if (!state) return [];
+      const targets = [{ role: 0, title: "Main mpv Pane" }];
+      for (let role = 1; role <= Number(state.pane_count || 0); role += 1) {
+        const paneIndex = role - 1;
+        if (pendingNewPaneIndexes.has(paneIndex)) continue;
+        if ((state.pane_types?.[paneIndex] || "terminal") !== "mpv") continue;
+        targets.push({ role, title: roleTitle(role) });
+      }
+      return targets;
+    }
+
+    function ensurePlaylistTargetRole() {
+      const roles = availablePlaylistTargets().map((target) => target.role);
+      if (!roles.length) {
+        playlistTargetRole = 0;
+        return;
+      }
+      if (!roles.includes(playlistTargetRole)) {
+        playlistTargetRole = roles[0];
+      }
+    }
+
+    function renderPlaylistTargets() {
+      if (!playlistTargets) return;
+      ensurePlaylistTargetRole();
+      playlistTargets.innerHTML = "";
+      availablePlaylistTargets().forEach((target) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `playlist-target-btn${playlistTargetRole === target.role ? " active" : ""}`;
+        button.textContent = target.title;
+        button.addEventListener("click", () => {
+          playlistTargetRole = target.role;
+          renderPlaylistTargets();
+          renderPlaylistEditor();
+        });
+        playlistTargets.appendChild(button);
+      });
+    }
+
     function queueEditorContext() {
       if (!state) return null;
-      ensureSelectedRole();
-      if (selectedRole === 0) {
+      ensurePlaylistTargetRole();
+      if (playlistTargetRole === 0) {
         return {
           title: "Main Video Queue",
-          note: "This queue controls the main video pane.",
+          note: "This queue controls the main mpv pane.",
           paths: Array.isArray(state.video_paths) ? state.video_paths.slice() : [],
           editable: true,
           apply(paths) {
@@ -1381,12 +1465,12 @@ HTML = r"""<!doctype html>
           }
         };
       }
-      const paneIndex = selectedRole - 1;
+      const paneIndex = playlistTargetRole - 1;
       const paneType = state.pane_types?.[paneIndex] || "terminal";
       if (paneType !== "mpv") {
         return {
-          title: `${roleTitle(selectedRole)} Queue`,
-          note: "This pane is a terminal. Switch it to mpv in the inspector to give it its own queue.",
+          title: `${roleTitle(playlistTargetRole)} Queue`,
+          note: "This pane is not currently an mpv pane.",
           paths: [],
           editable: false,
           apply() {}
@@ -1396,13 +1480,13 @@ HTML = r"""<!doctype html>
       const playlistExtended = state.pane_playlist_extended?.[paneIndex] || "";
       const playlistFifo = state.pane_playlist_fifos?.[paneIndex] || "";
       const paneMpvOpts = Array.isArray(state.pane_mpv_opts?.[paneIndex]) ? state.pane_mpv_opts[paneIndex].slice() : [];
-      const noteParts = ["This queue controls the selected mpv pane."];
+      const noteParts = [`This queue controls ${roleTitle(playlistTargetRole)}.`];
       if (playlistPath) noteParts.push(`Playlist: ${playlistPath}`);
       if (playlistExtended) noteParts.push(`Extended: ${playlistExtended}`);
       if (playlistFifo) noteParts.push(`FIFO: ${playlistFifo}`);
       if (paneMpvOpts.length) noteParts.push(`${paneMpvOpts.length} pane-local mpv option${paneMpvOpts.length === 1 ? "" : "s"}.`);
       return {
-        title: `${roleTitle(selectedRole)} Queue`,
+        title: `${roleTitle(playlistTargetRole)} Queue`,
         note: noteParts.join(" "),
         paths: Array.isArray(state.pane_video_paths?.[paneIndex]) ? state.pane_video_paths[paneIndex].slice() : [],
         editable: true,
@@ -1705,6 +1789,35 @@ HTML = r"""<!doctype html>
       return splitTreeCollapseRole(node.first, role) || splitTreeCollapseRole(node.second, role);
     }
 
+    function splitTreeSwapRoles(node, firstRole, secondRole) {
+      if (!node) return false;
+      let changed = false;
+      if (node.leaf) {
+        if (node.role === firstRole) {
+          node.role = secondRole;
+          return true;
+        }
+        if (node.role === secondRole) {
+          node.role = firstRole;
+          return true;
+        }
+        return false;
+      }
+      changed = splitTreeSwapRoles(node.first, firstRole, secondRole) || changed;
+      changed = splitTreeSwapRoles(node.second, firstRole, secondRole) || changed;
+      return changed;
+    }
+
+    function splitTreeRemapRoles(node, mapping) {
+      if (!node) return;
+      if (node.leaf) {
+        if (Object.prototype.hasOwnProperty.call(mapping, node.role)) node.role = mapping[node.role];
+        return;
+      }
+      splitTreeRemapRoles(node.first, mapping);
+      splitTreeRemapRoles(node.second, mapping);
+    }
+
     function splitTreeNodeAtPath(node, path) {
       let current = node;
       for (const step of String(path || "")) {
@@ -1712,32 +1825,6 @@ HTML = r"""<!doctype html>
         current = step === "0" ? current.first : current.second;
       }
       return current;
-    }
-
-    function splitTreeCollectHandles(node, area, out, path = "") {
-      if (!node || node.leaf) return;
-      const pct = Math.max(10, Math.min(90, Number(node.pct || 50)));
-      if (node.kind === "row") {
-        const firstH = area.h * pct / 100;
-        out.push({
-          path,
-          kind: "row",
-          logical: { x: area.x, y: area.y + firstH, w: area.w, h: 0 },
-          area,
-        });
-        splitTreeCollectHandles(node.first, { x: area.x, y: area.y, w: area.w, h: firstH }, out, `${path}0`);
-        splitTreeCollectHandles(node.second, { x: area.x, y: area.y + firstH, w: area.w, h: area.h - firstH }, out, `${path}1`);
-      } else {
-        const firstW = area.w * pct / 100;
-        out.push({
-          path,
-          kind: "col",
-          logical: { x: area.x + firstW, y: area.y, w: 0, h: area.h },
-          area,
-        });
-        splitTreeCollectHandles(node.first, { x: area.x, y: area.y, w: firstW, h: area.h }, out, `${path}0`);
-        splitTreeCollectHandles(node.second, { x: area.x + firstW, y: area.y, w: area.w - firstW, h: area.h }, out, `${path}1`);
-      }
     }
 
     function ensureSelectedRole() {
@@ -1941,61 +2028,13 @@ HTML = r"""<!doctype html>
     }
 
     function transformStudioPaneRect(rect) {
-      return transformRectByDegrees(rect, studioRotationDegrees());
-    }
-
-    function studioDisplayPointToLogical(x, y) {
-      return inversePointByDegrees(x, y, studioRotationDegrees());
-    }
-
-    function transformStudioDividerRect(rect) {
-      return transformRectByDegrees(rect, 180);
-    }
-
-    function studioDividerDisplayPointToLogicalDisplay(x, y) {
-      return inversePointByDegrees(x, y, 180);
+      const rotated = transformRectByDegrees(rect, studioRotationDegrees());
+      return { x: rotated.x, y: 100 - (rotated.y + rotated.h), w: rotated.w, h: rotated.h };
     }
 
     function applyStudioGeometry() {
       const total = normalizedRotationDegrees();
       studioBoard.style.aspectRatio = (total === 90 || total === 270) ? "9 / 16" : "16 / 9";
-    }
-
-    function sharedDividerBetweenRects(first, second) {
-      const eps = 0.001;
-      if (Math.abs((first.x + first.w) - second.x) < eps || Math.abs((second.x + second.w) - first.x) < eps) {
-        const x = Math.abs((first.x + first.w) - second.x) < eps ? second.x : first.x;
-        const y = Math.max(first.y, second.y);
-        const h = Math.max(0, Math.min(first.y + first.h, second.y + second.h) - y);
-        return { kind: "col", rect: { x, y, w: 0, h } };
-      }
-      if (Math.abs((first.y + first.h) - second.y) < eps || Math.abs((second.y + second.h) - first.y) < eps) {
-        const y = Math.abs((first.y + first.h) - second.y) < eps ? second.y : first.y;
-        const x = Math.max(first.x, second.x);
-        const w = Math.max(0, Math.min(first.x + first.w, second.x + second.w) - x);
-        return { kind: "row", rect: { x, y, w, h: 0 } };
-      }
-      return null;
-    }
-
-    function collectStudioDisplayHandles(node, area, out, path = "") {
-      if (!node || node.leaf) return;
-      const pct = Math.max(10, Math.min(90, Number(node.pct || 50)));
-      let firstArea;
-      let secondArea;
-      if (node.kind === "row") {
-        const firstH = area.h * pct / 100;
-        firstArea = { x: area.x, y: area.y, w: area.w, h: firstH };
-        secondArea = { x: area.x, y: area.y + firstH, w: area.w, h: area.h - firstH };
-      } else {
-        const firstW = area.w * pct / 100;
-        firstArea = { x: area.x, y: area.y, w: firstW, h: area.h };
-        secondArea = { x: area.x + firstW, y: area.y, w: area.w - firstW, h: area.h };
-      }
-      const divider = sharedDividerBetweenRects(transformStudioPaneRect(firstArea), transformStudioPaneRect(secondArea));
-      if (divider) out.push({ path, kind: divider.kind, logicalKind: node.kind, rect: divider.rect });
-      collectStudioDisplayHandles(node.first, firstArea, out, `${path}0`);
-      collectStudioDisplayHandles(node.second, secondArea, out, `${path}1`);
     }
 
     function renderLayoutSuggestions() {
@@ -2019,48 +2058,6 @@ HTML = r"""<!doctype html>
       });
     }
 
-    function beginStudioDrag(path, clientX, clientY) {
-      const tree = ensureSplitTreeModel();
-      const node = splitTreeNodeAtPath(tree, path);
-      if (!node || node.leaf) return;
-      studioDragState = { path, node, startX: clientX, startY: clientY };
-      document.body.style.userSelect = "none";
-    }
-
-    function updateStudioDrag(clientX, clientY) {
-      if (!studioDragState || !state) return;
-      const tree = ensureSplitTreeModel();
-      const node = splitTreeNodeAtPath(tree, studioDragState.path);
-      if (!node || node.leaf) return;
-      const boardRect = studioBoard.getBoundingClientRect();
-      if (!boardRect.width || !boardRect.height) return;
-      const displayX = ((clientX - boardRect.left) / boardRect.width) * 100;
-      const displayY = ((clientY - boardRect.top) / boardRect.height) * 100;
-      const dividerDisplay = studioDividerDisplayPointToLogicalDisplay(displayX, displayY);
-      const logical = studioDisplayPointToLogical(dividerDisplay.x, dividerDisplay.y);
-      const handles = [];
-      splitTreeCollectHandles(tree, { x: 0, y: 0, w: 100, h: 100 }, handles);
-      const handle = handles.find(entry => entry.path === studioDragState.path);
-      if (!handle) return;
-      let pct = node.pct;
-      if (node.kind === "col" && handle.area.w > 0) {
-        pct = ((logical.x - handle.area.x) / handle.area.w) * 100;
-      } else if (node.kind === "row" && handle.area.h > 0) {
-        pct = ((logical.y - handle.area.y) / handle.area.h) * 100;
-      }
-      node.pct = Math.max(10, Math.min(90, pct));
-      state.splitTreeModel = tree;
-      syncSplitTreeState();
-      renderStudioBoard();
-    }
-
-    function finishStudioDrag() {
-      if (!studioDragState) return;
-      studioDragState = null;
-      document.body.style.userSelect = "";
-      renderStudioBoard();
-    }
-
     function renderStudioBoard() {
       if (!state) return;
       ensureSelectedRole();
@@ -2071,6 +2068,7 @@ HTML = r"""<!doctype html>
         const displayRect = transformStudioPaneRect(rect);
         const card = document.createElement("button");
         card.type = "button";
+        card.draggable = true;
         card.className = `studio-card ${roleType(role)}${selectedRole === role ? " selected" : ""}`;
         card.style.left = `${displayRect.x}%`;
         card.style.top = `${displayRect.y}%`;
@@ -2102,6 +2100,48 @@ HTML = r"""<!doctype html>
           renderStudioBoard();
           renderStudioInspector();
         });
+        card.addEventListener("dragstart", (event) => {
+          draggedStudioRole = role;
+          card.classList.add("dragging");
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", String(role));
+          }
+        });
+        card.addEventListener("dragend", () => {
+          draggedStudioRole = null;
+          studioBoard.querySelectorAll(".studio-card").forEach((node) => node.classList.remove("dragging", "drop-target"));
+        });
+        card.addEventListener("dragover", (event) => {
+          if (draggedStudioRole == null || draggedStudioRole === role) return;
+          event.preventDefault();
+          card.classList.add("drop-target");
+        });
+        card.addEventListener("dragleave", () => {
+          card.classList.remove("drop-target");
+        });
+        card.addEventListener("drop", (event) => {
+          if (draggedStudioRole == null || draggedStudioRole === role) return;
+          event.preventDefault();
+          const tree = ensureSplitTreeModel();
+          if (!tree) {
+            setStatus("Could not reposition panes.", true);
+            return;
+          }
+          const sourceRole = draggedStudioRole;
+          card.classList.remove("drop-target");
+          if (!splitTreeSwapRoles(tree, sourceRole, role)) {
+            setStatus("Could not reposition panes.", true);
+            return;
+          }
+          state.splitTreeModel = tree;
+          syncSplitTreeState();
+          draggedStudioRole = null;
+          selectedRole = sourceRole;
+          renderStudioBoard();
+          renderStudioInspector();
+          setStatus(`Swapped ${roleTitle(sourceRole)} with ${roleTitle(role)}.`, false);
+        });
         card.querySelectorAll("[data-studio-split]").forEach((button) => {
           button.addEventListener("click", (event) => {
             event.preventDefault();
@@ -2116,37 +2156,13 @@ HTML = r"""<!doctype html>
         });
         studioBoard.appendChild(card);
       });
-
-      const handles = [];
-      collectStudioDisplayHandles(ensureSplitTreeModel(), { x: 0, y: 0, w: 100, h: 100 }, handles);
-      handles.forEach((entry) => {
-        const displayRect = transformStudioDividerRect(entry.rect);
-        const handle = document.createElement("button");
-        handle.type = "button";
-        handle.className = `studio-handle ${entry.kind}`;
-        if (entry.kind === "col") {
-          handle.style.left = `${displayRect.x}%`;
-          handle.style.top = `${displayRect.y}%`;
-          handle.style.height = `${displayRect.h}%`;
-        } else {
-          handle.style.left = `${displayRect.x}%`;
-          handle.style.top = `${displayRect.y}%`;
-          handle.style.width = `${displayRect.w}%`;
-        }
-        handle.title = entry.logicalKind === "col" ? "Drag to resize vertical split" : "Drag to resize horizontal split";
-        handle.addEventListener("pointerdown", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          beginStudioDrag(entry.path, event.clientX, event.clientY);
-        });
-        studioBoard.appendChild(handle);
-      });
     }
 
     function renderStudioInspector() {
       if (!state) return;
       ensureSelectedRole();
       if (selectedRole === 0) {
+        const mainMpvGroups = parseMpvOptionGroups(state.mpv_opts || []);
         studioInspector.innerHTML = `
           <div>
             <h2 class="section-title">Selected Pane</h2>
@@ -2161,7 +2177,19 @@ HTML = r"""<!doctype html>
           <label>Playlist FIFO
             <input id="inspectorPlaylistFifo" type="text" value="${(state.playlist_fifo || "").replace(/"/g, "&quot;")}" placeholder="/tmp/mosaic.fifo" />
           </label>
-          <p class="muted-note">This inspector controls the main video pane. Additional pane slots can also be converted into mpv panes with their own playlists.</p>
+          <label>Audio Output
+            <select id="inspectorMainAudioMode">
+              <option value="">Default</option>
+              <option value="no-audio"${mainMpvGroups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
+            </select>
+          </label>
+          <label>Shader Stack
+            <textarea id="inspectorMainShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${mainMpvGroups.shaders.join("\n")}</textarea>
+          </label>
+          <label>Additional mpv Options
+            <textarea id="inspectorMainMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${mainMpvGroups.other.join("\n")}</textarea>
+          </label>
+          <p class="muted-note">This inspector controls the main video pane. The queue editor below still controls the main pane video list.</p>
         `;
         document.getElementById("inspectorPlaylist").addEventListener("input", (event) => {
           state.playlist = event.target.value;
@@ -2172,6 +2200,17 @@ HTML = r"""<!doctype html>
           state.playlist_fifo = event.target.value;
           document.getElementById("playlistFifo").value = state.playlist_fifo;
         });
+        ["inspectorMainAudioMode", "inspectorMainShaders", "inspectorMainMpvOpts"].forEach((id) => {
+          document.getElementById(id).addEventListener("input", () => {
+            syncMainInspectorMpvOpts();
+            renderStudioBoard();
+          });
+          document.getElementById(id).addEventListener("change", () => {
+            syncMainInspectorMpvOpts();
+            renderStudioBoard();
+          });
+        });
+        syncMainInspectorMpvOpts();
         return;
       }
 
@@ -2179,6 +2218,28 @@ HTML = r"""<!doctype html>
       const paneType = state.pane_types?.[paneIndex] || "terminal";
       const value = state.pane_commands?.[paneIndex] || "";
       if (paneType === "mpv") {
+        if (pendingNewPaneIndexes.has(paneIndex)) {
+          studioInspector.innerHTML = `
+            <div>
+              <h2 class="section-title">Selected Pane</h2>
+              <div class="mini">${roleTitle(selectedRole)}</div>
+            </div>
+            <label>Pane Type
+              <select id="inspectorPaneType">
+                <option value="terminal">terminal</option>
+                <option value="mpv" selected>mpv</option>
+              </select>
+            </label>
+            <p class="muted-note">This new mpv pane has been placed in the layout, but its playlist and mpv options stay hidden until you save and let the page reload from the persisted config.</p>
+          `;
+          document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
+            state.pane_types[paneIndex] = event.target.value;
+            renderPaneList(state);
+            renderStudioBoard();
+            renderStudioInspector();
+          });
+          return;
+        }
         const panePlaylist = state.pane_playlists?.[paneIndex] || "";
         const panePlaylistExtended = state.pane_playlist_extended?.[paneIndex] || "";
         const panePlaylistFifo = state.pane_playlist_fifos?.[paneIndex] || "";
@@ -2321,6 +2382,7 @@ HTML = r"""<!doctype html>
 
     function renderPlaylistEditor() {
       if (!state) return;
+      renderPlaylistTargets();
       const ctx = queueEditorContext();
       if (!ctx) return;
       queueEditorTitleEl.textContent = ctx.title;
@@ -2332,7 +2394,7 @@ HTML = r"""<!doctype html>
       const paths = ctx.paths;
       const groups = compressPlaylistPaths(paths);
       if (!ctx.editable) {
-        playlistEditor.innerHTML = `<div class="studio-empty">No media queue for the selected pane.</div>`;
+        playlistEditor.innerHTML = `<div class="studio-empty">No media queue is available for this target.</div>`;
         return;
       }
       if (!groups.length) {
@@ -2527,6 +2589,7 @@ HTML = r"""<!doctype html>
       while (state.pane_playlist_fifos.length < state.pane_count) state.pane_playlist_fifos.push("");
       while (state.pane_video_paths.length < state.pane_count) state.pane_video_paths.push([]);
       while (state.pane_mpv_opts.length < state.pane_count) state.pane_mpv_opts.push([]);
+      pendingNewPaneIndexes.add(newRole - 1);
       const changed = splitTreeReplaceLeaf(tree, targetRole, (leaf) => ({
         leaf: false,
         kind,
@@ -2543,6 +2606,7 @@ HTML = r"""<!doctype html>
         state.pane_playlist_fifos.pop();
         state.pane_video_paths.pop();
         state.pane_mpv_opts.pop();
+        pendingNewPaneIndexes.delete(newRole - 1);
         return false;
       }
       state.splitTreeModel = tree;
@@ -2577,6 +2641,9 @@ HTML = r"""<!doctype html>
       state.pane_playlist_fifos.splice(paneIndex, 1);
       state.pane_video_paths.splice(paneIndex, 1);
       state.pane_mpv_opts.splice(paneIndex, 1);
+      pendingNewPaneIndexes = new Set(Array.from(pendingNewPaneIndexes)
+        .filter((index) => index !== paneIndex)
+        .map((index) => index > paneIndex ? index - 1 : index));
       state.pane_count = Math.max(1, state.pane_count - 1);
       state.splitTreeModel = tree;
       syncSplitTreeState();
@@ -2746,9 +2813,41 @@ HTML = r"""<!doctype html>
     }
 
     function studioRotationDegrees() {
-      let total = (normalizedRotationDegrees() + 270) % 360;
-      if (total < 0) total += 360;
-      return total;
+      return 0;
+    }
+
+    function rotatePanels(direction) {
+      if (!state) return false;
+      const tree = ensureSplitTreeModel();
+      if (!tree) return false;
+      const rects = computeStudioRects(state);
+      const roles = rects
+        .map((rect, role) => ({ role, rect: transformStudioPaneRect(rect) }))
+        .filter(({ rect }) => rect.w > 0 && rect.h > 0);
+      if (roles.length < 2) return false;
+      const cx = roles.reduce((sum, entry) => sum + entry.rect.x + entry.rect.w / 2, 0) / roles.length;
+      const cy = roles.reduce((sum, entry) => sum + entry.rect.y + entry.rect.h / 2, 0) / roles.length;
+      roles.sort((a, b) => {
+        const aa = Math.atan2((a.rect.y + a.rect.h / 2) - cy, (a.rect.x + a.rect.w / 2) - cx);
+        const ba = Math.atan2((b.rect.y + b.rect.h / 2) - cy, (b.rect.x + b.rect.w / 2) - cx);
+        return aa - ba;
+      });
+      const orderedRoles = roles.map((entry) => entry.role);
+      const mapping = {};
+      for (let i = 0; i < orderedRoles.length; i += 1) {
+        const current = orderedRoles[i];
+        const nextIndex = direction === "cw"
+          ? (i - 1 + orderedRoles.length) % orderedRoles.length
+          : (i + 1) % orderedRoles.length;
+        mapping[current] = orderedRoles[nextIndex];
+      }
+      splitTreeRemapRoles(tree, mapping);
+      state.splitTreeModel = tree;
+      syncSplitTreeState();
+      renderStudioBoard();
+      renderStudioInspector();
+      renderPlaylistEditor();
+      return true;
     }
 
     function applyPreviewGeometry() {
@@ -2840,6 +2939,8 @@ HTML = r"""<!doctype html>
     function fillForm(nextState, configPath, nextRawConfig) {
       state = nextState;
       rawConfigText = nextRawConfig;
+      pendingNewPaneIndexes = new Set();
+      playlistTargetRole = 0;
       ensurePaneCommands(state);
       state.splitTreeModel = parseSplitTreeSpec(state.split_tree || "");
       document.getElementById("configPath").textContent = `Config: ${configPath}`;
@@ -2904,9 +3005,9 @@ HTML = r"""<!doctype html>
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Failed to save config");
-      document.getElementById("rawConfig").value = payload.raw_config;
-      rawConfigText = payload.raw_config;
+      fillForm(payload.state, payload.config_path, payload.raw_config);
       await refreshSnapshot();
+      scheduleLivePreview();
       setStatus(`Saved ${payload.config_path}. kms_mosaic will reload on file change.`, false);
     }
 
@@ -2921,6 +3022,7 @@ HTML = r"""<!doctype html>
       if (!response.ok) throw new Error(payload.error || "Failed to save raw config");
       fillForm(payload.state, payload.config_path, payload.raw_config);
       await refreshSnapshot();
+      scheduleLivePreview();
       setStatus(`Saved raw config to ${payload.config_path}.`, false);
     }
 
@@ -2930,10 +3032,7 @@ HTML = r"""<!doctype html>
     }
 
     function currentLivePreviewDelay() {
-      const value = livePreviewRateEl.value || localStorage.getItem(livePreviewRateKey) || "120";
-      if (value === "off") return null;
-      const delay = Number(value);
-      return Number.isFinite(delay) && delay > 0 ? delay : 120;
+      return 120;
     }
 
     function scheduleLivePreview() {
@@ -3006,10 +3105,19 @@ HTML = r"""<!doctype html>
       }
       setStatus("Split the selected pane horizontally.", false);
     });
-    livePreviewRateEl.addEventListener("change", () => {
-      localStorage.setItem(livePreviewRateKey, livePreviewRateEl.value);
-      scheduleLivePreview();
-      setStatus(`Live preview rate set to ${livePreviewRateEl.value}.`, false);
+    document.getElementById("rotatePanelsCcwBtn").addEventListener("click", () => {
+      if (!rotatePanels("ccw")) {
+        setStatus("Could not rotate panels counterclockwise.", true);
+        return;
+      }
+      setStatus("Rotated panels counterclockwise.", false);
+    });
+    document.getElementById("rotatePanelsCwBtn").addEventListener("click", () => {
+      if (!rotatePanels("cw")) {
+        setStatus("Could not rotate panels clockwise.", true);
+        return;
+      }
+      setStatus("Rotated panels clockwise.", false);
     });
     previewImage.addEventListener("load", () => {
       livePreviewInFlight = false;
@@ -3022,13 +3130,6 @@ HTML = r"""<!doctype html>
       applyPreviewGeometry();
       renderStudioBoard();
     });
-    window.addEventListener("pointermove", (event) => {
-      if (!studioDragState) return;
-      updateStudioDrag(event.clientX, event.clientY);
-    });
-    window.addEventListener("pointerup", () => finishStudioDrag());
-    window.addEventListener("pointercancel", () => finishStudioDrag());
-
     [
       "connector","mode","rotation","fontSize","rightFrac","paneSplit",
       "videoFrac","paneCount","layout","roles","fsCycleSec","playlist",
@@ -3040,7 +3141,6 @@ HTML = r"""<!doctype html>
       document.getElementById(id).addEventListener("input", () => syncFormToState());
       document.getElementById(id).addEventListener("change", () => syncFormToState());
     });
-    livePreviewRateEl.value = localStorage.getItem(livePreviewRateKey) || "120";
     loadState().catch(err => setStatus(err.message, true));
     window.addEventListener("beforeunload", () => stopLivePreviewStream());
   </script>
