@@ -11,130 +11,305 @@ $web_port = $cfg['WEB_PORT'] ?? '8788';
 $config_path = $cfg['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf';
 ?>
 <style>
-  .kmsmosaic-wrap { display:grid; grid-template-columns: 340px 1fr; gap: 24px; align-items:start; }
-  .kmsmosaic-panel { background: rgba(255,255,255,.65); border: 1px solid rgba(0,0,0,.08); border-radius: 10px; padding: 18px; }
-  .kmsmosaic-panel h3 { margin: 0 0 14px; }
-  .kmsmosaic-row { margin-bottom: 14px; }
-  .kmsmosaic-row label { display:block; font-weight: 600; margin-bottom: 6px; }
-  .kmsmosaic-row input[type="text"], .kmsmosaic-row select { width: 100%; }
-  .kmsmosaic-actions { display:flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-  .kmsmosaic-status { font-weight: 600; margin-bottom: 12px; }
-  .kmsmosaic-status.ok { color: #1f7a1f; }
-  .kmsmosaic-status.bad { color: #b3412b; }
-  .kmsmosaic-frame { width: 100%; min-height: 78vh; border: 1px solid rgba(0,0,0,.12); border-radius: 10px; background: #111; }
-  .kmsmosaic-meta { color: #666; font-size: 13px; margin-top: 8px; }
+  .kms-page {
+    display: grid;
+    gap: 18px;
+  }
+  .kms-settings {
+    display: grid;
+    gap: 18px;
+    grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
+    align-items: start;
+  }
+  .kms-panel {
+    background: var(--box_bg, rgba(255,255,255,.78));
+    border: 1px solid var(--box_border, rgba(0,0,0,.12));
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  }
+  .kms-panel-head {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--box_border, rgba(0,0,0,.12));
+    background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(255,255,255,.32));
+  }
+  .kms-panel-head h2,
+  .kms-panel-head h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .kms-panel-body {
+    padding: 16px;
+    display: grid;
+    gap: 14px;
+  }
+  .kms-field {
+    display: grid;
+    gap: 6px;
+  }
+  .kms-field label {
+    font-weight: 700;
+  }
+  .kms-field input[type="text"],
+  .kms-field select {
+    width: 100%;
+  }
+  .kms-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .kms-status {
+    font-weight: 700;
+  }
+  .kms-status.ok { color: #1a7b2b; }
+  .kms-status.bad { color: #ba3b2a; }
+  .kms-meta {
+    font-size: 12px;
+    color: var(--color-text-light, #666);
+    line-height: 1.5;
+  }
+  .kms-ui-shell {
+    min-height: 72vh;
+  }
+  .kms-ui-loading,
+  .kms-ui-error {
+    padding: 18px;
+    border-radius: 8px;
+    border: 1px solid var(--box_border, rgba(0,0,0,.12));
+    background: rgba(255,255,255,.55);
+  }
+  .kms-ui-error { color: #ba3b2a; }
+  @media (max-width: 1100px) {
+    .kms-settings { grid-template-columns: 1fr; }
+  }
 </style>
 
-<div class="kmsmosaic-wrap">
-  <div class="kmsmosaic-panel">
-    <h3>KMS Mosaic Service</h3>
-    <div id="kmsStatus" class="kmsmosaic-status">Loading status…</div>
+<div class="kms-page">
+  <div class="kms-settings">
+    <section class="kms-panel">
+      <div class="kms-panel-head">
+        <h2>KMS Mosaic Service</h2>
+      </div>
+      <div class="kms-panel-body">
+        <div id="kmsStatus" class="kms-status">Loading status…</div>
 
-    <div class="kmsmosaic-row">
-      <label for="SERVICE">Start `kms_mosaic` at boot</label>
-      <select id="SERVICE" name="SERVICE">
-        <?=mk_option($service, "enable", "Yes");?>
-        <?=mk_option($service, "disable", "No");?>
-      </select>
-    </div>
+        <div class="kms-field">
+          <label for="kmsServiceBoot">Start `kms_mosaic` at boot</label>
+          <select id="kmsServiceBoot" name="SERVICE">
+            <?=mk_option($service, "enable", "Yes");?>
+            <?=mk_option($service, "disable", "No");?>
+          </select>
+        </div>
 
-    <div class="kmsmosaic-row">
-      <label for="WEB_SERVICE">Start web UI at boot</label>
-      <select id="WEB_SERVICE" name="WEB_SERVICE">
-        <?=mk_option($web_service, "enable", "Yes");?>
-        <?=mk_option($web_service, "disable", "No");?>
-      </select>
-    </div>
+        <div class="kms-field">
+          <label for="kmsWebBoot">Start preview service at boot</label>
+          <select id="kmsWebBoot" name="WEB_SERVICE">
+            <?=mk_option($web_service, "enable", "Yes");?>
+            <?=mk_option($web_service, "disable", "No");?>
+          </select>
+        </div>
 
-    <div class="kmsmosaic-row">
-      <label for="WEB_PORT">Web UI port</label>
-      <input id="WEB_PORT" name="WEB_PORT" type="text" value="<?=htmlspecialchars($web_port);?>">
-    </div>
+        <div class="kms-field">
+          <label for="kmsWebPort">Preview service port</label>
+          <input id="kmsWebPort" name="WEB_PORT" type="text" value="<?=htmlspecialchars($web_port);?>">
+        </div>
 
-    <div class="kmsmosaic-row">
-      <label for="CONFIG_PATH">Config path</label>
-      <input id="CONFIG_PATH" name="CONFIG_PATH" type="text" value="<?=htmlspecialchars($config_path);?>">
-    </div>
+        <div class="kms-field">
+          <label for="kmsConfigPath">Config path</label>
+          <input id="kmsConfigPath" name="CONFIG_PATH" type="text" value="<?=htmlspecialchars($config_path);?>">
+        </div>
 
-    <div class="kmsmosaic-actions">
-      <button type="button" onclick="kmsSave()">Apply</button>
-      <button type="button" onclick="kmsControl('start')">Start</button>
-      <button type="button" onclick="kmsControl('restart')">Restart</button>
-      <button type="button" onclick="kmsControl('stop')">Stop</button>
-      <button type="button" onclick="kmsRefresh()">Refresh</button>
-    </div>
+        <div class="kms-actions">
+          <button type="button" onclick="kmsSavePluginSettings()">Apply</button>
+          <button type="button" onclick="kmsControl('start')">Start</button>
+          <button type="button" onclick="kmsControl('restart')">Restart</button>
+          <button type="button" onclick="kmsControl('stop')">Stop</button>
+          <button type="button" onclick="kmsRefreshStatus()">Refresh</button>
+        </div>
 
-    <div class="kmsmosaic-meta" id="kmsMeta"></div>
-  </div>
+        <div id="kmsMeta" class="kms-meta"></div>
+      </div>
+    </section>
 
-  <div class="kmsmosaic-panel">
-    <h3>Embedded Config UI</h3>
-    <iframe id="kmsFrame" class="kmsmosaic-frame" src="about:blank"></iframe>
+    <section class="kms-panel kms-ui-shell">
+      <div class="kms-panel-head">
+        <h2>KMS Mosaic Settings</h2>
+      </div>
+      <div class="kms-panel-body">
+        <div id="kmsUiMount" class="kms-ui-loading">Loading editor…</div>
+      </div>
+    </section>
   </div>
 </div>
 
 <script>
 const kmsActionUrl = '/plugins/kms.mosaic/include/actions.php';
+let kmsEmbeddedLoaded = false;
+let kmsEmbeddedStylesInstalled = false;
 
-function kmsIframeUrl(port) {
-  return `http://${location.hostname}:${port}/`;
+function kmsEmbeddedUrl(action) {
+  return `${kmsActionUrl}?action=${encodeURIComponent(action)}`;
+}
+
+function kmsRewriteBackendHtml(html) {
+  return html
+    .replaceAll('/api/state', `${kmsActionUrl}?action=backend_state`)
+    .replaceAll('/api/config', `${kmsActionUrl}?action=backend_config`)
+    .replaceAll('/api/raw_config', `${kmsActionUrl}?action=backend_raw_config`)
+    .replaceAll('/api/webrtc-offer', `${kmsActionUrl}?action=backend_webrtc_offer`)
+    .replaceAll('/api/media?path=', `${kmsActionUrl}?action=backend_media&path=`);
+}
+
+function kmsEmbeddedOverrides() {
+  return `
+    #kmsUiMount .shell {
+      margin: 0;
+      max-width: none;
+      grid-template-columns: minmax(360px, 420px) minmax(0, 1fr);
+      gap: 18px;
+      padding: 0;
+    }
+    #kmsUiMount .card {
+      background: var(--box_bg, rgba(255,255,255,.78));
+      border: 1px solid var(--box_border, rgba(0,0,0,.12));
+      border-radius: 8px;
+      box-shadow: none;
+      backdrop-filter: none;
+    }
+    #kmsUiMount .grain::before,
+    #kmsUiMount .grain::after,
+    #kmsUiMount .app-header .accent-bar {
+      display: none !important;
+    }
+    #kmsUiMount .left-rail {
+      position: static;
+      top: auto;
+    }
+    #kmsUiMount .app-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--box_border, rgba(0,0,0,.12));
+      background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(255,255,255,.32));
+    }
+    #kmsUiMount .app-name {
+      font-size: 16px;
+      letter-spacing: normal;
+      text-transform: none;
+      color: var(--color-text, #222);
+    }
+    #kmsUiMount .config-path {
+      color: var(--color-text-light, #666);
+      letter-spacing: normal;
+      text-transform: none;
+      font-size: 12px;
+    }
+    #kmsUiMount .panel-body > div,
+    #kmsUiMount details.advanced-block {
+      border-radius: 8px;
+      background: rgba(255,255,255,.48);
+      border: 1px solid rgba(0,0,0,.08);
+    }
+    #kmsUiMount button.primary,
+    #kmsUiMount button.secondary {
+      border-radius: 6px;
+    }
+    #kmsUiMount .section-title {
+      color: var(--color-text, #222);
+      letter-spacing: 0.02em;
+    }
+    @media (max-width: 1200px) {
+      #kmsUiMount .shell {
+        grid-template-columns: 1fr;
+      }
+    }
+  `;
+}
+
+function kmsScopeCss(css) {
+  return css.replace(/(^|})(\s*[^@{}][^{}]*)\{/g, (match, prefix, selectorGroup) => {
+    const rewritten = selectorGroup
+      .split(',')
+      .map((selector) => {
+        const trimmed = selector.trim();
+        if (!trimmed) return '';
+        if (trimmed.startsWith('#kmsUiMount')) return trimmed;
+        return `#kmsUiMount ${trimmed}`;
+      })
+      .filter(Boolean)
+      .join(', ');
+    return `${prefix}${rewritten}{`;
+  });
+}
+
+function kmsInstallEmbeddedStyles(doc) {
+  if (kmsEmbeddedStylesInstalled) return;
+  const styleNode = document.createElement('style');
+  styleNode.id = 'kmsEmbeddedStyles';
+  const embeddedCss = Array.from(doc.querySelectorAll('style')).map((style) => style.textContent).join('\n');
+  styleNode.textContent = kmsScopeCss(embeddedCss) + '\n' + kmsEmbeddedOverrides();
+  document.head.appendChild(styleNode);
+  kmsEmbeddedStylesInstalled = true;
 }
 
 function kmsUpdateStatus(data) {
   const el = document.getElementById('kmsStatus');
   const meta = document.getElementById('kmsMeta');
-  const port = data.web_port || document.getElementById('WEB_PORT').value || '8788';
-  const frame = document.getElementById('kmsFrame');
   const kmsOk = !!data.kms_running;
   const webOk = !!data.web_running;
-  el.className = `kmsmosaic-status ${kmsOk ? 'ok' : 'bad'}`;
-  el.textContent = `kms_mosaic: ${kmsOk ? 'running' : 'stopped'} | web: ${webOk ? 'running' : 'stopped'}`;
-  meta.textContent = `Config: ${data.config_path || ''}${data.kms_pid ? ' | kms pid: ' + data.kms_pid : ''}${data.web_pid ? ' | web pid: ' + data.web_pid : ''}`;
-  if (webOk) {
-    const nextSrc = kmsIframeUrl(port);
-    if (frame.dataset.src !== nextSrc) {
-      frame.src = nextSrc;
-      frame.dataset.src = nextSrc;
-    }
-  } else {
-    frame.src = 'about:blank';
-    frame.dataset.src = '';
-  }
+  el.className = `kms-status ${kmsOk ? 'ok' : 'bad'}`;
+  el.textContent = `kms_mosaic: ${kmsOk ? 'running' : 'stopped'} | preview service: ${webOk ? 'running' : 'stopped'}`;
+  meta.textContent = `Config: ${data.config_path || ''}${data.kms_pid ? ' | kms pid: ' + data.kms_pid : ''}${data.web_pid ? ' | preview pid: ' + data.web_pid : ''}`;
 }
 
-async function kmsPost(action, extra = {}) {
-  const body = new URLSearchParams({ action, ...extra });
-  const response = await fetch(kmsActionUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Request failed');
+async function kmsPost(action, extra = {}, jsonBody = false) {
+  let response;
+  if (jsonBody) {
+    response = await fetch(`${kmsActionUrl}?action=${encodeURIComponent(action)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(extra)
+    });
+  } else {
+    const body = new URLSearchParams({ action, ...extra });
+    response = await fetch(kmsActionUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body
+    });
+  }
+  const contentType = response.headers.get('content-type') || '';
+  const data = contentType.includes('application/json') ? await response.json() : await response.text();
+  if (!response.ok) {
+    const message = typeof data === 'string' ? data : (data.error || 'Request failed');
+    throw new Error(message);
+  }
   return data;
 }
 
-async function kmsRefresh() {
+async function kmsRefreshStatus() {
   try {
     const data = await kmsPost('status');
     kmsUpdateStatus(data);
+    if (data.web_running) await kmsEnsureEmbeddedLoaded();
   } catch (err) {
-    document.getElementById('kmsStatus').className = 'kmsmosaic-status bad';
+    document.getElementById('kmsStatus').className = 'kms-status bad';
     document.getElementById('kmsStatus').textContent = err.message || 'Status failed';
   }
 }
 
-async function kmsSave() {
+async function kmsSavePluginSettings() {
   try {
     const data = await kmsPost('save', {
-      SERVICE: document.getElementById('SERVICE').value,
-      WEB_SERVICE: document.getElementById('WEB_SERVICE').value,
-      WEB_PORT: document.getElementById('WEB_PORT').value,
-      CONFIG_PATH: document.getElementById('CONFIG_PATH').value
+      SERVICE: document.getElementById('kmsServiceBoot').value,
+      WEB_SERVICE: document.getElementById('kmsWebBoot').value,
+      WEB_PORT: document.getElementById('kmsWebPort').value,
+      CONFIG_PATH: document.getElementById('kmsConfigPath').value
     });
     kmsUpdateStatus(data);
+    if (data.web_running) await kmsEnsureEmbeddedLoaded();
   } catch (err) {
-    document.getElementById('kmsStatus').className = 'kmsmosaic-status bad';
+    document.getElementById('kmsStatus').className = 'kms-status bad';
     document.getElementById('kmsStatus').textContent = err.message || 'Apply failed';
   }
 }
@@ -143,13 +318,40 @@ async function kmsControl(action) {
   try {
     const data = await kmsPost(action);
     kmsUpdateStatus(data);
+    if (data.web_running) await kmsEnsureEmbeddedLoaded();
   } catch (err) {
-    document.getElementById('kmsStatus').className = 'kmsmosaic-status bad';
+    document.getElementById('kmsStatus').className = 'kms-status bad';
     document.getElementById('kmsStatus').textContent = err.message || `${action} failed`;
   }
 }
 
+async function kmsEnsureEmbeddedLoaded() {
+  if (kmsEmbeddedLoaded) return;
+  const mount = document.getElementById('kmsUiMount');
+  try {
+    const response = await fetch(kmsEmbeddedUrl('backend_html'));
+    const html = await response.text();
+    if (!response.ok) throw new Error(html || 'Unable to load editor');
+    const rewritten = kmsRewriteBackendHtml(html);
+    const doc = new DOMParser().parseFromString(rewritten, 'text/html');
+    kmsInstallEmbeddedStyles(doc);
+    const scripts = Array.from(doc.querySelectorAll('script')).map((script) => script.textContent || '');
+    doc.querySelectorAll('script').forEach((script) => script.remove());
+    mount.className = '';
+    mount.innerHTML = doc.body.innerHTML;
+    scripts.forEach((text) => {
+      const script = document.createElement('script');
+      script.textContent = text;
+      mount.appendChild(script);
+    });
+    kmsEmbeddedLoaded = true;
+  } catch (err) {
+    mount.className = 'kms-ui-error';
+    mount.textContent = err.message || 'Unable to load editor.';
+  }
+}
+
 $(function() {
-  kmsRefresh();
+  kmsRefreshStatus();
 });
 </script>
