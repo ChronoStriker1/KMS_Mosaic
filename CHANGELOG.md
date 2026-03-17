@@ -49,6 +49,9 @@
 - Updated the web queue editor so it follows the currently selected pane,
   allowing pane-local mpv queues to be edited directly instead of only through
   raw text fields.
+- Expanded the web pane inspector with structured pane-local mpv controls for
+  common overrides like audio, mute, loop-file, video disable, and shader
+  stacks, while keeping raw per-pane mpv options for everything else.
 - Added inline playlist previews in the web queue editor by serving media files
   through the web app and letting the browser extract still frames for list
   items.

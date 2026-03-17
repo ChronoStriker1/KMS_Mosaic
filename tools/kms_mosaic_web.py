@@ -1260,12 +1260,24 @@ HTML = r"""<!doctype html>
     }
 
     function parseMpvOptionGroups(opts) {
-      const groups = { audioMode: "", shaders: [], other: [] };
+      const groups = { audioMode: "", muteMode: "", loopFile: "", videoMode: "", shaders: [], other: [] };
       (Array.isArray(opts) ? opts : []).forEach((opt) => {
         const value = String(opt || "").trim();
         if (!value) return;
         if (value === "no-audio" || value === "audio=no" || value === "mpv-out=no-audio") {
           groups.audioMode = "no-audio";
+          return;
+        }
+        if (value === "mute=yes" || value === "mute=no") {
+          groups.muteMode = value.slice("mute=".length);
+          return;
+        }
+        if (value === "loop-file=no" || value === "loop-file=yes" || value === "loop-file=inf") {
+          groups.loopFile = value.slice("loop-file=".length);
+          return;
+        }
+        if (value === "vid=no") {
+          groups.videoMode = "audio-only";
           return;
         }
         const shaderMarker = "glsl-shaders=";
@@ -1279,22 +1291,58 @@ HTML = r"""<!doctype html>
       return groups;
     }
 
-    function buildMpvOptsFromControls() {
+    function buildMpvOptsFromParts(parts) {
       const opts = [];
-      if (document.getElementById("mpvAudioMode").value === "no-audio") {
+      if (parts.audioMode === "no-audio") {
         opts.push("mpv-out=no-audio");
       }
-      document.getElementById("mpvShaders").value
+      if (parts.muteMode === "yes" || parts.muteMode === "no") {
+        opts.push(`mute=${parts.muteMode}`);
+      }
+      if (parts.loopFile === "no" || parts.loopFile === "yes" || parts.loopFile === "inf") {
+        opts.push(`loop-file=${parts.loopFile}`);
+      }
+      if (parts.videoMode === "audio-only") {
+        opts.push("vid=no");
+      }
+      String(parts.shadersText || "")
         .split("\n")
         .map(v => v.trim())
         .filter(Boolean)
         .forEach(shader => opts.push(`mpv-out=glsl-shaders=${shader}`));
-      document.getElementById("mpvOpts").value
+      String(parts.otherText || "")
         .split("\n")
         .map(v => v.trim())
         .filter(Boolean)
         .forEach(opt => opts.push(opt));
       return opts;
+    }
+
+    function buildMpvOptsFromControls() {
+      return buildMpvOptsFromParts({
+        audioMode: document.getElementById("mpvAudioMode").value,
+        shadersText: document.getElementById("mpvShaders").value,
+        otherText: document.getElementById("mpvOpts").value,
+      });
+    }
+
+    function syncInspectorPaneMpvOpts(paneIndex) {
+      if (!state || paneIndex < 0) return;
+      const audioEl = document.getElementById("inspectorPaneAudioMode");
+      const muteEl = document.getElementById("inspectorPaneMuteMode");
+      const loopEl = document.getElementById("inspectorPaneLoopFile");
+      const videoEl = document.getElementById("inspectorPaneVideoMode");
+      const shadersEl = document.getElementById("inspectorPaneShaders");
+      const otherEl = document.getElementById("inspectorPaneMpvOpts");
+      if (!audioEl || !muteEl || !loopEl || !videoEl || !shadersEl || !otherEl) return;
+      state.pane_mpv_opts[paneIndex] = buildMpvOptsFromParts({
+        audioMode: audioEl.value,
+        muteMode: muteEl.value,
+        loopFile: loopEl.value,
+        videoMode: videoEl.value,
+        shadersText: shadersEl.value,
+        otherText: otherEl.value,
+      });
     }
 
     function roleType(role) {
@@ -2114,7 +2162,7 @@ HTML = r"""<!doctype html>
         const panePlaylist = state.pane_playlists?.[paneIndex] || "";
         const panePlaylistExtended = state.pane_playlist_extended?.[paneIndex] || "";
         const paneVideos = (state.pane_video_paths?.[paneIndex] || []).join("\n");
-        const paneMpvOpts = (state.pane_mpv_opts?.[paneIndex] || []).join("\n");
+        const paneMpvGroups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
         studioInspector.innerHTML = `
           <div>
             <h2 class="section-title">Selected Pane</h2>
@@ -2132,13 +2180,43 @@ HTML = r"""<!doctype html>
           <label>Playlist Extended
             <input id="inspectorPanePlaylistExtended" type="text" value="${panePlaylistExtended.replace(/"/g, "&quot;")}" placeholder="/path/to/extended.txt" />
           </label>
+          <label>Audio Output
+            <select id="inspectorPaneAudioMode">
+              <option value="">Default</option>
+              <option value="no-audio"${paneMpvGroups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
+            </select>
+          </label>
+          <label>Mute
+            <select id="inspectorPaneMuteMode">
+              <option value="">Default</option>
+              <option value="yes"${paneMpvGroups.muteMode === "yes" ? " selected" : ""}>Muted</option>
+              <option value="no"${paneMpvGroups.muteMode === "no" ? " selected" : ""}>Unmuted</option>
+            </select>
+          </label>
+          <label>Loop Current File
+            <select id="inspectorPaneLoopFile">
+              <option value="">Default</option>
+              <option value="no"${paneMpvGroups.loopFile === "no" ? " selected" : ""}>Off</option>
+              <option value="yes"${paneMpvGroups.loopFile === "yes" ? " selected" : ""}>On</option>
+              <option value="inf"${paneMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
+            </select>
+          </label>
+          <label>Video Output
+            <select id="inspectorPaneVideoMode">
+              <option value="">Default</option>
+              <option value="audio-only"${paneMpvGroups.videoMode === "audio-only" ? " selected" : ""}>Audio Only</option>
+            </select>
+          </label>
+          <label>Shader Stack
+            <textarea id="inspectorPaneShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${paneMpvGroups.shaders.join("\n")}</textarea>
+          </label>
           <label>Videos
             <textarea id="inspectorPaneVideos" spellcheck="false" placeholder="/path/one.mp4&#10;/path/two.mp4">${paneVideos}</textarea>
           </label>
-          <label>Pane mpv Options
-            <textarea id="inspectorPaneMpvOpts" spellcheck="false" placeholder="mute=yes&#10;vid=no">${paneMpvOpts}</textarea>
+          <label>Additional mpv Options
+            <textarea id="inspectorPaneMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${paneMpvGroups.other.join("\n")}</textarea>
           </label>
-          <p class="muted-note">This pane writes its own per-pane mpv config and queue.</p>
+          <p class="muted-note">This pane writes its own per-pane mpv config and queue. The structured controls above generate common pane-local mpv options, and the final box keeps any extra per-pane flags that do not have a dedicated control yet.</p>
         `;
         document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
           state.pane_types[paneIndex] = event.target.value;
@@ -2161,11 +2239,26 @@ HTML = r"""<!doctype html>
           renderStudioBoard();
           renderPlaylistEditor();
         });
-        document.getElementById("inspectorPaneMpvOpts").addEventListener("input", (event) => {
-          state.pane_mpv_opts[paneIndex] = event.target.value.split("\n").map(v => v.trim()).filter(Boolean);
-          renderStudioBoard();
-          renderPlaylistEditor();
+        [
+          "inspectorPaneAudioMode",
+          "inspectorPaneMuteMode",
+          "inspectorPaneLoopFile",
+          "inspectorPaneVideoMode",
+          "inspectorPaneShaders",
+          "inspectorPaneMpvOpts",
+        ].forEach((id) => {
+          document.getElementById(id).addEventListener("input", () => {
+            syncInspectorPaneMpvOpts(paneIndex);
+            renderStudioBoard();
+            renderPlaylistEditor();
+          });
+          document.getElementById(id).addEventListener("change", () => {
+            syncInspectorPaneMpvOpts(paneIndex);
+            renderStudioBoard();
+            renderPlaylistEditor();
+          });
         });
+        syncInspectorPaneMpvOpts(paneIndex);
         return;
       }
       studioInspector.innerHTML = `
