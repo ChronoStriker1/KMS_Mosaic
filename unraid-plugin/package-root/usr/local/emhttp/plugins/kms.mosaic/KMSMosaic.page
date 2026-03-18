@@ -29,134 +29,57 @@ if (is_string($service_status_raw) && trim($service_status_raw) !== '') {
 }
 $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 ?>
-<!--
-AUDIT FINDINGS (Task 1: Plugin Page Embedding and Drag-Drop):
-
-EXECUTION SEQUENCE (CORRECTED):
-1. Line 726: HTML is fetched and rewritten (API paths updated)
-2. Line 735: CSS is extracted and scoped to #kmsUiMount
-3. Line 739: mount.innerHTML = HTML (injects all elements including #studioBoard)
-4. Line 741: kmsInstallFetchShim() is called BEFORE script execution
-5. Line 742-745: Scripts extracted as strings and re-injected into mount
-6. Scripts execute with window.__kmsEmbeddedInitialLoadDeferred set, skipping loadState()
-7. Line 748: fillForm(statePayload) is called manually with pre-fetched state
-8. fillForm → renderStudioBoard() creates draggable cards with event listeners
-
-FINDINGS:
-
-1. Initialization Order is CORRECT
-   - Status: Fetch shim IS installed before scripts execute (line 741)
-   - Scripts: loadState() is replaced with flag-set (line 732), preventing double-load
-   - State: Pre-fetched and injected via fillForm() (line 748)
-   - Conclusion: Initial setup should work correctly
-
-2. Drag-Drop Handler Binding
-   - Location: renderStudioBoard() at lines 2861-2959 in kms_mosaic_web.py
-   - Method: Each card gets addEventListener calls for drag events
-   - Variables: draggedStudioRole, studioBoard references
-   - Status: Module-level vars execute in global scope when scripts append
-   - Risk: If renderStudioBoard() fails silently, event handlers never bind
-
-3. Module-Level Variable Scope
-   - Issue: Scripts extracted and re-injected might lose closure context
-   - Reality: Variables defined at script top-level are in global scope
-   - Variables like draggedStudioRole, studioBoard are in window scope
-   - Status: Should work correctly across re-injected script context
-
-4. DOM ID Collision Risk (Per AGENTS.md line 30)
-   - Plugin page: kmsSaveConfigBtn, kmsReloadConfigBtn, kmsVisibilityMode
-   - Embedded editor: addPaneBtn, removePaneBtn, studioBoard, studioInspector
-   - Status: NO COLLISION CURRENTLY
-   - Danger: Reusing IDs like saveBtn would break embedded JS silently
-
-5. CSS Scoping
-   - Method: kmsScopeCss() regex adds #kmsUiMount prefix to selectors
-   - Purpose: Prevent embedded CSS from styling page outside mount point
-   - Risk: Scope regex might break complex selectors or pseudo-elements
-   - Status: Shouldn't affect drag-drop, but verify .drop-target styling
-
-6. Fetch Shim Correctness
-   - Intercepts: Calls to /plugins/kms.mosaic/include/actions.php
-   - Converts: JSON POST bodies to form-encoded with 'payload' field
-   - Required by: actions.php which reads $_POST['payload'] (line 186, 198)
-   - Status: Properly transforms requests for backend
-
-7. HTML Rewriting (Line 726-733)
-   - Replaces /api/* paths with actions.php?action=backend_*
-   - Replaces document.getElementById("configPath") with null-check version
-   - Defers loadState() to prevent auto-load during script execution
-   - Status: All transformations are correct
-
-BROWSER TESTING RESULTS (Actual Testing via SSH):
-
-Tested: http://127.0.0.1:8788/ (kms_mosaic_web.py backend)
-Service Status: Running (process 296265)
-Test Method: HTML inspection via curl, JavaScript analysis
-
-A) DOM Elements - VERIFIED PRESENT:
-   - #studioBoard element: EXISTS (found in HTML)
-   - .studio-card elements: YES (multiple created by renderStudioBoard())
-   - [data-studio-split] buttons: YES (both "Split V" and "Split H" buttons)
-   - #studioInspector element: EXISTS (found in HTML)
-
-B) JavaScript Variables - VERIFIED ACCESSIBLE:
-   - draggedStudioRole: DECLARED (let draggedStudioRole = null at module level)
-   - studioBoard: DECLARED (const studioBoard = document.getElementById("studioBoard"))
-   - studioInspector: DECLARED (const studioInspector = document.getElementById("studioInspector"))
-   - selectedRole: DECLARED (let selectedRole = 0 at module level)
-
-C) renderStudioBoard Function - VERIFIED PRESENT:
-   - Function exists: YES
-   - Called on: fillForm(), renderStudioInspector(), studio-card click events
-   - Creates cards: YES (card.draggable = true, addEventListener for drag events)
-   - Event handlers: dragstart, dragend, dragover, dragleave, drop - ALL PRESENT
-
-D) Drag-Drop Event Handlers - VERIFIED IMPLEMENTED:
-   - dragstart: Sets draggedStudioRole, adds "dragging" class, sets dataTransfer
-   - dragover: Prevents default, adds "drop-target" class
-   - dragleave: Removes "drop-target" class
-   - drop: Prevents default, calls splitTreeSwapRoles(), updates state, re-renders
-   - dragend: Clears draggedStudioRole, removes "dragging" and "drop-target" classes
-
-E) CSS Classes - VERIFIED DEFINED:
-   - .studio-card: Present with styling
-   - .studio-card.dragging: opacity: 0.58; transform: scale(0.99);
-   - .studio-card.drop-target: border and shadow highlighting
-   - .studio-card.selected: Same styling as drop-target
-
-F) Browser Console Errors - NONE FOUND:
-   - No JavaScript syntax errors detected in HTML
-   - No missing function references in event handler code
-   - No undefined variable references
-
-G) CRITICAL ISSUE FOUND - saveBtn and reloadBtn Missing:
-   - PROBLEM: JavaScript references document.getElementById("saveBtn") and document.getElementById("reloadBtn")
-   - EVIDENCE: Both found at end of script in actions.php
-   - MISSING FROM HTML: These button IDs do not exist in the generated HTML
-   - IMPACT: Page will throw console error: "Cannot read property 'addEventListener' of null"
-   - WHEN: When page loads (script execution)
-   - LINE: In script section at bottom (fetched via kms_mosaic_web.py)
-
-H) Drag-Drop Functionality Assessment:
-   - Code structure: CORRECT and complete
-   - Event binding: PROPER addEventListener pattern used
-   - Variable scoping: CORRECT (module-level globals)
-   - Visual feedback: CSS classes defined properly
-   - Swap logic: splitTreeSwapRoles() called in drop handler
-   - Expected result: DRAG-DROP SHOULD WORK IF saveBtn ISSUE FIXED
-
-CONCLUSION:
-The studio board drag-drop implementation is well-designed and properly coded. However,
-there is a BLOCKING BUG where saveBtn and reloadBtn buttons are referenced in JavaScript
-but missing from the HTML, which will cause a runtime error when the page loads. The
-drag-drop functionality itself is not broken - it will never execute because the page
-fails to initialize the event listeners for the save/reload buttons.
--->
-
+<div class="kms-page">
 <style>
   .kms-page {
     display: grid;
     gap: 18px;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto auto auto auto;
+  }
+  .kms-page > style,
+  .kms-page > script {
+    display: none !important;
+  }
+  /* Service controls span full width */
+  .kms-page > .kms-panel:nth-of-type(1) {
+    grid-column: 1 / -1;
+  }
+  /* Live Preview on left, Layout Studio on right */
+  .kms-page > .kms-panel:nth-of-type(2) {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .kms-page > .kms-panel:nth-of-type(3) {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  /* Configuration Editor and Advanced span full width */
+  .kms-page > .kms-panel:nth-of-type(4) {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+  .kms-page > .kms-panel:nth-of-type(5) {
+    grid-column: 1 / -1;
+    grid-row: 4;
+  }
+  @media (max-width: 1400px) {
+    .kms-page {
+      grid-template-columns: 1fr;
+    }
+    .kms-page > .kms-panel:nth-of-type(2),
+    .kms-page > .kms-panel:nth-of-type(3) {
+      grid-column: 1;
+    }
+    .kms-page > .kms-panel:nth-of-type(3) {
+      grid-row: 3;
+    }
+    .kms-page > .kms-panel:nth-of-type(4) {
+      grid-row: 4;
+    }
+    .kms-page > .kms-panel:nth-of-type(5) {
+      grid-row: 5;
+    }
   }
   .kms-panel {
     background: var(--box_bg, #f6f6f6);
@@ -347,7 +270,6 @@ fails to initialize the event listeners for the save/reload buttons.
   }
 </style>
 
-<div class="kms-page">
   <!-- Section 1: Service Status & Controls -->
   <section class="kms-panel">
     <div class="kms-panel-head">
@@ -363,9 +285,26 @@ fails to initialize the event listeners for the save/reload buttons.
         </div>
       </div>
 
+      <div class="kms-actions service-actions">
+        <button type="button" onclick="kmsControl('start')">Start</button>
+        <button type="button" onclick="kmsControl('restart')">Restart</button>
+        <button type="button" onclick="kmsControl('stop')">Stop</button>
+        <button type="button" onclick="kmsRefreshStatus()">Refresh</button>
+        <div class="kms-inline-field">
+          <label>Visibility</label>
+          <div class="kms-segmented" id="kmsVisibilityMode">
+            <button type="button" data-mode="neither" title="Show all mpv panes and all terminal panes.">Neither</button>
+            <button type="button" data-mode="no-video" title="Hide all mpv video panes and keep all terminal panes visible.">No Videos</button>
+            <button type="button" data-mode="no-panes" title="Hide all terminal panes and keep all mpv video panes visible.">No Terminals</button>
+          </div>
+        </div>
+        <button type="button" class="orange" id="kmsSaveConfigBtn">Save Config</button>
+        <button type="button" id="kmsReloadConfigBtn">Reload From Disk</button>
+      </div>
+
       <div class="kms-service-grid">
         <div class="kms-field">
-          <label for="kmsServiceBoot">Start `kms_mosaic` at boot</label>
+          <label for="kmsServiceBoot">Start <code>kms_mosaic</code> at boot</label>
           <select id="kmsServiceBoot" name="SERVICE">
             <?php echo mk_option($service, "enable", "Yes"); ?>
             <?php echo mk_option($service, "disable", "No"); ?>
@@ -390,22 +329,8 @@ fails to initialize the event listeners for the save/reload buttons.
           <input id="kmsConfigPath" name="CONFIG_PATH" type="text" value="<?php echo htmlspecialchars($config_path); ?>">
         </div>
 
-        <div class="kms-actions service-actions">
-          <button type="button" onclick="kmsSavePluginSettings()">Apply</button>
-          <button type="button" onclick="kmsControl('start')">Start</button>
-          <button type="button" onclick="kmsControl('restart')">Restart</button>
-          <button type="button" onclick="kmsControl('stop')">Stop</button>
-          <button type="button" onclick="kmsRefreshStatus()">Refresh</button>
-          <div class="kms-inline-field">
-            <label>Visibility</label>
-            <div class="kms-segmented" id="kmsVisibilityMode">
-              <button type="button" data-mode="neither" title="Show all mpv panes and all terminal panes.">Neither</button>
-              <button type="button" data-mode="no-video" title="Hide all mpv video panes and keep all terminal panes visible.">No Videos</button>
-              <button type="button" data-mode="no-panes" title="Hide all terminal panes and keep all mpv video panes visible.">No Terminals</button>
-            </div>
-          </div>
-          <button type="button" class="orange" id="kmsSaveConfigBtn">Save Config</button>
-          <button type="button" id="kmsReloadConfigBtn">Reload From Disk</button>
+        <div class="kms-field" style="align-self: end;">
+          <button type="button" onclick="kmsSavePluginSettings()">Apply Settings</button>
         </div>
       </div>
     </div>
@@ -428,10 +353,6 @@ fails to initialize the event listeners for the save/reload buttons.
     </div>
     <div class="kms-panel-body">
       <div id="kmsStudioPlaceholder" class="kms-ui-loading">Loading layout studio…</div>
-      <div class="kms-actions">
-        <button type="button" onclick="kmsSaveConfigState()">Save Config</button>
-        <button type="button" onclick="kmsReloadConfigState()">Reload From Disk</button>
-      </div>
     </div>
   </section>
 
@@ -454,7 +375,6 @@ fails to initialize the event listeners for the save/reload buttons.
       </div>
     </details>
   </section>
-</div>
 
 <script>
 const kmsActionUrl = '/plugins/kms.mosaic/include/actions.php';
@@ -602,7 +522,9 @@ function kmsEmbeddedOverrides() {
     #kmsUiMount .flag-mode-row {
       display: none !important;
     }
-    #kmsUiMount .studio-grid {
+    #kmsUiMount .studio-grid,
+    #kmsUiMount .preview-layout {
+      /* Hidden inside editor mount - live elements relocated to dedicated panels */
       display: none !important;
     }
     #kmsUiMount .stage {
@@ -698,27 +620,34 @@ function kmsEmbeddedOverrides() {
       color: #1f2328 !important;
       border-color: rgba(0,0,0,.12) !important;
     }
-    /* ─── Extracted preview styling ─────────────────────────────────────── */
+    /* ─── Relocated preview styling ─────────────────────────────────────── */
+    #kmsPreviewPlaceholder {
+      display: flex;
+      justify-content: center;
+    }
     #kmsPreviewPlaceholder .preview-layout {
       display: block;
-    }
-    #kmsPreviewPlaceholder .preview-layout.portrait .preview-wrap {
-      aspect-ratio: 9 / 16;
-      margin: 0 auto;
-    }
-    #kmsPreviewPlaceholder .preview-layout.landscape .preview-wrap {
-      aspect-ratio: 16 / 9;
+      width: 100%;
     }
     #kmsPreviewPlaceholder .preview-wrap {
-      position: relative;
-      width: 100%;
-      aspect-ratio: 16 / 9;
-      border-radius: 14px;
-      background: linear-gradient(180deg, #1a1714, #0c0b09);
-      border: 1px solid rgba(0,0,0,0.28);
-      overflow: hidden;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04), 0 4px 12px rgba(0,0,0,0.18);
-      margin: 0 auto;
+      display: block !important;
+      position: relative !important;
+      max-height: 55vh !important;
+      min-height: 180px !important;
+      border-radius: 10px !important;
+      background: linear-gradient(180deg, #1a1714, #0c0b09) !important;
+      border: 1px solid rgba(0,0,0,0.28) !important;
+      overflow: hidden !important;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04), 0 4px 12px rgba(0,0,0,0.18) !important;
+      margin: 0 auto !important;
+    }
+    #kmsPreviewPlaceholder .preview-layout.portrait .preview-wrap {
+      aspect-ratio: 9 / 16 !important;
+      max-width: 340px !important;
+    }
+    #kmsPreviewPlaceholder .preview-layout.landscape .preview-wrap {
+      aspect-ratio: 16 / 9 !important;
+      max-width: 800px !important;
     }
     #kmsPreviewPlaceholder .preview-stage {
       position: absolute;
@@ -747,26 +676,123 @@ function kmsEmbeddedOverrides() {
       text-transform: uppercase;
       font-weight: 500;
     }
-    /* ─── Extracted studio styling ─────────────────────────────────────── */
+    /* ─── Relocated studio styling ─────────────────────────────────────── */
     #kmsStudioPlaceholder .studio-grid {
-      display: grid;
-      grid-template-columns: 1fr 280px;
+      display: grid !important;
+      grid-template-columns: 1fr;
       gap: 16px;
     }
+    @media (min-width: 1200px) {
+      #kmsStudioPlaceholder .studio-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+    #kmsStudioPlaceholder .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    #kmsStudioPlaceholder .actions button {
+      color: #222;
+      min-height: 32px;
+      padding: 6px 14px;
+      font-size: 13px;
+    }
     #kmsStudioPlaceholder .studio-board {
-      background: linear-gradient(180deg, #f7f3ee, #ede8e1) !important;
-      border-color: rgba(0,0,0,.10) !important;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,.55) !important;
+      display: block !important;
+      position: relative !important;
+      aspect-ratio: 9 / 16 !important;
+      min-height: 400px;
+      max-height: none;
+      border-radius: 10px;
+      background: linear-gradient(180deg, #f7f3ee, #ede8e1);
+      border: 1px solid rgba(0,0,0,.10);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.55);
+      overflow: hidden;
+    }
+    #kmsStudioPlaceholder .studio-board::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,0,0,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,0,0,0.04) 1px, transparent 1px);
+      background-size: 28px 28px;
+      pointer-events: none;
     }
     #kmsStudioPlaceholder .studio-card {
       position: absolute;
-      border-color: rgba(0,0,0,.12) !important;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,.5), 0 6px 14px rgba(0,0,0,.08) !important;
+      border-radius: 6px;
+      border: 1px solid rgba(0,0,0,.12);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.5), 0 6px 14px rgba(0,0,0,.08);
+      cursor: grab;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      font-size: 13px;
+      font-weight: 600;
+      user-select: none;
+      transition: box-shadow 0.15s, border-color 0.15s;
+    }
+    #kmsStudioPlaceholder .studio-card.video {
+      background: linear-gradient(145deg, #d78861, #c66e42);
+      color: #1f130d;
+    }
+    #kmsStudioPlaceholder .studio-card.terminal {
+      background: linear-gradient(145deg, #e4ece7, #d8e1dc);
+      color: #142019;
+    }
+    #kmsStudioPlaceholder .studio-card:hover,
+    #kmsStudioPlaceholder .studio-card.selected,
+    #kmsStudioPlaceholder .studio-card.drop-target {
+      border-color: rgba(181,83,47,.52);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.55), 0 0 0 2px rgba(181,83,47,.15), 0 8px 16px rgba(0,0,0,.10);
+    }
+    #kmsStudioPlaceholder .studio-card.dragging {
+      opacity: 0.58;
+      transform: scale(0.99);
+    }
+    #kmsStudioPlaceholder .studio-tag,
+    #kmsStudioPlaceholder .studio-split-btn {
+      background: rgba(255,255,255,.6);
+      border: 1px solid rgba(0,0,0,.12);
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 11px;
+      color: inherit;
     }
     #kmsStudioPlaceholder .studio-inspector {
-      background: #fbfbfc !important;
-      border-color: rgba(0,0,0,.09) !important;
-      box-shadow: none !important;
+      background: #fbfbfc;
+      border: 1px solid rgba(0,0,0,.09);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    #kmsStudioPlaceholder .studio-inspector label {
+      display: block;
+      font-weight: 700;
+      font-size: 12px;
+      color: #2c3136;
+      margin-bottom: 4px;
+    }
+    #kmsStudioPlaceholder .studio-inspector input,
+    #kmsStudioPlaceholder .studio-inspector select,
+    #kmsStudioPlaceholder .studio-inspector textarea {
+      width: 100%;
+      background: #fff;
+      color: #1f2328;
+      border: 1px solid rgba(0,0,0,.16);
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    @media (max-width: 900px) {
+      #kmsStudioPlaceholder .studio-grid {
+        grid-template-columns: 1fr;
+      }
     }
     @media (max-width: 1200px) {
       #kmsUiMount .shell {
@@ -943,6 +969,39 @@ async function kmsSetVisibilityMode(mode) {
   }
 }
 
+function kmsRelocateLiveElements() {
+  // Move the live preview element (with WebRTC connection) to the dedicated panel
+  const previewEl = document.querySelector('#kmsUiMount .preview-layout');
+  const previewDest = document.getElementById('kmsPreviewPlaceholder');
+  if (previewEl && previewDest) {
+    previewEl.style.display = '';
+    // Strip inline sizing from preview-wrap so our CSS controls layout
+    const previewWrap = previewEl.querySelector('.preview-wrap');
+    if (previewWrap) {
+      previewWrap.removeAttribute('style');
+    }
+    previewDest.className = '';
+    previewDest.innerHTML = '';
+    previewDest.appendChild(previewEl);
+  } else if (previewDest) {
+    previewDest.className = '';
+    previewDest.innerHTML = '<p class="kms-meta">Preview unavailable — start the preview service.</p>';
+  }
+
+  // Move the live studio grid (with drag-drop handlers) to the dedicated panel
+  const studioEl = document.querySelector('#kmsUiMount .studio-grid');
+  const studioDest = document.getElementById('kmsStudioPlaceholder');
+  if (studioEl && studioDest) {
+    studioEl.style.display = '';
+    studioDest.className = '';
+    studioDest.innerHTML = '';
+    studioDest.appendChild(studioEl);
+  } else if (studioDest) {
+    studioDest.className = '';
+    studioDest.innerHTML = '<p class="kms-meta">Layout studio unavailable.</p>';
+  }
+}
+
 async function kmsEnsureEmbeddedLoaded() {
   if (kmsEmbeddedLoaded) return;
   if (kmsEmbeddedLoadPromise) return kmsEmbeddedLoadPromise;
@@ -969,28 +1028,8 @@ async function kmsEnsureEmbeddedLoaded() {
       const doc = new DOMParser().parseFromString(rewritten, 'text/html');
       kmsInstallEmbeddedStyles(doc);
 
-      // Extract preview and move it to prominent position
-      const previewLayout = doc.querySelector('.preview-layout');
-      if (previewLayout) {
-        const previewContainer = document.getElementById('kmsPreviewPlaceholder');
-        if (previewContainer) {
-          previewContainer.className = '';
-          previewContainer.innerHTML = previewLayout.outerHTML;
-          // Remove from embedded doc to prevent duplication
-          previewLayout.remove();
-        }
-      }
-
-      // Extract studio grid and move it to prominent Layout Studio section
-      const studioGrid = doc.querySelector('.studio-grid');
-      if (studioGrid) {
-        const studioContainer = document.getElementById('kmsStudioPlaceholder');
-        if (studioContainer) {
-          studioContainer.className = '';
-          studioContainer.innerHTML = studioGrid.outerHTML;
-          // Keep in embedded doc too, hide it with CSS to avoid duplication
-        }
-      }
+      // Remove style tags from body to prevent raw CSS rendering as text
+      doc.querySelectorAll('style').forEach((s) => s.remove());
 
       const scripts = Array.from(doc.querySelectorAll('script')).map((script) => script.textContent || '');
       doc.querySelectorAll('script').forEach((script) => script.remove());
@@ -1013,6 +1052,10 @@ async function kmsEnsureEmbeddedLoaded() {
       if (typeof window.setStatus === 'function') {
         window.setStatus(`Loaded ${statePayload.config_path}`, false, true);
       }
+
+      // Move live DOM elements (with bound event handlers) to dedicated panels
+      kmsRelocateLiveElements();
+
       kmsEmbeddedLoaded = true;
     } catch (err) {
       mount.className = 'kms-ui-error';
@@ -1040,3 +1083,4 @@ document.addEventListener('DOMContentLoaded', function() {
   kmsRefreshStatus();
 });
 </script>
+</div>
