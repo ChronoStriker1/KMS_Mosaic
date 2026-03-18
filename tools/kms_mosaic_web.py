@@ -3168,7 +3168,7 @@ HTML = r"""<!doctype html>
         const heightValue = effectiveStudioSizeValue(rect.h);
         const widthActive = !!resizeCtx?.colAncestor;
         const heightActive = !!resizeCtx?.rowAncestor;
-        const handleMarkup = studioResizeHandleMarkup(resizeCtx);
+        const handleMarkup = selectedRole === role ? studioResizeHandleMarkup(resizeCtx) : "";
         const card = document.createElement("div");
         card.draggable = true;
         card.tabIndex = 0;
@@ -3353,6 +3353,8 @@ HTML = r"""<!doctype html>
         return;
       }
 
+      const layoutActions = selectedPaneLayoutActionsMarkup(selectedRole);
+
       if (selectedRole === 0) {
         const mainMpvGroups = parseMpvOptionGroups(state.mpv_opts || []);
         studioInspector.innerHTML = `
@@ -3386,6 +3388,7 @@ HTML = r"""<!doctype html>
               <textarea id="inspectorMainMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${mainMpvGroups.other.join("\n")}</textarea>
             </label>
           </div>
+          ${layoutActions}
           ${selectedPaneQueueSectionMarkup()}
         `;
         [
@@ -3413,6 +3416,7 @@ HTML = r"""<!doctype html>
             setStatus("Added a new queue entry.", false);
           });
         }
+        bindSelectedPaneLayoutActions(selectedRole);
         syncMainInspectorMpvOpts();
         renderPlaylistEditor();
         dispatchSelectedPaneState();
@@ -3435,12 +3439,14 @@ HTML = r"""<!doctype html>
               </label>
               <p class="muted-note">This new mpv pane has been placed in the layout, but its playlist and mpv options stay hidden until you save and let the page reload from the persisted config.</p>
             </div>
+            ${layoutActions}
           `;
           document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
             state.pane_types[paneIndex] = event.target.value;
             renderStudioBoard();
             renderStudioInspector();
           });
+          bindSelectedPaneLayoutActions(selectedRole);
           dispatchSelectedPaneState();
           return;
         }
@@ -3482,6 +3488,7 @@ HTML = r"""<!doctype html>
               <textarea id="inspectorPaneMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${paneMpvGroups.other.join("\n")}</textarea>
             </label>
           </div>
+          ${layoutActions}
           ${selectedPaneQueueSectionMarkup()}
         `;
         document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
@@ -3514,6 +3521,7 @@ HTML = r"""<!doctype html>
             setStatus("Added a new queue entry.", false);
           });
         }
+        bindSelectedPaneLayoutActions(selectedRole);
         syncInspectorPaneMpvOpts(paneIndex);
         renderPlaylistEditor();
         dispatchSelectedPaneState();
@@ -3534,6 +3542,7 @@ HTML = r"""<!doctype html>
           </label>
           <p class="muted-note">This pane currently spawns a shell command. Switch it to mpv here if you want a dedicated video pane instead.</p>
         </div>
+        ${layoutActions}
       `;
       document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
         state.pane_types[paneIndex] = event.target.value;
@@ -3544,6 +3553,7 @@ HTML = r"""<!doctype html>
         state.pane_commands[paneIndex] = event.target.value;
         renderStudioBoard();
       });
+      bindSelectedPaneLayoutActions(selectedRole);
       dispatchSelectedPaneState();
     }
 
@@ -3842,6 +3852,39 @@ HTML = r"""<!doctype html>
       renderStudioInspector();
     }
 
+    function selectedPaneLayoutActionsMarkup(role) {
+      if (!Number.isFinite(role) || role < 0) return "";
+      return `
+        <div class="selected-pane-section">
+          <h2 class="section-title">Layout Actions</h2>
+          <div class="actions tight">
+            <button type="button" class="secondary studio-split-btn" data-selected-pane-split="col">Split V</button>
+            <button type="button" class="secondary studio-split-btn" data-selected-pane-split="row">Split H</button>
+            ${role > 0 ? '<button type="button" class="secondary studio-remove-btn" data-selected-pane-remove="true">Remove Pane</button>' : ''}
+          </div>
+        </div>
+      `;
+    }
+
+    function bindSelectedPaneLayoutActions(role) {
+      if (!studioInspector || !Number.isFinite(role) || role < 0) return;
+      studioInspector.querySelectorAll("[data-selected-pane-split]").forEach((button) => {
+        button.addEventListener("click", () => {
+          selectRole(role);
+          const kind = button.dataset.selectedPaneSplit === "row" ? "row" : "col";
+          const ok = splitSelectedRole(kind);
+          setStatus(ok ? `Split ${roleTitle(role)} ${kind === "row" ? "horizontally" : "vertically"}.` : "Could not split the selected pane.", !ok);
+        });
+      });
+      const removeButton = studioInspector.querySelector("[data-selected-pane-remove]");
+      if (!removeButton) return;
+      removeButton.addEventListener("click", () => {
+        selectRole(role);
+        const removed = removeSelectedPane();
+        setStatus(removed ? `Removed ${roleTitle(role)}.` : "Could not remove the selected pane.", !removed);
+      });
+    }
+
     function splitSelectedRole(kind) {
       if (!state) return false;
       const tree = ensureSplitTreeModel();
@@ -3893,11 +3936,11 @@ HTML = r"""<!doctype html>
     }
 
     function removeSelectedPane() {
-      if (!state || selectedRole <= 0) return;
+      if (!state || selectedRole <= 0) return false;
       const tree = ensureSplitTreeModel();
       const paneIndex = selectedRole - 1;
       const role = selectedRole;
-      if (!splitTreeCollapseRole(tree, role)) return;
+      if (!splitTreeCollapseRole(tree, role)) return false;
       for (let i = role + 1; i <= state.pane_count; i += 1) {
         splitTreeReplaceLeaf(tree, i, () => ({ leaf: true, role: i - 1 }));
       }
@@ -3920,6 +3963,7 @@ HTML = r"""<!doctype html>
       renderPlaylistEditor();
       renderStudioBoard();
       renderStudioInspector();
+      return true;
     }
 
     function waitForIceGatheringComplete(pc) {
