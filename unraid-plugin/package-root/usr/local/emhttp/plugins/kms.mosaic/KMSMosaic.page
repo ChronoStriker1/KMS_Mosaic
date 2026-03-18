@@ -1025,12 +1025,17 @@ async function kmsEnsureEmbeddedLoaded() {
   return kmsEmbeddedLoadPromise;
 }
 
-$(function() {
-  document.getElementById('kmsSaveConfigBtn').addEventListener('click', kmsSaveConfigState);
-  document.getElementById('kmsReloadConfigBtn').addEventListener('click', kmsReloadConfigState);
+document.addEventListener('DOMContentLoaded', function() {
+  const saveBtn = document.getElementById('kmsSaveConfigBtn');
+  const reloadBtn = document.getElementById('kmsReloadConfigBtn');
+
+  if (saveBtn) saveBtn.addEventListener('click', kmsSaveConfigState);
+  if (reloadBtn) reloadBtn.addEventListener('click', kmsReloadConfigState);
+
   document.querySelectorAll('#kmsVisibilityMode button[data-mode]').forEach((button) => {
     button.addEventListener('click', () => kmsSetVisibilityMode(button.dataset.mode));
   });
+
   kmsEnsureEmbeddedLoaded();
   kmsRefreshStatus();
 });
