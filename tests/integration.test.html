@@ -370,7 +370,7 @@
 
     <!-- Test 9: Task 3 Manual Verification -->
     <div class="test-group">
-      <div class="test-group-title">9. Task 3 Manual Verification</div>
+      <div class="test-group-title">9. Task 3 Queue Verification</div>
       <div class="test-item">
         <div class="test-name">Queue controls appear only for the selected mpv pane and stay hidden for terminal panes</div>
         <div id="test-9-1" class="test-status status-pending">PENDING</div>
@@ -839,22 +839,78 @@
     }
 
     function test9WorkspaceVerification() {
-      log('Test 9: Task 3 manual verification checkpoints...', 'info');
+      log('Test 9: Task 3 queue verification...', 'info');
 
-      const manualChecks = [
-        ['test-9-1', 'Verify on the installed Unraid page that queue controls appear only for the selected mpv pane and remain hidden for terminal panes.'],
-        ['test-9-2', 'Verify on the installed Unraid page that the queue body shows only five visible rows before it scrolls.'],
-        ['test-9-3', 'Verify on the installed Unraid page that queue thumbnails are smaller than the earlier oversized layout.'],
-        ['test-9-4', 'Verify on the installed Unraid page that hover previews stay bounded inside the viewport instead of spilling off-screen.'],
-        ['test-9-5', 'Verify on the installed Unraid page that broken or missing queue media falls back to a bounded placeholder preview.'],
-        ['test-9-6', 'Verify on the installed Unraid page that relocated queue styling still applies in the selected-pane panel outside #kmsUiMount.'],
-      ];
+      if (!pluginPageMounted()) {
+        ['test-9-1', 'test-9-2', 'test-9-3', 'test-9-4', 'test-9-5', 'test-9-6'].forEach((id) => {
+          setTestResult(id, 'skip', pluginPageSkipMessage);
+        });
+        log('Plugin page shell is not mounted in this harness; queue verification checks were skipped.', 'warn');
+        return;
+      }
 
-      manualChecks.forEach(([id, message]) => {
-        setTestResult(id, 'warn', message);
-      });
+      setTestResult('test-9-1', 'warn',
+        'Verify on the installed Unraid page that queue controls appear only for the selected mpv pane and remain hidden for terminal panes.');
 
-      log('✓ Task 3 manual verification checklist marked for live Unraid-page validation', 'success');
+      const queueList = document.querySelector('#kmsSelectedPanePlaceholder .playlist-list');
+      const queueThumb = document.querySelector('#kmsSelectedPanePlaceholder .playlist-thumb');
+      const portraitItem = document.querySelector('#kmsSelectedPanePlaceholder .playlist-item.portrait-thumb');
+
+      if (!queueList || !queueThumb) {
+        ['test-9-2', 'test-9-3', 'test-9-4', 'test-9-5', 'test-9-6'].forEach((id) => {
+          setTestResult(id, 'skip', 'Select an mpv pane with queue items to run this Task 3 verification.');
+        });
+        log('Queue-specific verification skipped because no selected-pane queue items are mounted.', 'warn');
+        return;
+      }
+
+      const queueListStyle = window.getComputedStyle(queueList);
+      const queueListMaxHeight = parseFloat(queueListStyle.maxHeight || '0');
+      const queueClampOk = queueListStyle.overflowY === 'auto' && queueListMaxHeight > 0 && queueListMaxHeight <= 620;
+      setTestResult('test-9-2', queueClampOk ? 'pass' : 'fail',
+        queueClampOk ? `Queue list clamp detected at ${Math.round(queueListMaxHeight)}px with scrolling enabled` : 'Queue list clamp is missing or exceeds the five-row target');
+
+      const thumbRect = queueThumb.getBoundingClientRect();
+      const compactThumbOk = thumbRect.height <= 80;
+      setTestResult('test-9-3', compactThumbOk ? 'pass' : 'fail',
+        compactThumbOk ? `Queue thumb height is ${Math.round(thumbRect.height)}px` : `Queue thumb is still oversized at ${Math.round(thumbRect.height)}px tall`);
+
+      const originalHoverSrc = queueThumb.dataset.hoverSrc;
+      queueThumb.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true, view: window }));
+      const hoverOverlay = document.getElementById('kmsThumbHoverOverlay');
+      const overlayRect = hoverOverlay ? hoverOverlay.getBoundingClientRect() : null;
+      const hoverBounded = !!hoverOverlay && hoverOverlay.style.display === 'block' &&
+        !!overlayRect &&
+        overlayRect.width <= window.innerWidth - 20 &&
+        overlayRect.height <= window.innerHeight - 20;
+      setTestResult('test-9-4', hoverBounded ? 'pass' : 'fail',
+        hoverBounded ? `Hover overlay bounded to ${Math.round(overlayRect.width)}x${Math.round(overlayRect.height)}` : 'Hover overlay is missing or exceeds the viewport bounds');
+
+      queueThumb.dataset.hoverSrc = '';
+      queueThumb.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true, view: window }));
+      const fallbackText = hoverOverlay ? hoverOverlay.textContent.trim() : '';
+      const fallbackOk = !!hoverOverlay && hoverOverlay.style.display === 'block' && /Preview unavailable/i.test(fallbackText);
+      setTestResult('test-9-5', fallbackOk ? 'pass' : 'fail',
+        fallbackOk ? 'Queue hover fallback renders a bounded placeholder' : 'Queue hover fallback placeholder did not render');
+      if (typeof originalHoverSrc === 'string') {
+        queueThumb.dataset.hoverSrc = originalHoverSrc;
+      } else {
+        delete queueThumb.dataset.hoverSrc;
+      }
+      queueThumb.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true, cancelable: true, view: window }));
+
+      const controlsRow = portraitItem ? portraitItem.querySelector('.playlist-controls-row') : null;
+      const repeatWrap = portraitItem ? portraitItem.querySelector('.playlist-repeat-wrap') : null;
+      const relocatedStylingOk = !portraitItem || (
+        !!controlsRow &&
+        window.getComputedStyle(controlsRow).display === 'grid' &&
+        !!repeatWrap &&
+        Math.abs(repeatWrap.getBoundingClientRect().width - controlsRow.getBoundingClientRect().width) <= 2
+      );
+      setTestResult('test-9-6', relocatedStylingOk ? 'pass' : 'fail',
+        relocatedStylingOk ? 'Relocated queue styling matches the portrait/mobile control layout rules' : 'Relocated queue styling is missing the portrait/mobile control layout rules');
+
+      log('✓ Task 3 queue verification complete', 'success');
     }
 
     function getEventListenerCount() {

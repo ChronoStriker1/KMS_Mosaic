@@ -1492,7 +1492,7 @@ HTML = r"""<!doctype html>
     .playlist-list {
       display: grid;
       gap: 7px;
-      max-height: calc(5 * 104px + 4 * 7px);
+      max-height: calc(5 * 112px + 4 * 7px);
       overflow-y: auto;
       padding-right: 6px;
     }
@@ -1540,6 +1540,7 @@ HTML = r"""<!doctype html>
       padding: 9px 10px;
       display: grid;
       gap: 8px;
+      min-height: 112px;
       transition: border-color 120ms ease, box-shadow 120ms ease;
     }
     .playlist-item.alt {
@@ -1581,9 +1582,10 @@ HTML = r"""<!doctype html>
     }
     .playlist-duration:empty { display: none; }
     .playlist-thumb {
-      height: auto;
+      height: 72px;
       width: 100%;
       min-height: 72px;
+      max-height: 72px;
       border-radius: 8px;
       overflow: hidden;
       background:
@@ -1592,6 +1594,10 @@ HTML = r"""<!doctype html>
       border: 1px solid var(--line);
       position: relative;
       flex-shrink: 0;
+    }
+    .playlist-item.portrait-thumb .playlist-thumb {
+      width: 92px;
+      margin-inline: auto;
     }
     .playlist-thumb-media {
       position: absolute;
@@ -1672,12 +1678,14 @@ HTML = r"""<!doctype html>
       width: 72px;
     }
     .playlist-item.portrait-thumb .playlist-controls-row {
-      flex-direction: column;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       align-items: stretch;
     }
     .playlist-item.portrait-thumb .playlist-repeat-wrap {
       width: 100%;
       justify-items: stretch;
+      grid-column: 1 / -1;
     }
     .playlist-item.portrait-thumb .playlist-repeat {
       width: 100%;
@@ -1777,6 +1785,7 @@ HTML = r"""<!doctype html>
       .playlist-row { grid-template-columns: auto 1fr; }
       .playlist-item.portrait-thumb .playlist-row { grid-template-columns: auto 1fr; }
       .playlist-media-cell, .playlist-thumb { width: 100%; }
+      .playlist-item.portrait-thumb .playlist-thumb { width: 100%; }
     }
   </style>
 </head>
