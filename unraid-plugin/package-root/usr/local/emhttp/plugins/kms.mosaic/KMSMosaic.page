@@ -39,59 +39,6 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   .kms-page > script {
     display: none !important;
   }
-  .kms-live-studio {
-    display: flex !important;
-    flex-direction: row !important;
-    gap: 2% !important;
-    padding: 0 !important;
-    align-items: stretch !important;
-    justify-content: space-between !important;
-    min-height: 60vh !important;
-    height: auto !important;
-  }
-  .kms-preview-frame,
-  .kms-studio-frame {
-    padding: 0 !important;
-    margin: 0 !important;
-    flex: 1 !important;
-    min-height: 0 !important;
-    height: 100% !important;
-    width: auto !important;
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: stretch !important;
-    justify-content: flex-start !important;
-    overflow: hidden !important;
-  }
-  .kms-preview-frame {
-    border: none !important;
-    margin: 0 !important;
-  }
-  .kms-studio-frame {
-    border: none !important;
-    margin: 0 !important;
-  }
-  @media (max-width: 1200px) {
-    .kms-live-studio {
-      flex-direction: column !important;
-      gap: 2% !important;
-    }
-    .kms-preview-frame {
-      border: none !important;
-      margin: 0 !important;
-    }
-  }
-  @media (max-width: 768px) {
-    .kms-live-studio {
-      flex-direction: column !important;
-      min-height: 90vh !important;
-      gap: 2% !important;
-    }
-    .kms-preview-frame,
-    .kms-studio-frame {
-      height: 40vh !important;
-    }
-  }
   .kms-panel {
     background: var(--box_bg, #f6f6f6);
     border: 1px solid var(--box_border, rgba(0,0,0,.12));
@@ -269,6 +216,42 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     font-size: 12px;
     color: #6b7280;
   }
+  .kms-workspace-shell {
+    display: grid;
+    gap: 18px;
+    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .kms-workspace-panel {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .kms-workspace-panel .kms-panel-body {
+    flex: 1;
+    min-height: 0;
+  }
+  .kms-live-body,
+  .kms-layout-body,
+  .kms-queue-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    gap: 14px;
+  }
+  .kms-queue-panel[hidden],
+  .kms-queue-panel[data-kms-queue-visible="false"] {
+    display: none !important;
+  }
+  .kms-queue-summary {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--color-text-light, #666);
+    line-height: 1.4;
+  }
+  #kmsUiMount #queueEditorTitle {
+    display: none !important;
+  }
   .kms-panel details {
     padding: 0;
   }
@@ -290,10 +273,15 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   .kms-panel details[open] summary {
     border-bottom-color: transparent;
   }
-  /* Preview responsive sizing */
+  #kmsPreviewPlaceholder {
+    width: 100%;
+    min-height: 0;
+    flex: 1;
+  }
   #kmsPreviewPlaceholder .preview-layout {
     width: 100%;
     max-width: 100%;
+    min-height: 0;
   }
   #kmsPreviewPlaceholder .preview-wrap {
     aspect-ratio: 16 / 9;
@@ -301,7 +289,384 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     max-width: 800px;
     margin: 0 auto;
   }
-  /* Studio grid responsiveness */
+  #kmsStudioPlaceholder {
+    width: 100%;
+    min-height: 0;
+    flex: 1;
+  }
+  #kmsStudioPlaceholder .studio-grid {
+    display: flex !important;
+    flex-direction: column;
+    gap: 0 !important;
+    height: 100%;
+    flex: 1;
+  }
+  #kmsStudioPlaceholder .actions {
+    display: none !important;
+  }
+  #kmsStudioPlaceholder .actions button {
+    color: #222;
+    min-height: 28px;
+    padding: 5px 12px;
+    font-size: 12px;
+  }
+  #kmsStudioPlaceholder .studio-inspector {
+    display: none !important;
+  }
+  #kmsStudioPlaceholder .studio-board {
+    display: block !important;
+    position: relative !important;
+    aspect-ratio: 9 / 16 !important;
+    flex: 1;
+    min-height: 0 !important;
+    max-height: 100% !important;
+    border-radius: 0;
+    background: linear-gradient(180deg, #f7f3ee, #ede8e1);
+    border: 1px solid rgba(0,0,0,.10);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.55);
+    overflow: hidden;
+    order: 1 !important;
+  }
+  #kmsStudioPlaceholder .studio-board::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,0,0,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,0,0,0.04) 1px, transparent 1px);
+    background-size: 28px 28px;
+    pointer-events: none;
+  }
+  #kmsStudioPlaceholder .studio-card {
+    position: absolute;
+    border-radius: 6px;
+    border: 1px solid rgba(0,0,0,.12);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.5), 0 6px 14px rgba(0,0,0,.08);
+    cursor: grab;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    user-select: none;
+    transition: box-shadow 0.15s, border-color 0.15s;
+  }
+  #kmsStudioPlaceholder .studio-card.video {
+    background: linear-gradient(145deg, #d78861, #c66e42);
+    color: #1f130d;
+  }
+  #kmsStudioPlaceholder .studio-card.terminal {
+    background: linear-gradient(145deg, #e4ece7, #d8e1dc);
+    color: #142019;
+  }
+  #kmsStudioPlaceholder .studio-card:hover,
+  #kmsStudioPlaceholder .studio-card.selected,
+  #kmsStudioPlaceholder .studio-card.drop-target {
+    border-color: rgba(181,83,47,.52);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.55), 0 0 0 2px rgba(181,83,47,.15), 0 8px 16px rgba(0,0,0,.10);
+  }
+  #kmsStudioPlaceholder .studio-card.dragging {
+    opacity: 0.58;
+    transform: scale(0.99);
+  }
+  #kmsStudioPlaceholder .studio-tag,
+  #kmsStudioPlaceholder .studio-split-btn {
+    background: rgba(255,255,255,.6);
+    border: 1px solid rgba(0,0,0,.12);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 11px;
+    color: inherit;
+  }
+  #kmsStudioPlaceholder .studio-inspector {
+    background: #fbfbfc;
+    border: 1px solid rgba(0,0,0,.09);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  #kmsStudioPlaceholder .studio-inspector label {
+    display: block;
+    font-weight: 700;
+    font-size: 12px;
+    color: #2c3136;
+    margin-bottom: 4px;
+  }
+  #kmsStudioPlaceholder .studio-inspector input,
+  #kmsStudioPlaceholder .studio-inspector select,
+  #kmsStudioPlaceholder .studio-inspector textarea {
+    width: 100%;
+    background: #fff;
+    color: #1f2328;
+    border: 1px solid rgba(0,0,0,.16);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  #kmsQueuePlaceholder {
+    width: 100%;
+    min-height: 0;
+    flex: 1;
+  }
+  #kmsQueuePlaceholder .queue-structure {
+    display: grid;
+    gap: 10px;
+  }
+  #kmsQueuePlaceholder .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  #kmsQueuePlaceholder .actions button,
+  #kmsQueuePlaceholder button.secondary {
+    color: #202225;
+    min-height: 36px;
+    padding: 9px 16px;
+    background: #f7f7f8;
+    border: 1px solid rgba(0,0,0,.18);
+    border-radius: 6px;
+  }
+  #kmsQueuePlaceholder label {
+    font-weight: 700;
+    color: #2c3136;
+  }
+  #kmsQueuePlaceholder input[type="text"],
+  #kmsQueuePlaceholder input[type="number"],
+  #kmsQueuePlaceholder textarea {
+    width: 100%;
+    background: #fff;
+    color: #1f2328;
+    border: 1px solid rgba(0,0,0,.16);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+  #kmsQueuePlaceholder .playlist-editor {
+    display: grid;
+    gap: 10px;
+  }
+  #kmsQueuePlaceholder .playlist-list {
+    display: grid;
+    gap: 7px;
+    max-height: calc(4 * 116px + 3 * 7px);
+    overflow-y: auto;
+    padding-right: 6px;
+  }
+  #kmsQueuePlaceholder .playlist-list::-webkit-scrollbar {
+    width: 10px;
+  }
+  #kmsQueuePlaceholder .playlist-list::-webkit-scrollbar-thumb {
+    background: rgba(0,0,0,0.18);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  #kmsQueuePlaceholder .playlist-targets {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+  }
+  #kmsQueuePlaceholder .playlist-target-btn {
+    border: 1px solid rgba(0,0,0,.14);
+    background: #f7f7f8;
+    color: #5b6470;
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 11px;
+    font-family: "Menlo", "Consolas", monospace;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    transition: background 140ms ease, color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+  }
+  #kmsQueuePlaceholder .playlist-target-btn.active {
+    color: #1d3048;
+    border-color: #8ca0ba;
+    background: #e9eef5;
+    box-shadow: 0 4px 12px rgba(36,58,88,0.10);
+  }
+  #kmsQueuePlaceholder .playlist-item {
+    border: 1px solid rgba(0,0,0,.09);
+    border-radius: 8px;
+    background: #fbfbfc;
+    padding: 9px 10px;
+    display: grid;
+    gap: 8px;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+  #kmsQueuePlaceholder .playlist-item.alt {
+    background: #f4f5f7;
+  }
+  #kmsQueuePlaceholder .playlist-item:hover { border-color: rgba(0,0,0,.18); }
+  #kmsQueuePlaceholder .playlist-item.dragging { opacity: 0.5; transform: scale(0.99); }
+  #kmsQueuePlaceholder .playlist-item.drag-over { border-color: #f15a24; box-shadow: 0 0 0 2px rgba(181,83,47,0.14); }
+  #kmsQueuePlaceholder .playlist-media-cell { width: auto; display: grid; align-self: start; }
+  #kmsQueuePlaceholder .playlist-duration {
+    position: absolute;
+    bottom: 5px;
+    right: 6px;
+    padding: 1px 5px 2px;
+    border-radius: 4px;
+    background: rgba(0,0,0,0.60);
+    color: rgba(255,255,255,0.90);
+    font-family: "Menlo", "Consolas", monospace;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    z-index: 2;
+    pointer-events: none;
+    backdrop-filter: blur(4px);
+  }
+  #kmsQueuePlaceholder .playlist-duration:empty { display: none; }
+  #kmsQueuePlaceholder .playlist-thumb {
+    height: 60px;
+    width: auto;
+    border-radius: 9px;
+    overflow: hidden;
+    background:
+      linear-gradient(140deg, rgba(181,83,47,0.15), transparent),
+      #f1f3f5;
+    border: 1px solid rgba(0,0,0,.10);
+    position: relative;
+    flex-shrink: 0;
+  }
+  #kmsQueuePlaceholder .playlist-thumb-media {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    padding: 4px;
+    transition: transform 160ms ease, box-shadow 160ms ease;
+    transform-origin: center center;
+  }
+  #kmsQueuePlaceholder .playlist-thumb img,
+  #kmsQueuePlaceholder .playlist-thumb video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    transform-origin: center center;
+  }
+  #kmsQueuePlaceholder .playlist-thumb.cover img,
+  #kmsQueuePlaceholder .playlist-thumb.cover video {
+    object-fit: cover;
+  }
+  #kmsQueuePlaceholder .playlist-thumb video { background: #0e0c0a; }
+  #kmsQueuePlaceholder .playlist-thumb.empty::after {
+    content: "—";
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: #6b7280;
+    font-size: 16px;
+    opacity: 0.5;
+  }
+  #kmsQueuePlaceholder .playlist-row {
+    display: grid;
+    grid-template-columns: auto auto 80px auto auto auto;
+    gap: 8px 10px;
+    align-items: start;
+  }
+  #kmsQueuePlaceholder .playlist-path { width: 100%; grid-column: 1 / -1; margin-top: 1px; }
+  #kmsQueuePlaceholder .playlist-item.portrait-thumb { grid-template-columns: auto 1fr; align-items: start; }
+  #kmsQueuePlaceholder .playlist-controls { display: grid; gap: 6px; min-width: 0; }
+  #kmsQueuePlaceholder .playlist-controls-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: end; }
+  #kmsQueuePlaceholder .playlist-controls-row .playlist-mini-btn { margin-top: 0; }
+  #kmsQueuePlaceholder .playlist-item.portrait-thumb .playlist-path { grid-column: auto; margin-top: 0; }
+  #kmsQueuePlaceholder .playlist-thumb-media.quarter-turn { padding: 0; }
+  #kmsQueuePlaceholder .playlist-index {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    display: grid;
+    place-items: center;
+    background: rgba(207,120,83,0.13);
+    color: #a54b25;
+    font-family: "Menlo", "Consolas", monospace;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  #kmsQueuePlaceholder .playlist-row input { min-width: 0; }
+  #kmsQueuePlaceholder .playlist-repeat {
+    text-align: center;
+    font-family: "Menlo", "Consolas", monospace;
+    height: 30px;
+    padding: 6px 8px;
+  }
+  #kmsQueuePlaceholder .playlist-repeat-wrap {
+    display: grid;
+    gap: 3px;
+    align-items: center;
+    justify-items: center;
+    color: #6b7280;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-family: "Menlo", "Consolas", monospace;
+    width: 80px;
+  }
+  #kmsQueuePlaceholder .playlist-repeat-wrap span { display: block; line-height: 9px; }
+  #kmsQueuePlaceholder .playlist-mini-btn {
+    padding: 6px 9px;
+    border-radius: 6px;
+    background: #f7f7f8;
+    border: 1px solid rgba(0,0,0,.14);
+    color: #202225;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 10px;
+  }
+  #kmsQueuePlaceholder .playlist-mini-btn.danger { color: #ba3b2a; }
+  #kmsQueuePlaceholder .playlist-bulk {
+    margin-top: 10px;
+    border: 1px solid rgba(0,0,0,.14);
+    border-radius: 8px;
+    background: #fbfbfc;
+    overflow: hidden;
+  }
+  #kmsQueuePlaceholder .playlist-bulk summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 10px 12px;
+    font-family: "Menlo", "Consolas", monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #a54b25;
+    background: rgba(255,255,255,0.03);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    user-select: none;
+  }
+  #kmsQueuePlaceholder .playlist-bulk summary::-webkit-details-marker { display: none; }
+  #kmsQueuePlaceholder .playlist-bulk summary::after { content: "+"; font-size: 14px; letter-spacing: 0; }
+  #kmsQueuePlaceholder .playlist-bulk[open] summary::after { content: "−"; }
+  #kmsQueuePlaceholder .playlist-bulk-body {
+    padding: 10px 12px 12px;
+    display: grid;
+    gap: 8px;
+  }
+  @media (min-width: 1201px) {
+    .kms-workspace-shell {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+    }
+  }
+  @media (min-width: 769px) and (max-width: 1200px) {
+    .kms-workspace-shell {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+    .kms-workspace-panel[data-kms-workspace="queue"] {
+      grid-column: 1 / -1;
+    }
+  }
   @media (max-width: 1200px) {
     .kms-service-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
     .kms-panel-body { padding: 14px; }
@@ -313,6 +678,13 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     .kms-panel-body { padding: 12px; }
     .kms-panel-head { padding: 12px 14px; }
     .kms-actions { gap: 6px; }
+    #kmsQueuePlaceholder .playlist-row {
+      grid-template-columns: auto 1fr;
+    }
+    #kmsQueuePlaceholder .playlist-media-cell,
+    #kmsQueuePlaceholder .playlist-thumb {
+      width: 100%;
+    }
   }
 </style>
 
@@ -392,18 +764,32 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     </div>
   </section>
 
-  <!-- Section 2: Live View & Layout Studio Combined -->
-  <section class="kms-panel">
-    <div class="kms-panel-head">
-      <h2>Live View & Layout Studio</h2>
-    </div>
-    <div class="kms-panel-body kms-live-studio">
-      <div id="kmsPreviewPlaceholder" class="kms-preview-frame kms-ui-loading">Loading live preview…</div>
-      <div id="kmsStudioPlaceholder" class="kms-studio-frame kms-ui-loading">Loading layout studio…</div>
-    </div>
+  <!-- Section 2: Workspace Shell -->
+  <section class="kms-workspace-shell" id="kmsWorkspaceShell" data-kms-queue-state="collapsed" data-kms-queue-visible="false" data-kms-queue-pane-type="none">
+    <section class="kms-panel kms-workspace-panel" data-kms-workspace="preview">
+      <div class="kms-panel-head">
+        <h2>Live View</h2>
+      </div>
+      <div id="kmsPreviewPlaceholder" class="kms-panel-body kms-live-body kms-ui-loading">Loading live preview…</div>
+    </section>
+
+    <section class="kms-panel kms-workspace-panel" data-kms-workspace="studio">
+      <div class="kms-panel-head">
+        <h2>Pane Layout</h2>
+      </div>
+      <div id="kmsStudioPlaceholder" class="kms-panel-body kms-layout-body kms-ui-loading">Loading pane layout…</div>
+    </section>
+
+    <section class="kms-panel kms-workspace-panel kms-queue-panel" id="kmsQueuePanel" data-kms-workspace="queue" data-kms-queue-state="collapsed" data-kms-queue-visible="false" data-kms-queue-pane-type="none" hidden>
+      <div class="kms-panel-head">
+        <h2>Selected Pane Queue</h2>
+        <div id="kmsQueueSummary" class="kms-queue-summary">Waiting for an mpv pane selection.</div>
+      </div>
+      <div id="kmsQueuePlaceholder" class="kms-panel-body kms-queue-body kms-ui-loading">Select an mpv pane to view its queue.</div>
+    </section>
   </section>
 
-  <!-- Section 4: Configuration Editor -->
+  <!-- Section 3: Configuration Editor -->
   <section class="kms-panel">
     <div class="kms-panel-head">
       <h2>Configuration Editor</h2>
@@ -657,6 +1043,9 @@ function kmsEmbeddedOverrides() {
       background: #f8f8fa !important;
       color: #1f2328 !important;
       border-color: rgba(0,0,0,.12) !important;
+    }
+    #kmsUiMount #queueEditorTitle {
+      display: none !important;
     }
     /* ─── Combined preview styling ─────────────────────────────────────── */
     #kmsPreviewPlaceholder {
@@ -1017,7 +1406,33 @@ async function kmsSetVisibilityMode(mode) {
   }
 }
 
-function kmsRelocateLiveElements() {
+function kmsSetQueuePanelState(detail = {}) {
+  const shell = document.getElementById('kmsWorkspaceShell');
+  const panel = document.getElementById('kmsQueuePanel');
+  const placeholder = document.getElementById('kmsQueuePlaceholder');
+  const summary = document.getElementById('kmsQueueSummary');
+  if (!shell || !panel || !placeholder) return;
+  const visible = !!detail.visible;
+  const paneType = detail.paneType || (visible ? 'mpv' : 'none');
+  const roleLabel = detail.roleLabel || '';
+  const queueTitle = detail.queueTitle || '';
+  shell.dataset.kmsQueueState = visible ? 'open' : 'collapsed';
+  shell.dataset.kmsQueueVisible = visible ? 'true' : 'false';
+  shell.dataset.kmsQueuePaneType = paneType;
+  panel.dataset.kmsQueueState = visible ? 'open' : 'collapsed';
+  panel.dataset.kmsQueueVisible = visible ? 'true' : 'false';
+  panel.dataset.kmsQueuePaneType = paneType;
+  panel.hidden = !visible;
+  placeholder.dataset.kmsQueueState = visible ? 'open' : 'collapsed';
+  placeholder.dataset.kmsQueuePaneType = paneType;
+  if (summary) {
+    summary.textContent = queueTitle || (visible
+      ? (roleLabel ? `Editing ${roleLabel}.` : 'Selected mpv pane queue.')
+      : 'Waiting for an mpv pane selection.');
+  }
+}
+
+function kmsRelocateWorkspaceElements() {
   // Move the live preview element (with WebRTC connection) to the dedicated panel
   const previewEl = document.querySelector('#kmsUiMount .preview-layout');
   const previewDest = document.getElementById('kmsPreviewPlaceholder');
@@ -1028,11 +1443,11 @@ function kmsRelocateLiveElements() {
     if (previewWrap) {
       previewWrap.removeAttribute('style');
     }
-    previewDest.className = '';
+    previewDest.className = 'kms-panel-body kms-live-body';
     previewDest.innerHTML = '';
     previewDest.appendChild(previewEl);
   } else if (previewDest) {
-    previewDest.className = '';
+    previewDest.className = 'kms-panel-body kms-live-body';
     previewDest.innerHTML = '<p class="kms-meta">Preview unavailable — start the preview service.</p>';
   }
 
@@ -1041,12 +1456,36 @@ function kmsRelocateLiveElements() {
   const studioDest = document.getElementById('kmsStudioPlaceholder');
   if (studioEl && studioDest) {
     studioEl.style.display = '';
-    studioDest.className = '';
+    studioDest.className = 'kms-panel-body kms-layout-body';
     studioDest.innerHTML = '';
     studioDest.appendChild(studioEl);
   } else if (studioDest) {
-    studioDest.className = '';
+    studioDest.className = 'kms-panel-body kms-layout-body';
     studioDest.innerHTML = '<p class="kms-meta">Layout studio unavailable.</p>';
+  }
+
+  const queueDest = document.getElementById('kmsQueuePlaceholder');
+  if (queueDest && queueDest.dataset.kmsQueueRelocated !== 'true') {
+    const queueTitle = document.getElementById('queueEditorTitle');
+    const queueTargets = document.getElementById('playlistTargets');
+    const queueEditor = document.getElementById('playlistEditor');
+    const queueBulk = document.getElementById('playlistBulk');
+    const queueActions = document.getElementById('addQueueItemBtn')?.closest('.actions');
+    const queueNote = document.getElementById('queueEditorNote');
+    const queueBlock = queueTitle?.closest('.panel-wide');
+    queueDest.innerHTML = '';
+    const queueStructure = document.createElement('div');
+    queueStructure.className = 'queue-structure';
+    if (queueTitle) queueTitle.dataset.kmsQueueRelocated = 'true';
+    if (queueTargets) queueStructure.appendChild(queueTargets);
+    if (queueEditor) queueStructure.appendChild(queueEditor);
+    if (queueBulk) queueStructure.appendChild(queueBulk);
+    if (queueActions) queueStructure.appendChild(queueActions);
+    if (queueNote) queueStructure.appendChild(queueNote);
+    queueDest.appendChild(queueStructure);
+    queueDest.classList.remove('kms-ui-loading');
+    queueDest.dataset.kmsQueueRelocated = 'true';
+    if (queueBlock) queueBlock.hidden = true;
   }
 }
 
@@ -1102,7 +1541,7 @@ async function kmsEnsureEmbeddedLoaded() {
       }
 
       // Move live DOM elements (with bound event handlers) to dedicated panels
-      kmsRelocateLiveElements();
+      kmsRelocateWorkspaceElements();
 
       kmsEmbeddedLoaded = true;
     } catch (err) {
@@ -1125,6 +1564,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
   document.querySelectorAll('#kmsVisibilityMode input[type="radio"][name="visibility-mode"]').forEach((radio) => {
     radio.addEventListener('change', () => kmsSetVisibilityMode(radio.value));
+  });
+
+  window.kmsSetQueuePanelState = kmsSetQueuePanelState;
+  window.addEventListener('kms-mosaic-selection-change', (event) => {
+    kmsSetQueuePanelState(event.detail || {});
   });
 
   kmsEnsureEmbeddedLoaded();
