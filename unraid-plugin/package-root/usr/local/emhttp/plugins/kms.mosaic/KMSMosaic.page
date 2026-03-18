@@ -178,6 +178,41 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     color: #1f2328;
     box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 3px rgba(0,0,0,.06);
   }
+  .kms-visibility-group {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 8px;
+  }
+  .kms-visibility-label {
+    font-weight: 700;
+    color: #2c3136;
+    font-size: 14px;
+  }
+  .kms-visibility-options {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .kms-radio-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+  }
+  .kms-radio-wrapper input[type="radio"] {
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+    accent-color: #f15a24;
+  }
+  .kms-radio-wrapper label {
+    cursor: pointer;
+    margin: 0;
+    font-size: 13px;
+    color: #2c3136;
+  }
   .kms-status {
     font-weight: 700;
   }
@@ -257,6 +292,24 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
       <h2>Service Status &amp; Controls</h2>
     </div>
     <div class="kms-panel-body">
+      <div class="kms-visibility-group">
+        <label class="kms-visibility-label">Visibility Mode</label>
+        <div class="kms-visibility-options" id="kmsVisibilityMode">
+          <div class="kms-radio-wrapper">
+            <input type="radio" id="kmsVisNone" name="visibility-mode" value="neither" title="Show all mpv panes and all terminal panes.">
+            <label for="kmsVisNone">Neither</label>
+          </div>
+          <div class="kms-radio-wrapper">
+            <input type="radio" id="kmsVisNoVideo" name="visibility-mode" value="no-video" title="Hide all mpv video panes and keep all terminal panes visible.">
+            <label for="kmsVisNoVideo">No Videos</label>
+          </div>
+          <div class="kms-radio-wrapper">
+            <input type="radio" id="kmsVisNoTerminals" name="visibility-mode" value="no-panes" title="Hide all terminal panes and keep all mpv video panes visible.">
+            <label for="kmsVisNoTerminals">No Terminals</label>
+          </div>
+        </div>
+      </div>
+
       <div class="kms-service-meta">
         <div id="kmsStatus" class="kms-status pending">
           Checking service state…
@@ -271,14 +324,6 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
         <button type="button" onclick="kmsControl('restart')">Restart</button>
         <button type="button" onclick="kmsControl('stop')">Stop</button>
         <button type="button" onclick="kmsRefreshStatus()">Refresh</button>
-        <div class="kms-inline-field">
-          <label>Visibility</label>
-          <div class="kms-segmented" id="kmsVisibilityMode">
-            <button type="button" data-mode="neither" title="Show all mpv panes and all terminal panes.">Neither</button>
-            <button type="button" data-mode="no-video" title="Hide all mpv video panes and keep all terminal panes visible.">No Videos</button>
-            <button type="button" data-mode="no-panes" title="Hide all terminal panes and keep all mpv video panes visible.">No Terminals</button>
-          </div>
-        </div>
         <button type="button" class="orange" id="kmsSaveConfigBtn">Save Config</button>
         <button type="button" id="kmsReloadConfigBtn">Reload From Disk</button>
       </div>
@@ -597,6 +642,7 @@ function kmsEmbeddedOverrides() {
       display: flex;
       flex-direction: column;
       justify-content: center;
+      min-height: 0;
     }
     #kmsPreviewPlaceholder .preview-layout {
       display: block;
@@ -607,9 +653,9 @@ function kmsEmbeddedOverrides() {
       display: block !important;
       position: relative !important;
       width: 100% !important;
-      height: 100% !important;
-      min-height: 400px !important;
-      max-height: none !important;
+      height: auto !important;
+      max-height: 100% !important;
+      aspect-ratio: 9 / 16 !important;
       border-radius: 0 !important;
       background: linear-gradient(180deg, #1a1714, #0c0b09) !important;
       border: none !important;
@@ -923,8 +969,8 @@ function kmsSyncVisibilityMode() {
   if (!group || typeof window.currentVisibilityMode !== 'function') return;
   try {
     const mode = window.currentVisibilityMode();
-    group.querySelectorAll('button[data-mode]').forEach((button) => {
-      button.classList.toggle('kms-active', button.dataset.mode === mode);
+    group.querySelectorAll('input[type="radio"][name="visibility-mode"]').forEach((radio) => {
+      radio.checked = radio.value === mode;
     });
   } catch (err) {
     console.error('Unable to sync KMS Mosaic visibility mode', err);
@@ -1052,8 +1098,8 @@ document.addEventListener('DOMContentLoaded', function() {
   if (saveBtn) saveBtn.addEventListener('click', kmsSaveConfigState);
   if (reloadBtn) reloadBtn.addEventListener('click', kmsReloadConfigState);
 
-  document.querySelectorAll('#kmsVisibilityMode button[data-mode]').forEach((button) => {
-    button.addEventListener('click', () => kmsSetVisibilityMode(button.dataset.mode));
+  document.querySelectorAll('#kmsVisibilityMode input[type="radio"][name="visibility-mode"]').forEach((radio) => {
+    radio.addEventListener('change', () => kmsSetVisibilityMode(radio.value));
   });
 
   kmsEnsureEmbeddedLoaded();
