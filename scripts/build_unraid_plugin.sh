@@ -24,10 +24,15 @@ fi
 cp -R "$PLUGIN_DIR/package-root/." "$STAGE/"
 install -m 0755 "$ROOT_DIR/tools/kms_mosaic_web.py" "$STAGE/usr/local/bin/kms_mosaic_web.py"
 
+# Normalize ownership - files should not have local user ownership
+# Set to root:root for consistency (will be correct when installed)
+find "$STAGE" -exec chown 0:0 {} \; 2>/dev/null || true
+
 PLUGIN_BUNDLE="$DIST_DIR/${PLUGIN_NAME}-${VERSION}.tgz"
 (
   cd "$STAGE"
-  tar -czf "$PLUGIN_BUNDLE" .
+  # Create tarball with normalized ownership (0:0 = root:root)
+  tar --owner=0 --group=0 -czf "$PLUGIN_BUNDLE" .
 )
 
 cp "$PLUGIN_DIR/kms.mosaic.plg" "$DIST_DIR/kms.mosaic.plg"
