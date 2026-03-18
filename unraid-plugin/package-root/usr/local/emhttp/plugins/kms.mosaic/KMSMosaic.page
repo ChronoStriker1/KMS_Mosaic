@@ -707,9 +707,6 @@ function kmsEmbeddedOverrides() {
       gap: 0 !important;
       height: 100%;
     }
-    #kmsStudioPlaceholder .studio-board {
-      order: 1;
-    }
     #kmsStudioPlaceholder .actions {
       display: flex;
       flex-wrap: wrap;
@@ -718,16 +715,18 @@ function kmsEmbeddedOverrides() {
       border-top: 1px solid rgba(0,0,0,.08);
       border-bottom: 1px solid rgba(0,0,0,.08);
       margin: 0;
-      order: 2;
     }
-    #kmsStudioPlaceholder .studio-inspector {
-      order: 3;
+    #kmsStudioPlaceholder .actions {
+      order: 2 !important;
     }
     #kmsStudioPlaceholder .actions button {
       color: #222;
       min-height: 28px;
       padding: 5px 12px;
       font-size: 12px;
+    }
+    #kmsStudioPlaceholder .studio-inspector {
+      order: 3 !important;
     }
     #kmsStudioPlaceholder .studio-board {
       display: block !important;
@@ -741,6 +740,7 @@ function kmsEmbeddedOverrides() {
       border: 1px solid rgba(0,0,0,.10);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.55);
       overflow: hidden;
+      order: 1 !important;
     }
     #kmsStudioPlaceholder .studio-board::before {
       content: '';
