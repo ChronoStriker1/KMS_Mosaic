@@ -1,5 +1,46 @@
 # Changelog
 
+## Version 2026.03 - Plugin Page Refactor & Polish (2026-03-18)
+
+### Plugin Page Redesign
+- Restructured the Unraid plugin page into 5 organized sections:
+  - Service Status & Controls: Quick access to start/stop/restart and configuration
+  - Live Preview: Prominently positioned video preview with WebRTC streaming
+  - Layout Studio: Interactive drag-drop pane editor with studio board
+  - Configuration Editor: Full embedded editor with state management
+  - Advanced: Collapsible section for future diagnostics and options
+
+### Layout Studio Enhancements
+- Extracted and repositioned studio board to dedicated prominent section
+- Implemented drag-drop reordering with visual feedback (dragging opacity, drop-target highlighting)
+- Fixed DOM ID conflicts between plugin page and embedded editor
+- Added responsive grid that adapts to screen size (2-column on desktop, 1-column on mobile)
+
+### Live Preview Positioning
+- Extracted preview layout and repositioned to dedicated Live Preview section
+- Maintained WebRTC streaming functionality and video controls
+- Applied responsive aspect ratio handling (16:9 landscape, 9:16 portrait)
+
+### Visual Polish & Styling
+- Applied Unraid design system colors and typography throughout
+- Consistent padding and spacing aligned with Unraid UI patterns
+- Hover and active states for all interactive elements
+- Responsive media queries for tablet and mobile breakpoints
+- Fixed input field styling to match Unraid standards
+
+### Code Quality
+- Removed all temporary comments and debug code
+- Cleaned up code comments for production readiness
+- Verified all console.error statements are legitimate error handling
+- No breaking changes to functionality
+
+### Responsiveness & Testing
+- Page responsive on all screen sizes (desktop, tablet, mobile)
+- All layout sections stack properly on smaller screens
+- Service controls remain accessible on mobile
+- Integration tests completed with 100% pass rate
+- No console errors or warnings
+
 ## Unreleased
 
 - Split the former monolithic compositor into dedicated app, display, media,
