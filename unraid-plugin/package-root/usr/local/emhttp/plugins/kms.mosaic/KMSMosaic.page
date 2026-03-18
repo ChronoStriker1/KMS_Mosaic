@@ -44,11 +44,16 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     grid-template-columns: 1fr 1fr;
     gap: 0 !important;
     padding: 0 !important;
+    align-items: stretch !important;
+    height: 100% !important;
   }
   .kms-preview-frame,
   .kms-studio-frame {
-    padding: 16px !important;
+    padding: 0 !important;
     min-height: 0;
+    height: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
   }
   .kms-preview-frame {
     border-right: 1px solid var(--box_border, rgba(0,0,0,.12));
@@ -643,6 +648,8 @@ function kmsEmbeddedOverrides() {
       flex-direction: column;
       justify-content: center;
       min-height: 0;
+      flex: 1;
+      height: 100%;
     }
     #kmsPreviewPlaceholder .preview-layout {
       display: block;
@@ -700,12 +707,15 @@ function kmsEmbeddedOverrides() {
     #kmsStudioPlaceholder {
       display: flex;
       flex-direction: column;
+      flex: 1;
+      height: 100%;
     }
     #kmsStudioPlaceholder .studio-grid {
       display: flex !important;
       flex-direction: column;
       gap: 0 !important;
       height: 100%;
+      flex: 1;
     }
     #kmsStudioPlaceholder .actions {
       display: flex;
