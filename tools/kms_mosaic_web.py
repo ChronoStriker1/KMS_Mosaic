@@ -2911,22 +2911,18 @@ HTML = r"""<!doctype html>
       if (!area || !branchArea) return null;
       const displayArea = transformStudioPaneRect(area);
       const displayBranch = transformStudioPaneRect(branchArea);
-      let edge = "right";
-      if (entry.node.kind === "col") {
-        const leftGap = Math.abs(displayBranch.x - displayArea.x);
-        const rightGap = Math.abs((displayArea.x + displayArea.w) - (displayBranch.x + displayBranch.w));
-        edge = leftGap > rightGap ? "left" : "right";
-      } else {
-        const topGap = Math.abs(displayBranch.y - displayArea.y);
-        const bottomGap = Math.abs((displayArea.y + displayArea.h) - (displayBranch.y + displayBranch.h));
-        edge = topGap > bottomGap ? "top" : "bottom";
-      }
+      const total = normalizedRotationDegrees();
+      const logicalEdge = entry.node.kind === "col"
+        ? ((branchArea.x + (branchArea.w / 2)) < (area.x + (area.w / 2)) ? "left" : "right")
+        : ((branchArea.y + (branchArea.h / 2)) < (area.y + (area.h / 2)) ? "top" : "bottom");
+      const edge = displayEdgeForLogicalEdge(logicalEdge, total);
       return {
         ...entry,
         area,
         branchArea,
         displayArea,
         displayBranch,
+        logicalEdge,
         edge,
       };
     }
@@ -3293,6 +3289,25 @@ HTML = r"""<!doctype html>
       return { x, y };
     }
 
+    function displayEdgeForLogicalEdge(logicalEdge, total) {
+      const candidates = [
+        { edge: "left", point: { x: 0, y: 50 } },
+        { edge: "right", point: { x: 100, y: 50 } },
+        { edge: "top", point: { x: 50, y: 0 } },
+        { edge: "bottom", point: { x: 50, y: 100 } },
+      ];
+      for (const candidate of candidates) {
+        const logicalPoint = inversePointByDegrees(candidate.point.x, candidate.point.y, total);
+        const xBias = Math.abs(logicalPoint.x - 50);
+        const yBias = Math.abs(logicalPoint.y - 50);
+        const resolvedEdge = xBias > yBias
+          ? (logicalPoint.x < 50 ? "left" : "right")
+          : (logicalPoint.y < 50 ? "top" : "bottom");
+        if (resolvedEdge === logicalEdge) return candidate.edge;
+      }
+      return logicalEdge;
+    }
+
     function transformStudioPaneRect(rect) {
       const rotated = transformRectByDegrees(rect, studioRotationDegrees());
       return { x: rotated.x, y: 100 - (rotated.y + rotated.h), w: rotated.w, h: rotated.h };
@@ -3356,16 +3371,17 @@ HTML = r"""<!doctype html>
       if (!studioResizeDrag) return;
       const pointer = studioBoardPointerPosition(event);
       if (!pointer) return;
+      const logicalPointer = inversePointByDegrees(pointer.x, pointer.y, normalizedRotationDegrees());
       const ctx = splitTreeResizeContext(state, studioResizeDrag.role);
       if (!ctx) return;
       let changed = false;
       if (studioResizeDrag.mode === "w" || studioResizeDrag.mode === "corner") {
-        const desiredWidth = desiredStudioSizeFromPointer(ctx.displayRect, "w", ctx.colAncestor?.edge, pointer);
+        const desiredWidth = desiredStudioSizeFromPointer(ctx.rect, "w", ctx.colAncestor?.logicalEdge, logicalPointer);
         if (desiredWidth != null && resizePaneAxis(studioResizeDrag.role, "w", desiredWidth).ok) changed = true;
       }
       if (studioResizeDrag.mode === "h" || studioResizeDrag.mode === "corner") {
         const latestCtx = splitTreeResizeContext(state, studioResizeDrag.role) || ctx;
-        const desiredHeight = desiredStudioSizeFromPointer(latestCtx.displayRect, "h", latestCtx.rowAncestor?.edge, pointer);
+        const desiredHeight = desiredStudioSizeFromPointer(latestCtx.rect, "h", latestCtx.rowAncestor?.logicalEdge, logicalPointer);
         if (desiredHeight != null && resizePaneAxis(studioResizeDrag.role, "h", desiredHeight).ok) changed = true;
       }
       if (changed) renderStudioBoard();
