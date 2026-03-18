@@ -368,29 +368,39 @@
       <div id="test-8-4-result" style="display: none;" class="test-result"></div>
     </div>
 
-    <!-- Test 9: Task 1 Manual Verification -->
+    <!-- Test 9: Task 3 Manual Verification -->
     <div class="test-group">
-      <div class="test-group-title">9. Task 1 Manual Verification</div>
+      <div class="test-group-title">9. Task 3 Manual Verification</div>
       <div class="test-item">
-        <div class="test-name">Bottom Configuration Editor panel is removed from the page shell</div>
+        <div class="test-name">Queue controls appear only for the selected mpv pane and stay hidden for terminal panes</div>
         <div id="test-9-1" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-1-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">Visibility controls sit above Apply Settings in Service Status & Controls</div>
+        <div class="test-name">Queue body shows at most five visible rows before scrolling</div>
         <div id="test-9-2" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-2-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">The immediate visibility toggle uses the No Terminal label</div>
+        <div class="test-name">Queue thumbnails are reduced to a smaller compact size</div>
         <div id="test-9-3" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-3-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">Queue controls appear only for the selected mpv pane and stay hidden for terminal panes</div>
+        <div class="test-name">Hover previews stay bounded inside the viewport</div>
         <div id="test-9-4" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-4-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
+        <div class="test-name">Queue preview media falls back to a bounded placeholder when it cannot load</div>
+        <div id="test-9-5" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-9-5-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
+        <div class="test-name">Relocated queue styling still applies outside the editor mount</div>
+        <div id="test-9-6" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-9-6-result" style="display: none;" class="test-result"></div>
     </div>
 
     <!-- Summary and Console -->
@@ -829,20 +839,22 @@
     }
 
     function test9WorkspaceVerification() {
-      log('Test 9: Task 1 manual verification checkpoints...', 'info');
+      log('Test 9: Task 3 manual verification checkpoints...', 'info');
 
       const manualChecks = [
-        ['test-9-1', 'Verify on the installed Unraid page that the bottom Configuration Editor panel is gone and only the hidden embedded mount remains.'],
-        ['test-9-2', 'Verify on the installed Unraid page that Neither, No Video, and No Terminal sit in Service Status & Controls directly above Apply Settings.'],
-        ['test-9-3', 'Verify on the installed Unraid page that the immediate visibility toggle is labeled No Terminal, not No Panes.'],
-        ['test-9-4', 'Verify on the installed Unraid page that queue controls appear only for the selected mpv pane and remain hidden for terminal panes.'],
+        ['test-9-1', 'Verify on the installed Unraid page that queue controls appear only for the selected mpv pane and remain hidden for terminal panes.'],
+        ['test-9-2', 'Verify on the installed Unraid page that the queue body shows only five visible rows before it scrolls.'],
+        ['test-9-3', 'Verify on the installed Unraid page that queue thumbnails are smaller than the earlier oversized layout.'],
+        ['test-9-4', 'Verify on the installed Unraid page that hover previews stay bounded inside the viewport instead of spilling off-screen.'],
+        ['test-9-5', 'Verify on the installed Unraid page that broken or missing queue media falls back to a bounded placeholder preview.'],
+        ['test-9-6', 'Verify on the installed Unraid page that relocated queue styling still applies in the selected-pane panel outside #kmsUiMount.'],
       ];
 
       manualChecks.forEach(([id, message]) => {
         setTestResult(id, 'warn', message);
       });
 
-      log('✓ Task 1 manual verification checklist marked for live Unraid-page validation', 'success');
+      log('✓ Task 3 manual verification checklist marked for live Unraid-page validation', 'success');
     }
 
     function getEventListenerCount() {
