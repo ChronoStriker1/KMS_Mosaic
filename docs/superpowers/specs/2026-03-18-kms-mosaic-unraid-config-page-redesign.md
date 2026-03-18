@@ -31,6 +31,10 @@ The KMS Mosaic plugin configuration page requires functional improvements and vi
 
 The configuration page will follow a single-column, section-based layout matching Unraid's established patterns (like the Shares page). Sections stack vertically with consistent spacing and collapsible advanced options.
 
+**Section ordering:** Service controls → Live preview → Layout Studio → Configuration editor → Advanced
+
+This ordering gives users immediate visual feedback of what's currently displayed, then tools to modify it.
+
 ### Section 1: Service Status & Controls
 
 **Content:**
@@ -56,7 +60,21 @@ The configuration page will follow a single-column, section-based layout matchin
 - Use existing color/spacing vars for consistency
 - Responsive grid layout
 
-### Section 2: Layout Studio
+### Section 2: Live Preview
+
+**Content:**
+- Header: "Live Preview"
+- Full-width video preview showing real-time output of what's currently displayed on the monitor
+- Dark background matching video display context
+- Responsive sizing to maintain aspect ratio
+
+**Styling:**
+- Unraid `.kms-panel` wrapper
+- Dark background (#111) with border
+- Responsive scaling
+- Prominent placement so users immediately see the result
+
+### Section 3: Layout Studio
 
 **Content:**
 - Header: "Layout Studio"
@@ -78,12 +96,14 @@ The configuration page will follow a single-column, section-based layout matchin
 - Buttons match Unraid button styling
 - Responsive: full-width on all screen sizes
 
-### Section 3: Configuration Editor
+### Section 4: Configuration Editor
 
 **Content:**
 - Header: "Configuration"
 - Embedded React/JS editor component loaded from backend
 - Shows current configuration with live editing
+- **Includes playlists section** with video thumbnails and functional hover tooltips/info
+  - Playlist thumbnails are preserved with their current hover behavior (code changes OK if functionality is maintained)
 - Integrates with existing fetch shim and state management
 
 **Styling:**
@@ -91,8 +111,9 @@ The configuration page will follow a single-column, section-based layout matchin
 - Embedded content scoped with `#kmsUiMount` selectors
 - Existing color overrides applied
 - Responsive to container
+- Playlist thumbnails and hover interactions remain functional
 
-### Section 4: Advanced (Collapsible)
+### Section 5: Advanced (Collapsible)
 
 **Content:**
 - `<details>` HTML element
@@ -141,6 +162,8 @@ The configuration page will follow a single-column, section-based layout matchin
 - ✅ All Layout Studio buttons functional and responsive
 - ✅ Drag-and-drop pane repositioning works
 - ✅ Border dragging for pane resizing works
+- ✅ Live preview is prominent and near top of page
+- ✅ Playlist thumbnails display with functional hover behavior
 - ✅ No JavaScript errors in console
 - ✅ Page layout matches Unraid design patterns
 - ✅ Spacing is balanced (no cramping, no wasted space)
