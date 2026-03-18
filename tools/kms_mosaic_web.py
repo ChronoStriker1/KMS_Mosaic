@@ -1580,10 +1580,6 @@ HTML = r"""<!doctype html>
               <div class="actions tight" style="margin-bottom:10px;">
                 <button class="secondary" id="addPaneBtn">Add Pane</button>
                 <button class="secondary" id="removePaneBtn">Remove Selected Pane</button>
-                <button class="secondary" id="splitVerticalBtn">Split Vertical</button>
-                <button class="secondary" id="splitHorizontalBtn">Split Horizontal</button>
-                <button class="secondary" id="rotatePanelsCcwBtn">Rotate Panels CCW</button>
-                <button class="secondary" id="rotatePanelsCwBtn">Rotate Panels CW</button>
               </div>
               <div class="studio-board" id="studioBoard"></div>
             </div>
@@ -4092,34 +4088,6 @@ HTML = r"""<!doctype html>
     addQueueItemBtn.addEventListener("click", () => {
       addQueueItem();
       setStatus("Added a new queue entry.", false);
-    });
-    document.getElementById("splitVerticalBtn").addEventListener("click", () => {
-      if (!splitSelectedRole("col")) {
-        setStatus("Could not split the selected pane.", true);
-        return;
-      }
-      setStatus("Split the selected pane vertically.", false);
-    });
-    document.getElementById("splitHorizontalBtn").addEventListener("click", () => {
-      if (!splitSelectedRole("row")) {
-        setStatus("Could not split the selected pane.", true);
-        return;
-      }
-      setStatus("Split the selected pane horizontally.", false);
-    });
-    document.getElementById("rotatePanelsCcwBtn").addEventListener("click", () => {
-      if (!rotatePanels("ccw")) {
-        setStatus("Could not rotate panels counterclockwise.", true);
-        return;
-      }
-      setStatus("Rotated panels counterclockwise.", false);
-    });
-    document.getElementById("rotatePanelsCwBtn").addEventListener("click", () => {
-      if (!rotatePanels("cw")) {
-        setStatus("Could not rotate panels clockwise.", true);
-        return;
-      }
-      setStatus("Rotated panels clockwise.", false);
     });
     window.addEventListener("resize", () => {
       applyPreviewGeometry();
