@@ -367,27 +367,27 @@ fails to initialize the event listeners for the save/reload buttons.
         <div class="kms-field">
           <label for="kmsServiceBoot">Start `kms_mosaic` at boot</label>
           <select id="kmsServiceBoot" name="SERVICE">
-            <?=mk_option($service, "enable", "Yes");?>
-            <?=mk_option($service, "disable", "No");?>
+            <?php echo mk_option($service, "enable", "Yes"); ?>
+            <?php echo mk_option($service, "disable", "No"); ?>
           </select>
         </div>
 
         <div class="kms-field">
           <label for="kmsWebBoot">Start preview service at boot</label>
           <select id="kmsWebBoot" name="WEB_SERVICE">
-            <?=mk_option($web_service, "enable", "Yes");?>
-            <?=mk_option($web_service, "disable", "No");?>
+            <?php echo mk_option($web_service, "enable", "Yes"); ?>
+            <?php echo mk_option($web_service, "disable", "No"); ?>
           </select>
         </div>
 
         <div class="kms-field">
           <label for="kmsWebPort">Preview service port</label>
-          <input id="kmsWebPort" name="WEB_PORT" type="text" value="<?=htmlspecialchars($web_port);?>">
+          <input id="kmsWebPort" name="WEB_PORT" type="text" value="<?php echo htmlspecialchars($web_port); ?>">
         </div>
 
         <div class="kms-field">
           <label for="kmsConfigPath">Config path</label>
-          <input id="kmsConfigPath" name="CONFIG_PATH" type="text" value="<?=htmlspecialchars($config_path);?>">
+          <input id="kmsConfigPath" name="CONFIG_PATH" type="text" value="<?php echo htmlspecialchars($config_path); ?>">
         </div>
 
         <div class="kms-actions service-actions">
@@ -458,7 +458,7 @@ fails to initialize the event listeners for the save/reload buttons.
 
 <script>
 const kmsActionUrl = '/plugins/kms.mosaic/include/actions.php';
-const kmsInitialStatus = <?=$initial_status_json ?: '{}';?>;
+const kmsInitialStatus = <?php echo $initial_status_json ?: '{}'; ?>;
 const kmsCsrfToken = typeof window.csrf_token === 'string' ? window.csrf_token : '';
 let kmsEmbeddedLoaded = false;
 let kmsEmbeddedStylesInstalled = false;
