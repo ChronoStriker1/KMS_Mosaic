@@ -1456,6 +1456,15 @@ HTML = r"""<!doctype html>
       display: grid;
       gap: 10px;
     }
+    .selected-pane-section {
+      display: grid;
+      gap: 10px;
+      padding-bottom: 2px;
+    }
+    .selected-pane-section + .selected-pane-section {
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
     .studio-empty { color: var(--muted); font-size: 12px; line-height: 1.5; }
     /* ─── playlist ────────────────────────────────────── */
     .playlist-editor { display: grid; gap: 10px; }
@@ -1798,80 +1807,38 @@ HTML = r"""<!doctype html>
     <section class="card">
       <div class="panel-body">
         <div class="panel-wide">
-          <h2 class="section-title">Layout Studio</h2>
+          <h2 class="section-title">Pane Layout</h2>
           <div class="studio-grid">
             <div>
               <div class="actions tight" style="margin-bottom:10px;"></div>
               <div class="studio-board" id="studioBoard"></div>
             </div>
-            <div class="studio-inspector" id="studioInspector">
-              <div class="studio-empty">Select a pane to edit it.</div>
-            </div>
-          </div>
-          <details class="layout-suggestions-block">
-            <summary>Layout Suggestions</summary>
-            <div class="layout-suggestions-body">
-              <div class="suggestion-grid" id="layoutSuggestions"></div>
-            </div>
-          </details>
-        </div>
-
-        <div>
-          <h2 class="section-title">Panes</h2>
-          <div class="playlist-targets" id="mediaTargets"></div>
-          <div class="media-editor" id="mediaEditor"></div>
-        </div>
-
-        <div class="panel-wide queue-editor-shell" id="queueEditorShell">
-          <div class="queue-editor-head">
-            <div>
-              <h2 class="section-title" id="queueEditorTitle">Selected Pane Queue</h2>
-              <p class="muted-note queue-editor-note" id="queueEditorNote">Select an mpv pane to view its queue.</p>
-            </div>
-            <div class="queue-editor-target" id="queueEditorTarget">No pane selected</div>
-          </div>
-          <div class="playlist-editor" id="playlistEditor"></div>
-          <details class="playlist-bulk" id="playlistBulk">
-            <summary>Bulk Add Videos</summary>
-            <div class="playlist-bulk-body">
-              <p class="muted-note">Paste one path or URL per line to replace the current queue for the selected mpv pane.</p>
-              <label id="videoListWrap">Video Files
-                <textarea id="videoList" spellcheck="false" placeholder="/path/one.mp4&#10;/path/two.mp4"></textarea>
-              </label>
-            </div>
-          </details>
-          <div class="actions tight">
-            <button class="secondary" id="addQueueItemBtn">Add Video</button>
           </div>
         </div>
 
-        <div>
-          <h2 class="section-title">Flags</h2>
-          <input id="flagNoVideo" type="hidden" />
-          <input id="flagNoPanes" type="hidden" />
-          <div class="flag-mode-row">
-            <div class="flag-mode-buttons" id="visibilityModeButtons">
-              <button type="button" class="secondary" id="visibilityModeNeitherBtn" title="Show both media panes and terminal panes.">Neither</button>
-              <button type="button" class="secondary" id="visibilityModeNoVideoBtn" title="Hide all video panes and run terminal panes only.">No Video</button>
-              <button type="button" class="secondary" id="visibilityModeNoPanesBtn" title="Hide all terminal panes and show only video panes.">No Panes</button>
-            </div>
-            <div class="flag-mode-note">Saves immediately. Only one of these modes can be active at a time.</div>
-          </div>
-          <div class="checks">
-            <label class="check" title="Enable the compositor's smooth-presentation preset for gentler frame pacing defaults."><input id="flagSmooth" type="checkbox" /> Smooth Preset</label>
-            <label class="check" title="Loop the current file when a pane or queue is pointed at a single item."><input id="flagLoop" type="checkbox" /> Loop File</label>
-            <label class="check" title="Loop each pane playlist instead of stopping at the end."><input id="flagLoopPlaylist" type="checkbox" /> Loop Playlist</label>
-            <label class="check" title="Shuffle playlist order before playback advances through the queue."><input id="flagShuffle" type="checkbox" /> Shuffle</label>
-            <label class="check" title="Use DRM atomic modesetting when the GPU and connector support it."><input id="flagAtomic" type="checkbox" /> Atomic</label>
-            <label class="check" title="Request non-blocking atomic commits when atomic modesetting is enabled."><input id="flagAtomicNonblock" type="checkbox" /> Atomic Nonblock</label>
-            <label class="check" title="Force a glFinish after rendering each frame. Useful for troubleshooting timing issues, but it can hurt performance."><input id="flagGlFinish" type="checkbox" /> glFinish</label>
-            <label class="check" title="Hide the on-screen display and control overlay text."><input id="flagNoOsd" type="checkbox" /> No OSD</label>
+        <div class="panel-wide selected-pane-shell" id="selectedPaneShell">
+          <div class="studio-inspector" id="studioInspector">
+            <div class="studio-empty">Select a pane to edit it.</div>
           </div>
         </div>
 
-        <details class="advanced-block panel-wide" id="advancedPanel">
-          <summary>Advanced</summary>
+        <div class="advanced-block panel-wide" id="advancedPanel">
           <div class="advanced-body">
+            <div>
+              <input id="flagNoVideo" type="hidden" />
+              <input id="flagNoPanes" type="hidden" />
+              <div class="checks">
+                <label class="check" title="Enable the compositor's smooth-presentation preset for gentler frame pacing defaults."><input id="flagSmooth" type="checkbox" /> Smooth Preset</label>
+                <label class="check" title="Loop the current file when a pane or queue is pointed at a single item."><input id="flagLoop" type="checkbox" /> Loop File</label>
+                <label class="check" title="Loop each pane playlist instead of stopping at the end."><input id="flagLoopPlaylist" type="checkbox" /> Loop Playlist</label>
+                <label class="check" title="Shuffle playlist order before playback advances through the queue."><input id="flagShuffle" type="checkbox" /> Shuffle</label>
+                <label class="check" title="Use DRM atomic modesetting when the GPU and connector support it."><input id="flagAtomic" type="checkbox" /> Atomic</label>
+                <label class="check" title="Request non-blocking atomic commits when atomic modesetting is enabled."><input id="flagAtomicNonblock" type="checkbox" /> Atomic Nonblock</label>
+                <label class="check" title="Force a glFinish after rendering each frame. Useful for troubleshooting timing issues, but it can hurt performance."><input id="flagGlFinish" type="checkbox" /> glFinish</label>
+                <label class="check" title="Hide the on-screen display and control overlay text."><input id="flagNoOsd" type="checkbox" /> No OSD</label>
+              </div>
+            </div>
+
             <div>
               <h2 class="section-title">Scene Rules</h2>
               <div class="grid">
@@ -1912,7 +1879,7 @@ HTML = r"""<!doctype html>
               </div>
             </div>
           </div>
-        </details>
+        </div>
 
         <div class="actions">
           <button class="secondary" id="saveBtn">Save Config</button>
@@ -1929,26 +1896,14 @@ HTML = r"""<!doctype html>
     const previewStage = document.querySelector(".preview-stage");
     const previewLayout = document.querySelector(".preview-layout");
     const layoutSelect = document.getElementById("layout");
-    const paneList = document.getElementById("paneList");
     const studioBoard = document.getElementById("studioBoard");
     const studioInspector = document.getElementById("studioInspector");
-    const mediaTargets = document.getElementById("mediaTargets");
-    const mediaEditor = document.getElementById("mediaEditor");
-    const playlistEditor = document.getElementById("playlistEditor");
-    const layoutSuggestions = document.getElementById("layoutSuggestions");
-    const queueEditorShellEl = document.getElementById("queueEditorShell");
-    const queueEditorTitleEl = document.getElementById("queueEditorTitle");
-    const queueEditorNoteEl = document.getElementById("queueEditorNote");
-    const queueEditorTargetEl = document.getElementById("queueEditorTarget");
-    const addQueueItemBtn = document.getElementById("addQueueItemBtn");
-    const visibilityModeButtons = document.getElementById("visibilityModeButtons");
     const statusEl = document.getElementById("status");
     const STUDIO_SIZE_MIN = 5;
     const STUDIO_SIZE_MAX = 95;
     let state = null;
     let rawConfigText = "";
     let selectedRole = -1;
-    let paneTargetRole = 0;
     let draggedStudioRole = null;
     let studioResizeDrag = null;
     let pendingNewPaneIndexes = new Set();
@@ -1962,16 +1917,6 @@ HTML = r"""<!doctype html>
     let webrtcPeer = null;
     let webrtcStream = null;
     let webrtcRetryTimer = null;
-    const layoutSuggestionCopy = {
-      stack: "Vertical stack of the visible panes.",
-      row: "Horizontal row of the visible panes.",
-      "2x1": "Video to the right, panes grouped on the left.",
-      "1x2": "Video to the left, panes grouped on the right.",
-      "2over1": "Panes on top, video below.",
-      "1over2": "Video on top, panes below.",
-      overlay: "Video with pane strip overlay."
-    };
-
     if (layoutSelect) {
       layoutNames.forEach(name => {
         const option = document.createElement("option");
@@ -2008,21 +1953,6 @@ HTML = r"""<!doctype html>
       if (state?.flags?.no_video) return "no-video";
       if (state?.flags?.no_panes) return "no-panes";
       return "neither";
-    }
-
-    function renderVisibilityModeButtons() {
-      if (!visibilityModeButtons) return;
-      const mode = currentVisibilityMode();
-      [
-        ["visibilityModeNeitherBtn", "neither"],
-        ["visibilityModeNoVideoBtn", "no-video"],
-        ["visibilityModeNoPanesBtn", "no-panes"],
-      ].forEach(([id, value]) => {
-        const button = document.getElementById(id);
-        if (!button) return;
-        button.classList.toggle("primary", mode === value);
-        button.classList.toggle("secondary", mode !== value);
-      });
     }
 
     function parseMpvOptionGroups(opts) {
@@ -2136,221 +2066,49 @@ HTML = r"""<!doctype html>
       return state?.pane_types?.[role - 1] === "mpv" ? "video" : "terminal";
     }
 
-    function availablePaneTargets() {
-      if (!state) return [];
-      const targets = [{ role: 0, title: roleTitle(0), type: "mpv" }];
-      for (let role = 1; role <= Number(state.pane_count || 0); role += 1) {
-        const paneIndex = role - 1;
-        targets.push({
-          role,
-          title: roleTitle(role),
-          type: (state.pane_types?.[paneIndex] || "terminal"),
-        });
-      }
-      return targets.sort((a, b) => a.title.localeCompare(b.title));
+    function selectedPaneQueueField() {
+      return document.getElementById("videoList");
     }
 
-    function ensurePaneTargetRole() {
-      const roles = availablePaneTargets().map((target) => target.role);
-      if (!roles.length) {
-        paneTargetRole = 0;
-        return;
-      }
-      if (!roles.includes(paneTargetRole)) {
-        paneTargetRole = roles[0];
-      }
+    function selectedPaneQueueEditor() {
+      return document.getElementById("playlistEditor");
     }
 
-    function renderMediaTargets() {
-      if (!mediaTargets) return;
-      ensurePaneTargetRole();
-      mediaTargets.innerHTML = "";
-      availablePaneTargets().forEach((target) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = `playlist-target-btn${paneTargetRole === target.role ? " active" : ""}`;
-        button.textContent = target.title;
-        button.addEventListener("click", () => {
-          paneTargetRole = target.role;
-          renderMediaTargets();
-          renderMediaEditor();
-        });
-        mediaTargets.appendChild(button);
-      });
+    function selectedPaneQueueNote() {
+      return document.getElementById("queueEditorNote");
     }
 
-    function renderMediaEditor() {
-      if (!state || !mediaEditor) return;
-      renderMediaTargets();
-      ensurePaneTargetRole();
-      if (paneTargetRole === 0) {
-        const groups = parseMpvOptionGroups(state.mpv_opts || []);
-        mediaEditor.innerHTML = `
-          <div class="grid">
-            <label>Connector
-              <input id="mediaConnector" type="text" value="${(state.connector || "").replace(/"/g, "&quot;")}" placeholder="HDMI-A-1" />
-            </label>
-            <label>mpv Out
-              <input id="mediaMpvOut" type="text" value="${(state.mpv_out || "").replace(/"/g, "&quot;")}" placeholder="/tmp/mpv.log" />
-            </label>
-            <label>Panscan
-              <input id="mediaPanscan" type="text" value="${(state.panscan || "").replace(/"/g, "&quot;")}" placeholder="1" />
-            </label>
-            <label>Video Rotate
-              <input id="mediaVideoRotate" type="text" value="${(state.video_rotate || "").replace(/"/g, "&quot;")}" placeholder="270" />
-            </label>
-            <label>Audio Output
-              <select id="mediaAudioMode">
-                <option value="">Default</option>
-                <option value="no-audio"${groups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
-              </select>
-            </label>
-            <label>Mute
-              <select id="mediaMuteMode">
-                <option value="">Default</option>
-                <option value="yes"${groups.muteMode === "yes" ? " selected" : ""}>Muted</option>
-                <option value="no"${groups.muteMode === "no" ? " selected" : ""}>Unmuted</option>
-              </select>
-            </label>
-            <label>Loop Current File
-              <select id="mediaLoopFile">
-                <option value="">Default</option>
-                <option value="no"${groups.loopFile === "no" ? " selected" : ""}>Off</option>
-                <option value="yes"${groups.loopFile === "yes" ? " selected" : ""}>On</option>
-                <option value="inf"${groups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
-              </select>
-            </label>
-            <label style="grid-column: 1 / -1;">Shader Stack
-              <textarea id="mediaShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${groups.shaders.join("\n")}</textarea>
-            </label>
-            <label style="grid-column: 1 / -1;">Additional mpv Options
-              <textarea id="mediaOtherOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${groups.other.join("\n")}</textarea>
-            </label>
-          </div>
-          <p class="muted-note">This target controls ${roleTitle(0)}, including the global-only connector, panscan, output log, and video-rotate fields.</p>
-        `;
-        const syncMain = () => {
-          state.connector = document.getElementById("mediaConnector").value.trim();
-          state.mpv_out = document.getElementById("mediaMpvOut").value.trim();
-          state.panscan = document.getElementById("mediaPanscan").value.trim();
-          state.video_rotate = document.getElementById("mediaVideoRotate").value.trim();
-          state.mpv_opts = buildMpvOptsFromParts({
-            audioMode: document.getElementById("mediaAudioMode").value,
-            muteMode: document.getElementById("mediaMuteMode").value,
-            loopFile: document.getElementById("mediaLoopFile").value,
-            shadersText: document.getElementById("mediaShaders").value,
-            otherText: document.getElementById("mediaOtherOpts").value,
-          });
+    function selectedPaneAddQueueButton() {
+      return document.getElementById("addQueueItemBtn");
+    }
+
+    function selectedPaneStateDetail() {
+      if (!state || selectedRole < 0) {
+        return {
+          selectedRole: -1,
+          paneType: "none",
+          roleLabel: "",
+          title: "Selected Pane",
+          summary: "Select a pane on the board to edit it.",
+          hasSelection: false,
         };
-        [
-          "mediaConnector",
-          "mediaMpvOut","mediaPanscan","mediaVideoRotate","mediaAudioMode",
-          "mediaMuteMode","mediaLoopFile","mediaShaders","mediaOtherOpts"
-        ].forEach((id) => {
-          document.getElementById(id).addEventListener("input", () => { syncMain(); renderPlaylistEditor(); renderStudioBoard(); });
-          document.getElementById(id).addEventListener("change", () => { syncMain(); renderPlaylistEditor(); renderStudioBoard(); });
-        });
-        return;
       }
-      const paneIndex = paneTargetRole - 1;
-      const paneType = state.pane_types?.[paneIndex] || "terminal";
-      if (paneType !== "mpv") {
-        mediaEditor.innerHTML = `
-          <div class="grid">
-            <label>Pane Type
-              <select id="mediaPaneType">
-                <option value="terminal" selected>terminal</option>
-                <option value="mpv">mpv</option>
-              </select>
-            </label>
-            <label style="grid-column: 1 / -1;">Command
-              <input id="mediaPaneCommand" type="text" value="${(state.pane_commands?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="btop --utf-force" />
-            </label>
-          </div>
-          <p class="muted-note">${roleTitle(paneTargetRole)} is a terminal pane. Configure its command here or switch it to mpv for a dedicated media pane.</p>
-        `;
-        document.getElementById("mediaPaneType").addEventListener("change", (event) => {
-          state.pane_types[paneIndex] = event.target.value;
-          renderPaneList(state);
-          renderStudioBoard();
-          renderStudioInspector();
-          renderMediaTargets();
-          renderMediaEditor();
-          renderPlaylistEditor();
-        });
-        document.getElementById("mediaPaneCommand").addEventListener("input", (event) => {
-          state.pane_commands[paneIndex] = event.target.value;
-          renderPaneList(state);
-          renderStudioBoard();
-          renderStudioInspector();
-        });
-        return;
-      }
-      const groups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
-      mediaEditor.innerHTML = `
-        <div class="grid">
-          <label>Connector
-            <input id="mediaPaneConnector" type="text" value="${(state.connector || "").replace(/"/g, "&quot;")}" placeholder="HDMI-A-1" disabled />
-          </label>
-            <label>mpv Out
-              <input id="mediaPaneMpvOut" type="text" value="${(state.pane_mpv_outs?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="/tmp/pane-mpv.log" />
-            </label>
-            <label>Panscan
-              <input id="mediaPanePanscan" type="text" value="${(state.pane_panscan?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="1" />
-            </label>
-            <label>Video Rotate
-              <input id="mediaPaneVideoRotate" type="text" value="${(state.pane_video_rotate?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="270" />
-            </label>
-            <label>Audio Output
-              <select id="mediaPaneAudioMode">
-                <option value="">Default</option>
-                <option value="no-audio"${groups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
-              </select>
-          </label>
-          <label>Mute
-            <select id="mediaPaneMuteMode">
-              <option value="">Default</option>
-              <option value="yes"${groups.muteMode === "yes" ? " selected" : ""}>Muted</option>
-              <option value="no"${groups.muteMode === "no" ? " selected" : ""}>Unmuted</option>
-            </select>
-          </label>
-          <label>Loop Current File
-            <select id="mediaPaneLoopFile">
-              <option value="">Default</option>
-              <option value="no"${groups.loopFile === "no" ? " selected" : ""}>Off</option>
-              <option value="yes"${groups.loopFile === "yes" ? " selected" : ""}>On</option>
-              <option value="inf"${groups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
-            </select>
-          </label>
-          <label style="grid-column: 1 / -1;">Shader Stack
-            <textarea id="mediaPaneShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${groups.shaders.join("\n")}</textarea>
-          </label>
-          <label style="grid-column: 1 / -1;">Additional mpv Options
-            <textarea id="mediaPaneOtherOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${groups.other.join("\n")}</textarea>
-          </label>
-        </div>
-        <p class="muted-note">This target controls ${roleTitle(paneTargetRole)} with the same media field layout as ${roleTitle(0)}. The connector stays visible here for parity, but it remains a global-only field on ${roleTitle(0)}.</p>
-      `;
-      const syncPane = () => {
-        state.pane_mpv_outs[paneIndex] = document.getElementById("mediaPaneMpvOut").value.trim();
-        state.pane_panscan[paneIndex] = document.getElementById("mediaPanePanscan").value.trim();
-        state.pane_video_rotate[paneIndex] = document.getElementById("mediaPaneVideoRotate").value.trim();
-        state.pane_mpv_opts[paneIndex] = buildMpvOptsFromParts({
-          audioMode: document.getElementById("mediaPaneAudioMode").value,
-          muteMode: document.getElementById("mediaPaneMuteMode").value,
-          loopFile: document.getElementById("mediaPaneLoopFile").value,
-          shadersText: document.getElementById("mediaPaneShaders").value,
-          otherText: document.getElementById("mediaPaneOtherOpts").value,
-        });
+      const paneType = selectedPaneType();
+      const roleLabel = roleTitle(selectedRole);
+      return {
+        selectedRole,
+        paneType,
+        roleLabel,
+        title: roleLabel,
+        summary: paneType === "mpv" ? "mpv pane" : "terminal pane",
+        hasSelection: true,
       };
-      [
-        "mediaPaneMpvOut","mediaPanePanscan","mediaPaneVideoRotate",
-        "mediaPaneAudioMode","mediaPaneMuteMode","mediaPaneLoopFile",
-        "mediaPaneShaders","mediaPaneOtherOpts"
-      ].forEach((id) => {
-        document.getElementById(id).addEventListener("input", () => { syncPane(); renderPlaylistEditor(); renderStudioBoard(); });
-        document.getElementById(id).addEventListener("change", () => { syncPane(); renderPlaylistEditor(); renderStudioBoard(); });
-      });
+    }
+
+    function dispatchSelectedPaneState() {
+      window.dispatchEvent(new CustomEvent("kms:selected-pane-state", {
+        detail: selectedPaneStateDetail(),
+      }));
     }
 
     function queueEditorContext() {
@@ -2358,29 +2116,23 @@ HTML = r"""<!doctype html>
       const paneType = selectedPaneType();
       if (selectedRole < 0) {
         return {
-          title: "Selected Pane Queue",
-          note: "Select an mpv pane on the board to view or edit its queue.",
-          targetLabel: "No pane selected",
           emptyMessage: "Select an mpv pane to view its queue.",
           paths: [],
           editable: false,
           paneType: "none",
           role: -1,
-          visible: false,
+          note: "Select an mpv pane to view or edit its queue.",
           apply() {}
         };
       }
       if (paneType !== "mpv") {
         return {
-          title: "Selected Pane Queue",
-          note: `${roleTitle(selectedRole)} is a terminal pane. Select an mpv pane to edit a queue.`,
-          targetLabel: roleTitle(selectedRole),
           emptyMessage: "This pane does not have a media queue.",
           paths: [],
           editable: false,
           paneType,
           role: selectedRole,
-          visible: false,
+          note: `${roleTitle(selectedRole)} is a terminal pane. Switch it to mpv to edit a queue.`,
           apply() {}
         };
       }
@@ -2389,18 +2141,16 @@ HTML = r"""<!doctype html>
         const mainMpvOpts = Array.isArray(state.mpv_opts) ? state.mpv_opts.slice() : [];
         if (mainMpvOpts.length) noteParts.push(`${mainMpvOpts.length} global mpv option${mainMpvOpts.length === 1 ? "" : "s"}.`);
         return {
-          title: `${roleTitle(0)} Queue`,
-          note: noteParts.join(" "),
-          targetLabel: roleTitle(0),
           emptyMessage: "No videos queued yet. Add one below or open Bulk Add Videos.",
           paths: Array.isArray(state.video_paths) ? state.video_paths.slice() : [],
           editable: true,
           paneType,
           role: selectedRole,
-          visible: true,
+          note: noteParts.join(" "),
           apply(paths) {
             state.video_paths = paths.slice();
-            document.getElementById("videoList").value = state.video_paths.join("\n");
+            const queueField = selectedPaneQueueField();
+            if (queueField) queueField.value = state.video_paths.join("\n");
           }
         };
       }
@@ -2411,18 +2161,16 @@ HTML = r"""<!doctype html>
       if (playlistPath) noteParts.push(`Playlist: ${playlistPath}`);
       if (paneMpvOpts.length) noteParts.push(`${paneMpvOpts.length} pane-local mpv option${paneMpvOpts.length === 1 ? "" : "s"}.`);
       return {
-        title: `${roleTitle(selectedRole)} Queue`,
-        note: noteParts.join(" "),
-        targetLabel: roleTitle(selectedRole),
         emptyMessage: "No videos queued yet. Add one below or open Bulk Add Videos.",
         paths: Array.isArray(state.pane_video_paths?.[paneIndex]) ? state.pane_video_paths[paneIndex].slice() : [],
         editable: true,
         paneType,
         role: selectedRole,
-        visible: true,
+        note: noteParts.join(" "),
         apply(paths) {
           state.pane_video_paths[paneIndex] = paths.slice();
-          document.getElementById("videoList").value = state.pane_video_paths[paneIndex].join("\n");
+          const queueField = selectedPaneQueueField();
+          if (queueField) queueField.value = state.pane_video_paths[paneIndex].join("\n");
         }
       };
     }
@@ -3074,18 +2822,6 @@ HTML = r"""<!doctype html>
       return state.pane_types?.[selectedRole - 1] || "terminal";
     }
 
-    function dispatchQueuePanelState() {
-      const ctx = queueEditorContext();
-      const detail = {
-        selectedRole: ctx?.role ?? -1,
-        paneType: ctx?.paneType || "none",
-        visible: !!ctx?.visible,
-        queueTitle: ctx?.title || "Selected Pane Queue",
-        roleLabel: ctx?.targetLabel || "",
-      };
-      window.dispatchEvent(new CustomEvent("kms:selected-pane-queue-state", { detail }));
-    }
-
     function selectRole(role) {
       if (!Number.isFinite(role)) {
         selectedRole = -1;
@@ -3420,28 +3156,6 @@ HTML = r"""<!doctype html>
       applyStudioResizeDrag(event);
     }
 
-    function renderLayoutSuggestions() {
-      if (!state) return;
-      layoutSuggestions.innerHTML = "";
-      layoutNames.forEach((name) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "suggestion-btn";
-        button.innerHTML = `<strong>${name}</strong><span>${layoutSuggestionCopy[name] || "Starter split-tree preset."}</span>`;
-        button.addEventListener("click", () => {
-          state.layout = name;
-          const layoutInput = document.getElementById("layout");
-          if (layoutInput) layoutInput.value = name;
-          state.splitTreeModel = presetTreeFromState(state);
-          syncSplitTreeState();
-          renderStudioBoard();
-          renderStudioInspector();
-          setStatus(`Applied ${name} as the current split-tree starter.`, false);
-        });
-        layoutSuggestions.appendChild(button);
-      });
-    }
-
     function renderStudioBoard() {
       if (!state) return;
       ensureSelectedRole();
@@ -3644,51 +3358,74 @@ HTML = r"""<!doctype html>
       });
     }
 
+    function selectedPaneQueueSectionMarkup() {
+      const ctx = queueEditorContext();
+      if (!ctx || ctx.paneType !== "mpv") return "";
+      return `
+        <div class="selected-pane-section">
+          <h2 class="section-title">Queue</h2>
+          <p class="muted-note queue-editor-note" id="queueEditorNote">${ctx.note}</p>
+          <div class="playlist-editor" id="playlistEditor"></div>
+          <details class="playlist-bulk" id="playlistBulk">
+            <summary>Bulk Add Videos</summary>
+            <div class="playlist-bulk-body">
+              <p class="muted-note">Paste one path or URL per line to replace the current queue for the selected mpv pane.</p>
+              <label>Video Files
+                <textarea id="videoList" spellcheck="false" placeholder="/path/one.mp4&#10;/path/two.mp4"></textarea>
+              </label>
+            </div>
+          </details>
+          <div class="actions tight">
+            <button class="secondary" id="addQueueItemBtn">Add Video</button>
+          </div>
+        </div>
+      `;
+    }
+
     function renderStudioInspector() {
-      if (!state) return;
+      if (!state || !studioInspector) return;
       ensureSelectedRole();
+
       if (selectedRole < 0) {
         studioInspector.innerHTML = `<div class="studio-empty">Select a pane to edit it.</div>`;
+        dispatchSelectedPaneState();
         return;
       }
+
       if (selectedRole === 0) {
         const mainMpvGroups = parseMpvOptionGroups(state.mpv_opts || []);
         studioInspector.innerHTML = `
-          <div>
-            <h2 class="section-title">Selected Pane</h2>
-            <div class="mini">${roleTitle(0)}</div>
+          <div class="selected-pane-section">
+            <h2 class="section-title">Pane Behavior</h2>
+            <label>Audio Output
+              <select id="inspectorMainAudioMode">
+                <option value="">Default</option>
+                <option value="no-audio"${mainMpvGroups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
+              </select>
+            </label>
+            <label>Mute
+              <select id="inspectorMainMuteMode">
+                <option value="">Default</option>
+                <option value="yes"${mainMpvGroups.muteMode === "yes" ? " selected" : ""}>Muted</option>
+                <option value="no"${mainMpvGroups.muteMode === "no" ? " selected" : ""}>Unmuted</option>
+              </select>
+            </label>
+            <label>Loop Current File
+              <select id="inspectorMainLoopFile">
+                <option value="">Default</option>
+                <option value="no"${mainMpvGroups.loopFile === "no" ? " selected" : ""}>Off</option>
+                <option value="yes"${mainMpvGroups.loopFile === "yes" ? " selected" : ""}>On</option>
+                <option value="inf"${mainMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
+              </select>
+            </label>
+            <label>Shader Stack
+              <textarea id="inspectorMainShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${mainMpvGroups.shaders.join("\n")}</textarea>
+            </label>
+            <label>Additional mpv Options
+              <textarea id="inspectorMainMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${mainMpvGroups.other.join("\n")}</textarea>
+            </label>
           </div>
-          <label>Pane Type
-            <input type="text" value="mpv" readonly />
-          </label>
-          <label>Audio Output
-            <select id="inspectorMainAudioMode">
-              <option value="">Default</option>
-              <option value="no-audio"${mainMpvGroups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
-            </select>
-          </label>
-          <label>Mute
-            <select id="inspectorMainMuteMode">
-              <option value="">Default</option>
-              <option value="yes"${mainMpvGroups.muteMode === "yes" ? " selected" : ""}>Muted</option>
-              <option value="no"${mainMpvGroups.muteMode === "no" ? " selected" : ""}>Unmuted</option>
-            </select>
-          </label>
-          <label>Loop Current File
-            <select id="inspectorMainLoopFile">
-              <option value="">Default</option>
-              <option value="no"${mainMpvGroups.loopFile === "no" ? " selected" : ""}>Off</option>
-              <option value="yes"${mainMpvGroups.loopFile === "yes" ? " selected" : ""}>On</option>
-              <option value="inf"${mainMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
-            </select>
-          </label>
-          <label>Shader Stack
-            <textarea id="inspectorMainShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${mainMpvGroups.shaders.join("\n")}</textarea>
-          </label>
-          <label>Additional mpv Options
-            <textarea id="inspectorMainMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${mainMpvGroups.other.join("\n")}</textarea>
-          </label>
-          <p class="muted-note">This inspector controls ${roleTitle(0)}. Its queue now follows the current board selection in the Selected Pane Queue panel.</p>
+          ${selectedPaneQueueSectionMarkup()}
         `;
         [
           "inspectorMainAudioMode",
@@ -3708,7 +3445,16 @@ HTML = r"""<!doctype html>
             renderPlaylistEditor();
           });
         });
+        const addQueueButton = selectedPaneAddQueueButton();
+        if (addQueueButton) {
+          addQueueButton.addEventListener("click", () => {
+            addQueueItem();
+            setStatus("Added a new queue entry.", false);
+          });
+        }
         syncMainInspectorMpvOpts();
+        renderPlaylistEditor();
+        dispatchSelectedPaneState();
         return;
       }
 
@@ -3718,72 +3464,67 @@ HTML = r"""<!doctype html>
       if (paneType === "mpv") {
         if (pendingNewPaneIndexes.has(paneIndex)) {
           studioInspector.innerHTML = `
-            <div>
-              <h2 class="section-title">Selected Pane</h2>
-              <div class="mini">${roleTitle(selectedRole)}</div>
+            <div class="selected-pane-section">
+              <h2 class="section-title">Pane Behavior</h2>
+              <label>Pane Type
+                <select id="inspectorPaneType">
+                  <option value="terminal">terminal</option>
+                  <option value="mpv" selected>mpv</option>
+                </select>
+              </label>
+              <p class="muted-note">This new mpv pane has been placed in the layout, but its playlist and mpv options stay hidden until you save and let the page reload from the persisted config.</p>
             </div>
+          `;
+          document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
+            state.pane_types[paneIndex] = event.target.value;
+            renderStudioBoard();
+            renderStudioInspector();
+          });
+          dispatchSelectedPaneState();
+          return;
+        }
+        const paneMpvGroups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
+        studioInspector.innerHTML = `
+          <div class="selected-pane-section">
+            <h2 class="section-title">Pane Behavior</h2>
             <label>Pane Type
               <select id="inspectorPaneType">
                 <option value="terminal">terminal</option>
                 <option value="mpv" selected>mpv</option>
               </select>
             </label>
-            <p class="muted-note">This new mpv pane has been placed in the layout, but its playlist and mpv options stay hidden until you save and let the page reload from the persisted config.</p>
-          `;
-          document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
-            state.pane_types[paneIndex] = event.target.value;
-            renderPaneList(state);
-            renderPlaylistEditor();
-            renderStudioBoard();
-            renderStudioInspector();
-          });
-          return;
-        }
-        const paneMpvGroups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
-        studioInspector.innerHTML = `
-          <div>
-            <h2 class="section-title">Selected Pane</h2>
-            <div class="mini">${roleTitle(selectedRole)}</div>
+            <label>Audio Output
+              <select id="inspectorPaneAudioMode">
+                <option value="">Default</option>
+                <option value="no-audio"${paneMpvGroups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
+              </select>
+            </label>
+            <label>Mute
+              <select id="inspectorPaneMuteMode">
+                <option value="">Default</option>
+                <option value="yes"${paneMpvGroups.muteMode === "yes" ? " selected" : ""}>Muted</option>
+                <option value="no"${paneMpvGroups.muteMode === "no" ? " selected" : ""}>Unmuted</option>
+              </select>
+            </label>
+            <label>Loop Current File
+              <select id="inspectorPaneLoopFile">
+                <option value="">Default</option>
+                <option value="no"${paneMpvGroups.loopFile === "no" ? " selected" : ""}>Off</option>
+                <option value="yes"${paneMpvGroups.loopFile === "yes" ? " selected" : ""}>On</option>
+                <option value="inf"${paneMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
+              </select>
+            </label>
+            <label>Shader Stack
+              <textarea id="inspectorPaneShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${paneMpvGroups.shaders.join("\n")}</textarea>
+            </label>
+            <label>Additional mpv Options
+              <textarea id="inspectorPaneMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${paneMpvGroups.other.join("\n")}</textarea>
+            </label>
           </div>
-          <label>Pane Type
-            <select id="inspectorPaneType">
-              <option value="terminal">terminal</option>
-              <option value="mpv" selected>mpv</option>
-            </select>
-          </label>
-          <label>Audio Output
-            <select id="inspectorPaneAudioMode">
-              <option value="">Default</option>
-              <option value="no-audio"${paneMpvGroups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
-            </select>
-          </label>
-          <label>Mute
-            <select id="inspectorPaneMuteMode">
-              <option value="">Default</option>
-              <option value="yes"${paneMpvGroups.muteMode === "yes" ? " selected" : ""}>Muted</option>
-              <option value="no"${paneMpvGroups.muteMode === "no" ? " selected" : ""}>Unmuted</option>
-            </select>
-          </label>
-          <label>Loop Current File
-            <select id="inspectorPaneLoopFile">
-              <option value="">Default</option>
-              <option value="no"${paneMpvGroups.loopFile === "no" ? " selected" : ""}>Off</option>
-              <option value="yes"${paneMpvGroups.loopFile === "yes" ? " selected" : ""}>On</option>
-              <option value="inf"${paneMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
-            </select>
-          </label>
-          <label>Shader Stack
-            <textarea id="inspectorPaneShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${paneMpvGroups.shaders.join("\n")}</textarea>
-          </label>
-          <label>Additional mpv Options
-            <textarea id="inspectorPaneMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${paneMpvGroups.other.join("\n")}</textarea>
-          </label>
-          <p class="muted-note">This pane writes its own per-pane mpv config. Queue edits now live only in the Selected Pane Queue panel so selection stays aligned with the board.</p>
+          ${selectedPaneQueueSectionMarkup()}
         `;
         document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
           state.pane_types[paneIndex] = event.target.value;
-          renderPaneList(state);
-          renderPlaylistEditor();
           renderStudioBoard();
           renderStudioInspector();
         });
@@ -3805,55 +3546,62 @@ HTML = r"""<!doctype html>
             renderPlaylistEditor();
           });
         });
+        const addQueueButton = selectedPaneAddQueueButton();
+        if (addQueueButton) {
+          addQueueButton.addEventListener("click", () => {
+            addQueueItem();
+            setStatus("Added a new queue entry.", false);
+          });
+        }
         syncInspectorPaneMpvOpts(paneIndex);
+        renderPlaylistEditor();
+        dispatchSelectedPaneState();
         return;
       }
+
       studioInspector.innerHTML = `
-        <div>
-          <h2 class="section-title">Selected Pane</h2>
-          <div class="mini">${roleTitle(selectedRole)}</div>
+        <div class="selected-pane-section">
+          <h2 class="section-title">Pane Behavior</h2>
+          <label>Pane Type
+            <select id="inspectorPaneType">
+              <option value="terminal" selected>terminal</option>
+              <option value="mpv">mpv</option>
+            </select>
+          </label>
+          <label>Command
+            <input id="inspectorPaneCommand" type="text" value="${value.replace(/"/g, "&quot;")}" placeholder="btop --utf-force" />
+          </label>
+          <p class="muted-note">This pane currently spawns a shell command. Switch it to mpv here if you want a dedicated video pane instead.</p>
         </div>
-        <label>Pane Type
-          <select id="inspectorPaneType">
-            <option value="terminal" selected>terminal</option>
-            <option value="mpv">mpv</option>
-          </select>
-        </label>
-        <label>Command
-          <input id="inspectorPaneCommand" type="text" value="${value.replace(/"/g, "&quot;")}" placeholder="btop --utf-force" />
-        </label>
-        <p class="muted-note">This pane currently spawns a shell command. Switch it to mpv here if you want a dedicated video pane instead.</p>
       `;
       document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
         state.pane_types[paneIndex] = event.target.value;
-        renderPaneList(state);
-        renderPlaylistEditor();
         renderStudioBoard();
         renderStudioInspector();
       });
       document.getElementById("inspectorPaneCommand").addEventListener("input", (event) => {
         state.pane_commands[paneIndex] = event.target.value;
-        renderPaneList(state);
         renderStudioBoard();
       });
+      dispatchSelectedPaneState();
     }
 
     function renderPlaylistEditor() {
       if (!state) return;
       const ctx = queueEditorContext();
-      if (!ctx) return;
+      const playlistEditor = selectedPaneQueueEditor();
+      const queueField = selectedPaneQueueField();
+      const queueNote = selectedPaneQueueNote();
+      const addQueueButton = selectedPaneAddQueueButton();
+      if (!ctx || !playlistEditor || !queueField) return;
       const previewRotation = effectivePlaylistThumbRotationDegrees();
       const previewQuarterTurn = previewRotation === 90 || previewRotation === 270;
-      if (queueEditorShellEl) queueEditorShellEl.dataset.queueVisible = ctx.visible ? "true" : "false";
-      queueEditorTitleEl.textContent = ctx.title;
-      queueEditorNoteEl.textContent = ctx.note;
-      queueEditorTargetEl.textContent = ctx.targetLabel || "No pane selected";
-      addQueueItemBtn.disabled = !ctx.editable;
-      document.getElementById("videoList").value = (ctx.paths || []).join("\n");
-      document.getElementById("videoList").disabled = !ctx.editable;
+      if (queueNote) queueNote.textContent = ctx.note;
+      if (addQueueButton) addQueueButton.disabled = !ctx.editable;
+      queueField.value = (ctx.paths || []).join("\n");
+      queueField.disabled = !ctx.editable;
       playlistEditor.innerHTML = "";
       const paths = ctx.paths;
-      dispatchQueuePanelState();
       const groups = compressPlaylistPaths(paths);
       if (!ctx.editable) {
         playlistEditor.innerHTML = `<div class="studio-empty">${ctx.emptyMessage}</div>`;
@@ -4172,7 +3920,6 @@ HTML = r"""<!doctype html>
       const paneCountInput = document.getElementById("paneCount");
       if (paneCountInput) paneCountInput.value = String(state.pane_count);
       selectRole(newRole);
-      renderPaneList(state);
       renderPlaylistEditor();
       renderStudioBoard();
       renderStudioInspector();
@@ -4209,38 +3956,9 @@ HTML = r"""<!doctype html>
       const paneCountInput = document.getElementById("paneCount");
       if (paneCountInput) paneCountInput.value = String(state.pane_count);
       selectRole(-1);
-      renderPaneList(state);
       renderPlaylistEditor();
       renderStudioBoard();
       renderStudioInspector();
-    }
-
-    function renderPaneList(nextState) {
-      if (!paneList) return;
-      paneList.innerHTML = "";
-      ensurePaneCommands(nextState);
-      nextState.pane_commands.forEach((cmd, index) => {
-        const paneType = nextState.pane_types?.[index] || "terminal";
-        if (paneType === "mpv") return;
-        const item = document.createElement("div");
-        item.className = "pane-item";
-        item.innerHTML = `
-          <div class="pane-head">
-            <div class="pane-name">${slotName(index + 1)}</div>
-            <div class="mini">${`role ${index + 1}`}</div>
-          </div>
-          <label>Command
-            <input type="text" data-pane-index="${index}" value="${(cmd || "").replace(/"/g, "&quot;")}" placeholder="btop --utf-force" />
-          </label>
-        `;
-        paneList.appendChild(item);
-      });
-      paneList.querySelectorAll("input[data-pane-index]").forEach(input => {
-        input.addEventListener("input", event => {
-          const idx = Number(event.target.dataset.paneIndex);
-          state.pane_commands[idx] = event.target.value;
-        });
-      });
     }
 
     function waitForIceGatheringComplete(pc) {
@@ -4513,11 +4231,11 @@ HTML = r"""<!doctype html>
       state.flags.no_osd = document.getElementById("flagNoOsd").checked;
       state.extra_lines = document.getElementById("extraLines").value;
       const queueCtx = queueEditorContext();
-      const queuePaths = document.getElementById("videoList").value
-        .split("\n")
-        .map(v => v.trim())
-        .filter(Boolean);
-      if (queueCtx && queueCtx.editable) {
+      const queueField = selectedPaneQueueField();
+      const queuePaths = queueField
+        ? queueField.value.split("\n").map(v => v.trim()).filter(Boolean)
+        : [];
+      if (queueCtx && queueCtx.editable && queueField) {
         queueCtx.apply(queuePaths);
       }
       ensurePaneCommands(state);
@@ -4527,11 +4245,6 @@ HTML = r"""<!doctype html>
         state.splitTreeModel = presetTreeFromState(state);
         syncSplitTreeState();
       }
-      if (state.pane_commands.length !== previousPaneCount) renderPaneList(state);
-      renderLayoutSuggestions();
-      renderMediaEditor();
-      renderVisibilityModeButtons();
-      paneTargetRole = 0;
       renderPlaylistEditor();
       renderStudioBoard();
       renderStudioInspector();
@@ -4569,7 +4282,8 @@ HTML = r"""<!doctype html>
       if (layoutEl) layoutEl.value = state.layout || "stack";
       if (rolesEl) rolesEl.value = state.roles || "";
       if (fsCycleEl) fsCycleEl.value = String(state.fs_cycle_sec || 5);
-      document.getElementById("videoList").value = (state.video_paths || []).join("\n");
+      const queueField = selectedPaneQueueField();
+      if (queueField) queueField.value = (state.video_paths || []).join("\n");
       document.getElementById("flagNoVideo").checked = !!state.flags.no_video;
       document.getElementById("flagNoPanes").checked = !!state.flags.no_panes;
       document.getElementById("flagSmooth").checked = !!state.flags.smooth;
@@ -4582,10 +4296,6 @@ HTML = r"""<!doctype html>
       document.getElementById("flagNoOsd").checked = !!state.flags.no_osd;
       document.getElementById("extraLines").value = state.extra_lines || "";
       document.getElementById("rawConfig").value = rawConfigText;
-      renderLayoutSuggestions();
-      renderMediaEditor();
-      renderVisibilityModeButtons();
-      renderPaneList(state);
       renderPlaylistEditor();
       renderStudioBoard();
       renderStudioInspector();
@@ -4673,7 +4383,6 @@ HTML = r"""<!doctype html>
       const noPanesField = document.getElementById("flagNoPanes");
       if (noVideoField) noVideoField.checked = !!state.flags.no_video;
       if (noPanesField) noPanesField.checked = !!state.flags.no_panes;
-      renderVisibilityModeButtons();
       await saveState();
     }
 
@@ -4729,31 +4438,6 @@ HTML = r"""<!doctype html>
       } catch (err) {
         setStatus(err.message, true);
       }
-    });
-    document.getElementById("visibilityModeNeitherBtn").addEventListener("click", async () => {
-      try {
-        await setVisibilityMode("neither");
-      } catch (err) {
-        setStatus(err.message, true);
-      }
-    });
-    document.getElementById("visibilityModeNoVideoBtn").addEventListener("click", async () => {
-      try {
-        await setVisibilityMode("no-video");
-      } catch (err) {
-        setStatus(err.message, true);
-      }
-    });
-    document.getElementById("visibilityModeNoPanesBtn").addEventListener("click", async () => {
-      try {
-        await setVisibilityMode("no-panes");
-      } catch (err) {
-        setStatus(err.message, true);
-      }
-    });
-    addQueueItemBtn.addEventListener("click", () => {
-      addQueueItem();
-      setStatus("Added a new queue entry.", false);
     });
     window.addEventListener("resize", () => {
       applyPreviewGeometry();
