@@ -1317,6 +1317,10 @@ HTML = r"""<!doctype html>
       font-family: "Menlo", "Consolas", monospace;
       text-align: center;
     }
+    .studio-size-input:disabled {
+      opacity: 0.58;
+      cursor: not-allowed;
+    }
     .studio-size-input:focus {
       outline: none;
       border-color: rgba(181,83,47,0.5);
@@ -3459,11 +3463,11 @@ HTML = r"""<!doctype html>
             <div class="studio-size-group">
               <label class="studio-size-chip" data-active="${widthActive ? "true" : "false"}" title="${widthActive ? "Adjusts the nearest vertical split." : "This pane has no vertical split ancestor to resize."}">
                 <span>W</span>
-                <input type="number" class="studio-size-input" value="${widthValue}" min="${STUDIO_SIZE_MIN}" max="${STUDIO_SIZE_MAX}" data-role="${role}" data-axis="w" step="1">
+                <input type="number" class="studio-size-input" value="${widthValue}" min="${STUDIO_SIZE_MIN}" max="${STUDIO_SIZE_MAX}" data-role="${role}" data-axis="w" step="1" ${widthActive ? "" : "disabled"}>
               </label>
               <label class="studio-size-chip" data-active="${heightActive ? "true" : "false"}" title="${heightActive ? "Adjusts the nearest horizontal split." : "This pane has no horizontal split ancestor to resize."}">
                 <span>H</span>
-                <input type="number" class="studio-size-input" value="${heightValue}" min="${STUDIO_SIZE_MIN}" max="${STUDIO_SIZE_MAX}" data-role="${role}" data-axis="h" step="1">
+                <input type="number" class="studio-size-input" value="${heightValue}" min="${STUDIO_SIZE_MIN}" max="${STUDIO_SIZE_MAX}" data-role="${role}" data-axis="h" step="1" ${heightActive ? "" : "disabled"}>
               </label>
             </div>
             <div class="studio-action-group">
@@ -3567,6 +3571,7 @@ HTML = r"""<!doctype html>
           input.addEventListener("change", (event) => {
             event.preventDefault();
             event.stopPropagation();
+            if (input.disabled) return;
             selectRole(role);
             const axis = input.dataset.axis === "h" ? "h" : "w";
             const parsed = parseInt(input.value, 10);
