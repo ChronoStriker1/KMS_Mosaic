@@ -1406,7 +1406,21 @@ HTML = r"""<!doctype html>
     .playlist-item:hover { border-color: var(--line-strong); }
     .playlist-item.dragging { opacity: 0.5; transform: scale(0.99); }
     .playlist-item.drag-over { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(181,83,47,0.14); }
-    .playlist-media-cell { width: auto; display: grid; align-self: start; }
+    .playlist-row {
+      display: grid;
+      grid-template-columns: minmax(0, 170px) minmax(0, 1fr);
+      gap: 8px 10px;
+      align-items: stretch;
+    }
+    .playlist-item.portrait-thumb .playlist-row {
+      grid-template-columns: minmax(0, 148px) minmax(0, 1fr);
+    }
+    .playlist-media-cell {
+      width: auto;
+      display: flex;
+      align-self: stretch;
+      min-width: 0;
+    }
     .playlist-duration {
       position: absolute;
       bottom: 5px;
@@ -1425,8 +1439,9 @@ HTML = r"""<!doctype html>
     }
     .playlist-duration:empty { display: none; }
     .playlist-thumb {
-      height: 60px;
-      width: auto;
+      height: 100%;
+      width: 100%;
+      min-height: 88px;
       border-radius: 9px;
       overflow: hidden;
       background:
@@ -1467,29 +1482,33 @@ HTML = r"""<!doctype html>
       font-size: 16px;
       opacity: 0.5;
     }
-    .playlist-row {
+    .playlist-path { width: 100%; margin-top: 1px; }
+    .playlist-controls {
       display: grid;
-      grid-template-columns: auto auto 80px auto auto auto;
-      gap: 8px 10px;
-      align-items: start;
+      gap: 6px;
+      min-width: 0;
+      align-content: start;
     }
-    .playlist-path { width: 100%; grid-column: 1 / -1; margin-top: 1px; }
-    .playlist-item.portrait-thumb { grid-template-columns: auto 1fr; align-items: start; }
-    .playlist-controls { display: grid; gap: 6px; min-width: 0; }
     .playlist-controls-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
     .playlist-controls-row .playlist-mini-btn { margin-top: 0; }
-    .playlist-item.portrait-thumb .playlist-path { grid-column: auto; margin-top: 0; }
     .playlist-thumb-media.quarter-turn { padding: 0; }
     .playlist-index {
-      width: 26px; height: 26px;
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      z-index: 3;
+      width: 26px;
+      height: 26px;
       border-radius: 6px;
       display: grid;
       place-items: center;
-      background: rgba(207,120,83,0.13);
-      color: var(--accent-dark);
+      background: rgba(0,0,0,0.56);
+      color: #fff8f0;
       font-family: "Menlo", "Consolas", monospace;
       font-size: 11px;
       font-weight: 700;
+      pointer-events: none;
+      backdrop-filter: blur(4px);
     }
     .playlist-row input { min-width: 0; }
     .playlist-repeat {
@@ -1509,6 +1528,17 @@ HTML = r"""<!doctype html>
       text-transform: uppercase;
       font-family: "Menlo", "Consolas", monospace;
       width: 80px;
+    }
+    .playlist-item.portrait-thumb .playlist-controls-row {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .playlist-item.portrait-thumb .playlist-repeat-wrap {
+      width: 100%;
+      justify-items: stretch;
+    }
+    .playlist-item.portrait-thumb .playlist-repeat {
+      width: 100%;
     }
     .playlist-repeat-wrap span { display: block; line-height: 9px; }
     .playlist-mini-btn {
@@ -3371,6 +3401,7 @@ HTML = r"""<!doctype html>
         const thumbCell = `
           <div class="playlist-media-cell">
             <div class="playlist-thumb${thumb ? "" : " empty"}${thumbMetrics.cover ? " cover" : ""}" style="aspect-ratio: ${thumbMetrics.aspectRatio};" data-hover-src="${mediaUrl(group.path).replace(/"/g, "&quot;")}" data-hover-path="${group.path.replace(/"/g, "&quot;")}" data-hover-video="${isLikelyVideoPath(group.path) ? "1" : "0"}">
+              <div class="playlist-index">${index + 1}</div>
               ${thumb}
             </div>
           </div>`;
@@ -3383,27 +3414,17 @@ HTML = r"""<!doctype html>
             <button class="playlist-mini-btn" data-video-group-down="${index}">Down</button>
             <button class="playlist-mini-btn danger" data-video-group-remove="${index}">Remove</button>`;
         const pathInput = `<input class="playlist-path" type="text" data-video-group-index="${index}" value="${group.path.replace(/"/g, "&quot;")}" placeholder="/path/to/video.mp4" />`;
-        if (thumbMetrics.isPortrait) {
-          item.innerHTML = `
+        item.innerHTML = `
+          <div class="playlist-row">
             ${thumbCell}
             <div class="playlist-controls">
               <div class="playlist-controls-row">
-                <div class="playlist-index">${index + 1}</div>
                 ${controls}
               </div>
               ${pathInput}
             </div>
-          `;
-        } else {
-          item.innerHTML = `
-            <div class="playlist-row">
-              <div class="playlist-index">${index + 1}</div>
-              ${thumbCell}
-              ${controls}
-              ${pathInput}
-            </div>
-          `;
-        }
+          </div>
+        `;
         item.addEventListener("dragstart", () => {
           playlistDragIndex = index;
           item.classList.add("dragging");
