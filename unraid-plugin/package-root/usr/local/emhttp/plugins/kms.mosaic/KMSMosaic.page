@@ -156,10 +156,9 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 3px rgba(0,0,0,.06);
   }
   .kms-visibility-group {
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    margin-bottom: 8px;
+    display: grid;
+    gap: 8px;
+    grid-column: 1 / -1;
   }
   .kms-visibility-label {
     font-weight: 700;
@@ -169,26 +168,15 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   .kms-visibility-options {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 8px;
     flex-wrap: wrap;
   }
-  .kms-radio-wrapper {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
+  .kms-visibility-options button {
+    min-width: 104px;
   }
-  .kms-radio-wrapper input[type="radio"] {
-    cursor: pointer;
-    width: 16px;
-    height: 16px;
-    accent-color: #f15a24;
-  }
-  .kms-radio-wrapper label {
-    cursor: pointer;
-    margin: 0;
-    font-size: 13px;
-    color: #2c3136;
+  .kms-visibility-note {
+    color: #66707c;
+    font-size: 12px;
   }
   .kms-status {
     font-weight: 700;
@@ -233,25 +221,17 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   }
   .kms-live-body,
   .kms-layout-body,
-  .kms-queue-body {
+  .kms-selected-pane-body {
     display: flex;
     flex-direction: column;
     min-height: 0;
     gap: 14px;
   }
-  .kms-queue-panel[hidden],
-  .kms-queue-panel[data-kms-queue-visible="false"] {
-    display: none !important;
-  }
-  .kms-queue-summary {
+  .kms-selected-pane-summary {
     margin-top: 6px;
     font-size: 12px;
     color: var(--color-text-light, #666);
     line-height: 1.4;
-  }
-  #kmsUiMount #queueEditorTitle,
-  #kmsQueuePlaceholder #queueEditorTitle {
-    display: none !important;
   }
   .kms-panel details {
     padding: 0;
@@ -317,7 +297,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   #kmsStudioPlaceholder .studio-board {
     display: block !important;
     position: relative !important;
-    aspect-ratio: 9 / 16 !important;
+    aspect-ratio: 16 / 9;
     flex: 1;
     min-height: 0 !important;
     max-height: 100% !important;
@@ -406,22 +386,30 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     font-size: 13px;
     margin-bottom: 8px;
   }
-  #kmsQueuePlaceholder {
+  #kmsSelectedPanePlaceholder {
     width: 100%;
     min-height: 0;
     flex: 1;
   }
-  #kmsQueuePlaceholder .queue-structure {
+  #kmsSelectedPanePlaceholder.is-empty {
+    display: grid;
+    place-items: center;
+    text-align: center;
+  }
+  #kmsSelectedPanePlaceholder.is-empty .kms-selected-pane-empty {
+    max-width: 26rem;
+  }
+  #kmsSelectedPanePlaceholder .selected-pane-structure {
     display: grid;
     gap: 10px;
   }
-  #kmsQueuePlaceholder .actions {
+  #kmsSelectedPanePlaceholder .actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
   }
-  #kmsQueuePlaceholder .actions button,
-  #kmsQueuePlaceholder button.secondary {
+  #kmsSelectedPanePlaceholder .actions button,
+  #kmsSelectedPanePlaceholder button.secondary {
     color: #202225;
     min-height: 36px;
     padding: 9px 16px;
@@ -429,13 +417,24 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     border: 1px solid rgba(0,0,0,.18);
     border-radius: 6px;
   }
-  #kmsQueuePlaceholder label {
+  #kmsSelectedPanePlaceholder label {
     font-weight: 700;
     color: #2c3136;
   }
-  #kmsQueuePlaceholder input[type="text"],
-  #kmsQueuePlaceholder input[type="number"],
-  #kmsQueuePlaceholder textarea {
+  #kmsSelectedPanePlaceholder .mini,
+  #kmsSelectedPanePlaceholder .muted-note,
+  #kmsSelectedPanePlaceholder .studio-empty,
+  #kmsSelectedPanePlaceholder .playlist-path,
+  #kmsSelectedPanePlaceholder .playlist-duration,
+  #kmsSelectedPanePlaceholder .queue-note,
+  #kmsSelectedPanePlaceholder .section-title,
+  #kmsSelectedPanePlaceholder .check {
+    color: #202225;
+  }
+  #kmsSelectedPanePlaceholder input[type="text"],
+  #kmsSelectedPanePlaceholder input[type="number"],
+  #kmsSelectedPanePlaceholder select,
+  #kmsSelectedPanePlaceholder textarea {
     width: 100%;
     background: #fff;
     color: #1f2328;
@@ -444,194 +443,28 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     padding: 6px 8px;
     font-size: 13px;
   }
-  #kmsQueuePlaceholder .playlist-editor {
-    display: grid;
-    gap: 10px;
-  }
-  #kmsQueuePlaceholder .playlist-list {
-    display: grid;
-    gap: 7px;
-    max-height: calc(4 * 116px + 3 * 7px);
-    overflow-y: auto;
-    padding-right: 6px;
-  }
-  #kmsQueuePlaceholder .playlist-list::-webkit-scrollbar {
-    width: 10px;
-  }
-  #kmsQueuePlaceholder .playlist-list::-webkit-scrollbar-thumb {
-    background: rgba(0,0,0,0.18);
-    border-radius: 999px;
-    border: 2px solid transparent;
-    background-clip: padding-box;
-  }
-  #kmsQueuePlaceholder .playlist-targets {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-    margin-bottom: 10px;
-  }
-  #kmsQueuePlaceholder .playlist-target-btn {
+  #kmsSelectedPanePlaceholder .playlist-bulk {
+    margin-top: 10px;
     border: 1px solid rgba(0,0,0,.14);
-    background: #f7f7f8;
-    color: #5b6470;
-    border-radius: 999px;
-    padding: 6px 10px;
-    font-size: 11px;
-    font-family: "Menlo", "Consolas", monospace;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    transition: background 140ms ease, color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+    border-radius: 8px;
+    background: #fbfbfc;
+    overflow: hidden;
   }
-  #kmsQueuePlaceholder .playlist-target-btn.active {
-    color: #1d3048;
-    border-color: #8ca0ba;
-    background: #e9eef5;
-    box-shadow: 0 4px 12px rgba(36,58,88,0.10);
-  }
-  #kmsQueuePlaceholder .playlist-item {
+  #kmsSelectedPanePlaceholder .playlist-item {
+    background: #fbfbfc;
     border: 1px solid rgba(0,0,0,.09);
-    border-radius: 8px;
-    background: #fbfbfc;
-    padding: 9px 10px;
-    display: grid;
-    gap: 8px;
-    transition: border-color 120ms ease, box-shadow 120ms ease;
+    box-shadow: none;
   }
-  #kmsQueuePlaceholder .playlist-item.alt {
-    background: #f4f5f7;
+  #kmsSelectedPanePlaceholder .playlist-thumb {
+    background: linear-gradient(140deg, rgba(0,0,0,0.03), transparent), #f1f3f5;
+    border-color: rgba(0,0,0,.10);
   }
-  #kmsQueuePlaceholder .playlist-item:hover { border-color: rgba(0,0,0,.18); }
-  #kmsQueuePlaceholder .playlist-item.dragging { opacity: 0.5; transform: scale(0.99); }
-  #kmsQueuePlaceholder .playlist-item.drag-over { border-color: #f15a24; box-shadow: 0 0 0 2px rgba(181,83,47,0.14); }
-  #kmsQueuePlaceholder .playlist-media-cell { width: auto; display: grid; align-self: start; }
-  #kmsQueuePlaceholder .playlist-duration {
-    position: absolute;
-    bottom: 5px;
-    right: 6px;
-    padding: 1px 5px 2px;
-    border-radius: 4px;
-    background: rgba(0,0,0,0.60);
-    color: rgba(255,255,255,0.90);
-    font-family: "Menlo", "Consolas", monospace;
-    font-size: 9px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    z-index: 2;
-    pointer-events: none;
-    backdrop-filter: blur(4px);
-  }
-  #kmsQueuePlaceholder .playlist-duration:empty { display: none; }
-  #kmsQueuePlaceholder .playlist-thumb {
-    height: 60px;
-    width: auto;
-    border-radius: 9px;
-    overflow: hidden;
-    background:
-      linear-gradient(140deg, rgba(181,83,47,0.15), transparent),
-      #f1f3f5;
-    border: 1px solid rgba(0,0,0,.10);
-    position: relative;
-    flex-shrink: 0;
-  }
-  #kmsQueuePlaceholder .playlist-thumb-media {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    overflow: hidden;
-    padding: 4px;
-    transition: transform 160ms ease, box-shadow 160ms ease;
-    transform-origin: center center;
-  }
-  #kmsQueuePlaceholder .playlist-thumb img,
-  #kmsQueuePlaceholder .playlist-thumb video {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    display: block;
-    transform-origin: center center;
-  }
-  #kmsQueuePlaceholder .playlist-thumb.cover img,
-  #kmsQueuePlaceholder .playlist-thumb.cover video {
-    object-fit: cover;
-  }
-  #kmsQueuePlaceholder .playlist-thumb video { background: #0e0c0a; }
-  #kmsQueuePlaceholder .playlist-thumb.empty::after {
-    content: "—";
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-items: center;
-    color: #6b7280;
-    font-size: 16px;
-    opacity: 0.5;
-  }
-  #kmsQueuePlaceholder .playlist-row {
-    display: grid;
-    grid-template-columns: auto auto 80px auto auto auto;
-    gap: 8px 10px;
-    align-items: start;
-  }
-  #kmsQueuePlaceholder .playlist-path { width: 100%; grid-column: 1 / -1; margin-top: 1px; }
-  #kmsQueuePlaceholder .playlist-item.portrait-thumb { grid-template-columns: auto 1fr; align-items: start; }
-  #kmsQueuePlaceholder .playlist-controls { display: grid; gap: 6px; min-width: 0; }
-  #kmsQueuePlaceholder .playlist-controls-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: end; }
-  #kmsQueuePlaceholder .playlist-controls-row .playlist-mini-btn { margin-top: 0; }
-  #kmsQueuePlaceholder .playlist-item.portrait-thumb .playlist-path { grid-column: auto; margin-top: 0; }
-  #kmsQueuePlaceholder .playlist-thumb-media.quarter-turn { padding: 0; }
-  #kmsQueuePlaceholder .playlist-index {
-    width: 26px;
-    height: 26px;
-    border-radius: 6px;
-    display: grid;
-    place-items: center;
-    background: rgba(207,120,83,0.13);
-    color: #a54b25;
-    font-family: "Menlo", "Consolas", monospace;
-    font-size: 11px;
-    font-weight: 700;
-  }
-  #kmsQueuePlaceholder .playlist-row input { min-width: 0; }
-  #kmsQueuePlaceholder .playlist-repeat {
-    text-align: center;
-    font-family: "Menlo", "Consolas", monospace;
-    height: 30px;
-    padding: 6px 8px;
-  }
-  #kmsQueuePlaceholder .playlist-repeat-wrap {
-    display: grid;
-    gap: 3px;
-    align-items: center;
-    justify-items: center;
-    color: #6b7280;
-    font-size: 9px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    font-family: "Menlo", "Consolas", monospace;
-    width: 80px;
-  }
-  #kmsQueuePlaceholder .playlist-repeat-wrap span { display: block; line-height: 9px; }
-  #kmsQueuePlaceholder .playlist-mini-btn {
-    padding: 6px 9px;
-    border-radius: 6px;
+  #kmsSelectedPanePlaceholder .playlist-mini-btn {
     background: #f7f7f8;
-    border: 1px solid rgba(0,0,0,.14);
     color: #202225;
-    height: 30px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-top: 10px;
+    border: 1px solid rgba(0,0,0,.18);
   }
-  #kmsQueuePlaceholder .playlist-mini-btn.danger { color: #ba3b2a; }
-  #kmsQueuePlaceholder .playlist-bulk {
-    margin-top: 10px;
-    border: 1px solid rgba(0,0,0,.14);
-    border-radius: 8px;
-    background: #fbfbfc;
-    overflow: hidden;
-  }
-  #kmsQueuePlaceholder .playlist-bulk summary {
+  #kmsSelectedPanePlaceholder .playlist-bulk summary {
     cursor: pointer;
     list-style: none;
     padding: 10px 12px;
@@ -647,13 +480,68 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     gap: 12px;
     user-select: none;
   }
-  #kmsQueuePlaceholder .playlist-bulk summary::-webkit-details-marker { display: none; }
-  #kmsQueuePlaceholder .playlist-bulk summary::after { content: "+"; font-size: 14px; letter-spacing: 0; }
-  #kmsQueuePlaceholder .playlist-bulk[open] summary::after { content: "−"; }
-  #kmsQueuePlaceholder .playlist-bulk-body {
+  #kmsSelectedPanePlaceholder .playlist-bulk summary::-webkit-details-marker { display: none; }
+  #kmsSelectedPanePlaceholder .playlist-bulk summary::after { content: "+"; font-size: 14px; letter-spacing: 0; }
+  #kmsSelectedPanePlaceholder .playlist-bulk[open] summary::after { content: "−"; }
+  #kmsSelectedPanePlaceholder .playlist-bulk-body {
     padding: 10px 12px 12px;
     display: grid;
     gap: 8px;
+  }
+  #kmsAdvancedPlaceholder {
+    display: grid;
+    gap: 14px;
+  }
+  #kmsAdvancedPlaceholder .advanced-body,
+  #kmsAdvancedPlaceholder .grid,
+  #kmsAdvancedPlaceholder .checks {
+    display: grid;
+    gap: 12px;
+  }
+  #kmsAdvancedPlaceholder .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  #kmsAdvancedPlaceholder label {
+    display: block;
+    font-weight: 700;
+    font-size: 12px;
+    color: #2c3136;
+    margin-bottom: 4px;
+  }
+  #kmsAdvancedPlaceholder input,
+  #kmsAdvancedPlaceholder select,
+  #kmsAdvancedPlaceholder textarea {
+    width: 100%;
+    background: #fff;
+    color: #1f2328;
+    border: 1px solid rgba(0,0,0,.16);
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+  #kmsAdvancedPlaceholder .flag-mode-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  #kmsAdvancedPlaceholder .flag-mode-buttons {
+    display: inline-flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  #kmsAdvancedPlaceholder .check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #202225;
+    font-size: 13px;
+  }
+  #kmsAdvancedPlaceholder .check input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
   }
   @media (min-width: 1201px) {
     .kms-workspace-shell {
@@ -664,7 +552,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     .kms-workspace-shell {
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     }
-    .kms-workspace-panel[data-kms-workspace="queue"] {
+    .kms-selected-pane-panel {
       grid-column: 1 / -1;
     }
   }
@@ -679,12 +567,11 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     .kms-panel-body { padding: 12px; }
     .kms-panel-head { padding: 12px 14px; }
     .kms-actions { gap: 6px; }
-    #kmsQueuePlaceholder .playlist-row {
-      grid-template-columns: auto 1fr;
-    }
-    #kmsQueuePlaceholder .playlist-media-cell,
-    #kmsQueuePlaceholder .playlist-thumb {
-      width: 100%;
+  }
+  @media (max-width: 680px) {
+    #kmsAdvancedPlaceholder .grid,
+    #kmsAdvancedPlaceholder .checks {
+      grid-template-columns: 1fr;
     }
   }
 </style>
@@ -695,24 +582,6 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
       <h2>Service Status &amp; Controls</h2>
     </div>
     <div class="kms-panel-body">
-      <div class="kms-visibility-group">
-        <label class="kms-visibility-label">Visibility Mode</label>
-        <div class="kms-visibility-options" id="kmsVisibilityMode">
-          <div class="kms-radio-wrapper">
-            <input type="radio" id="kmsVisNone" name="visibility-mode" value="neither" title="Show all mpv panes and all terminal panes.">
-            <label for="kmsVisNone">Neither</label>
-          </div>
-          <div class="kms-radio-wrapper">
-            <input type="radio" id="kmsVisNoVideo" name="visibility-mode" value="no-video" title="Hide all mpv video panes and keep all terminal panes visible.">
-            <label for="kmsVisNoVideo">No Videos</label>
-          </div>
-          <div class="kms-radio-wrapper">
-            <input type="radio" id="kmsVisNoTerminals" name="visibility-mode" value="no-panes" title="Hide all terminal panes and keep all mpv video panes visible.">
-            <label for="kmsVisNoTerminals">No Terminals</label>
-          </div>
-        </div>
-      </div>
-
       <div class="kms-service-meta">
         <div id="kmsStatus" class="kms-status pending">
           Checking service state…
@@ -758,15 +627,32 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
           <input id="kmsConfigPath" name="CONFIG_PATH" type="text" value="<?php echo htmlspecialchars($config_path); ?>">
         </div>
 
+        <div class="kms-visibility-group" id="kmsVisibilityGroup">
+          <div class="kms-visibility-label">Visibility Mode</div>
+          <div class="kms-visibility-options" id="kmsVisibilityButtons">
+            <button type="button" class="secondary" id="kmsVisibilityNeitherBtn" onclick="kmsSetVisibilityMode('neither')">Neither</button>
+            <button type="button" class="secondary" id="kmsVisibilityNoVideoBtn" onclick="kmsSetVisibilityMode('no-video')">No Video</button>
+            <button type="button" class="secondary" id="kmsVisibilityNoPanesBtn" onclick="kmsSetVisibilityMode('no-panes')">No Terminal</button>
+          </div>
+          <div class="kms-visibility-note">Saves immediately. Only one of these modes can be active at a time.</div>
+        </div>
+
         <div class="kms-field" style="align-self: end;">
           <button type="button" onclick="kmsSavePluginSettings()">Apply Settings</button>
         </div>
       </div>
+
+      <details class="kms-service-advanced-shell">
+        <summary>Advanced</summary>
+        <div class="kms-panel-body" style="padding: 14px 16px;">
+          <div id="kmsAdvancedPlaceholder" class="kms-ui-loading">Loading advanced settings…</div>
+        </div>
+      </details>
     </div>
   </section>
 
   <!-- Section 2: Workspace Shell -->
-  <section class="kms-workspace-shell" id="kmsWorkspaceShell" data-kms-queue-state="collapsed" data-kms-queue-visible="false" data-kms-queue-pane-type="none">
+  <section class="kms-workspace-shell" id="kmsWorkspaceShell">
     <section class="kms-panel kms-workspace-panel" data-kms-workspace="preview">
       <div class="kms-panel-head">
         <h2>Live View</h2>
@@ -781,24 +667,16 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
       <div id="kmsStudioPlaceholder" class="kms-panel-body kms-layout-body kms-ui-loading">Loading pane layout…</div>
     </section>
 
-    <section class="kms-panel kms-workspace-panel kms-queue-panel" id="kmsQueuePanel" data-kms-workspace="queue" data-kms-queue-state="collapsed" data-kms-queue-visible="false" data-kms-queue-pane-type="none" hidden>
+    <section class="kms-panel kms-workspace-panel kms-selected-pane-panel" id="kmsSelectedPanePanel" data-kms-workspace="selected-pane">
       <div class="kms-panel-head">
-        <h2>Selected Pane Queue</h2>
-        <div id="kmsQueueSummary" class="kms-queue-summary">Waiting for an mpv pane selection.</div>
+        <h2 id="kmsSelectedPaneTitle">Selected Pane</h2>
+        <div id="kmsSelectedPaneSummary" class="kms-selected-pane-summary">Select a pane on the board to edit it.</div>
       </div>
-      <div id="kmsQueuePlaceholder" class="kms-panel-body kms-queue-body kms-ui-loading">Select an mpv pane to view its queue.</div>
+      <div id="kmsSelectedPanePlaceholder" class="kms-panel-body kms-selected-pane-body is-empty"><div class="kms-selected-pane-empty kms-meta">Select a pane on the board to edit it.</div></div>
     </section>
   </section>
 
-  <!-- Section 3: Configuration Editor -->
-  <section class="kms-panel">
-    <div class="kms-panel-head">
-      <h2>Configuration Editor</h2>
-    </div>
-    <div class="kms-panel-body">
-      <div id="kmsUiMount" class="kms-ui-loading">Loading editor…</div>
-    </div>
-  </section>
+  <div id="kmsUiMount" hidden></div>
 
 
 <script>
@@ -892,7 +770,7 @@ function kmsEmbeddedOverrides() {
     }
     #kmsUiMount .app-header { display: none !important; }
     #kmsUiMount .panel-body > div,
-    #kmsUiMount details.advanced-block {
+    #kmsUiMount .advanced-block {
       border-radius: 8px;
       background: #ffffff;
       border: 1px solid rgba(0,0,0,.09);
@@ -1049,6 +927,7 @@ function kmsEmbeddedOverrides() {
     #kmsPreviewPlaceholder {
       display: flex;
       flex-direction: column;
+      align-items: center;
       justify-content: center;
       min-height: 0;
       flex: 1;
@@ -1056,8 +935,9 @@ function kmsEmbeddedOverrides() {
     }
     #kmsPreviewPlaceholder .preview-layout {
       display: block;
-      width: 100%;
-      height: 100%;
+      width: min(100%, 1100px);
+      height: auto;
+      margin: 0 auto;
     }
     #kmsPreviewPlaceholder .preview-wrap {
       display: block !important;
@@ -1110,6 +990,8 @@ function kmsEmbeddedOverrides() {
     #kmsStudioPlaceholder {
       display: flex;
       flex-direction: column;
+      align-items: center;
+      justify-content: center;
       flex: 1;
       height: 100%;
     }
@@ -1119,6 +1001,7 @@ function kmsEmbeddedOverrides() {
       gap: 0 !important;
       height: 100%;
       flex: 1;
+      width: min(100%, 1100px);
     }
     #kmsStudioPlaceholder .actions {
       display: none !important;
@@ -1135,7 +1018,6 @@ function kmsEmbeddedOverrides() {
     #kmsStudioPlaceholder .studio-board {
       display: block !important;
       position: relative !important;
-      aspect-ratio: 9 / 16 !important;
       flex: 1;
       min-height: 0 !important;
       max-height: 100% !important;
@@ -1377,12 +1259,19 @@ async function kmsReloadConfigState() {
 }
 
 function kmsSyncVisibilityMode() {
-  const group = document.getElementById('kmsVisibilityMode');
-  if (!group || typeof window.currentVisibilityMode !== 'function') return;
+  const buttons = document.getElementById('kmsVisibilityButtons');
+  if (!buttons || typeof window.currentVisibilityMode !== 'function') return;
   try {
     const mode = window.currentVisibilityMode();
-    group.querySelectorAll('input[type="radio"][name="visibility-mode"]').forEach((radio) => {
-      radio.checked = radio.value === mode;
+    [
+      ['kmsVisibilityNeitherBtn', 'neither'],
+      ['kmsVisibilityNoVideoBtn', 'no-video'],
+      ['kmsVisibilityNoPanesBtn', 'no-panes'],
+    ].forEach(([id, value]) => {
+      const button = document.getElementById(id);
+      if (!button) return;
+      button.classList.toggle('primary', mode === value);
+      button.classList.toggle('secondary', mode !== value);
     });
   } catch (err) {
     console.error('Unable to sync KMS Mosaic visibility mode', err);
@@ -1393,7 +1282,7 @@ async function kmsSetVisibilityMode(mode) {
   try {
     await kmsEnsureEmbeddedLoaded();
     if (typeof window.setVisibilityMode !== 'function') {
-      throw new Error('Embedded visibility mode control is unavailable');
+      throw new Error('Visibility control is unavailable');
     }
     await window.setVisibilityMode(mode);
     kmsSyncVisibilityMode();
@@ -1404,39 +1293,30 @@ async function kmsSetVisibilityMode(mode) {
   }
 }
 
-function kmsSetQueuePanelState(detail = {}) {
-  const shell = document.getElementById('kmsWorkspaceShell');
-  const panel = document.getElementById('kmsQueuePanel');
-  const placeholder = document.getElementById('kmsQueuePlaceholder');
-  const summary = document.getElementById('kmsQueueSummary');
-  if (!shell || !panel || !placeholder) return;
-  window.__kmsLastQueuePanelState = detail;
-  const paneType = detail.paneType || 'none';
-  const visible = !!detail.visible && paneType === 'mpv';
-  const roleLabel = detail.roleLabel || '';
-  const queueTitle = detail.queueTitle || '';
-  shell.dataset.kmsQueueState = visible ? 'open' : 'collapsed';
-  shell.dataset.kmsQueueVisible = visible ? 'true' : 'false';
-  shell.dataset.kmsQueuePaneType = paneType;
-  panel.dataset.kmsQueueState = visible ? 'open' : 'collapsed';
-  panel.dataset.kmsQueueVisible = visible ? 'true' : 'false';
-  panel.dataset.kmsQueuePaneType = paneType;
-  panel.hidden = !visible;
-  placeholder.dataset.kmsQueueState = visible ? 'open' : 'collapsed';
-  placeholder.dataset.kmsQueuePaneType = paneType;
+function kmsSetSelectedPaneState(detail = {}) {
+  const panel = document.getElementById('kmsSelectedPanePanel');
+  const placeholder = document.getElementById('kmsSelectedPanePlaceholder');
+  const title = document.getElementById('kmsSelectedPaneTitle');
+  const summary = document.getElementById('kmsSelectedPaneSummary');
+  if (!panel || !placeholder) return;
+  window.__kmsLastSelectedPaneState = detail;
+  const hasSelection = !!detail.hasSelection;
+  panel.hidden = false;
+  placeholder.classList.toggle('is-empty', !hasSelection);
+  if (title) {
+    title.textContent = detail.title || 'Selected Pane';
+  }
   if (summary) {
-    summary.textContent = queueTitle || (visible
-      ? (roleLabel ? `Editing ${roleLabel}.` : 'Selected mpv pane queue.')
-      : 'Waiting for an mpv pane selection.');
+    summary.textContent = detail.summary || 'Select a pane on the board to edit it.';
   }
 }
 
 function kmsInstallWorkspaceHooks() {
   if (window.__kmsWorkspaceHooksInstalled) return;
-  window.addEventListener('kms:selected-pane-queue-state', (event) => {
-    kmsSetQueuePanelState(event?.detail || {});
+  window.addEventListener('kms:selected-pane-state', (event) => {
+    kmsSetSelectedPaneState(event?.detail || {});
   });
-  kmsSetQueuePanelState(window.__kmsLastQueuePanelState || {});
+  kmsSetSelectedPaneState(window.__kmsLastSelectedPaneState || {});
   window.__kmsWorkspaceHooksInstalled = true;
 }
 
@@ -1472,16 +1352,30 @@ function kmsRelocateWorkspaceElements() {
     studioDest.innerHTML = '<p class="kms-meta">Layout studio unavailable.</p>';
   }
 
-  const queueDest = document.getElementById('kmsQueuePlaceholder');
-  if (queueDest && queueDest.dataset.kmsQueueRelocated !== 'true') {
-    const queueRoot = document.getElementById('queueEditorShell');
-    queueDest.innerHTML = '';
-    if (queueRoot) {
-      queueRoot.classList.add('queue-structure');
-      queueDest.appendChild(queueRoot);
-      queueDest.dataset.kmsQueueRelocated = 'true';
+  const selectedPaneDest = document.getElementById('kmsSelectedPanePlaceholder');
+  if (selectedPaneDest && selectedPaneDest.dataset.kmsSelectedPaneRelocated !== 'true') {
+    const selectedPaneRoot = document.getElementById('selectedPaneShell');
+    if (selectedPaneRoot) {
+      selectedPaneRoot.classList.add('selected-pane-structure');
+      selectedPaneDest.className = 'kms-panel-body kms-selected-pane-body';
+      selectedPaneDest.innerHTML = '';
+      selectedPaneDest.appendChild(selectedPaneRoot);
+      selectedPaneDest.dataset.kmsSelectedPaneRelocated = 'true';
+    } else {
+      selectedPaneDest.className = 'kms-panel-body kms-selected-pane-body is-empty';
+      selectedPaneDest.innerHTML = '<div class="kms-selected-pane-empty kms-meta">Select a pane on the board to edit it.</div>';
     }
-    queueDest.classList.remove('kms-ui-loading');
+  }
+
+  const advancedDest = document.getElementById('kmsAdvancedPlaceholder');
+  if (advancedDest && advancedDest.dataset.kmsAdvancedRelocated !== 'true') {
+    const advancedRoot = document.getElementById('advancedPanel');
+    if (advancedRoot) {
+      advancedDest.className = '';
+      advancedDest.innerHTML = '';
+      advancedDest.appendChild(advancedRoot);
+      advancedDest.dataset.kmsAdvancedRelocated = 'true';
+    }
   }
 }
 
@@ -1529,7 +1423,6 @@ async function kmsEnsureEmbeddedLoaded() {
       if (typeof window.fillForm === 'function') {
         window.fillForm(statePayload.state, statePayload.config_path, statePayload.raw_config);
       }
-      kmsSyncVisibilityMode();
       if (typeof window.scheduleLivePreview === 'function') {
         window.scheduleLivePreview();
       }
@@ -1539,7 +1432,8 @@ async function kmsEnsureEmbeddedLoaded() {
 
       // Move live DOM elements (with bound event handlers) to dedicated panels
       kmsRelocateWorkspaceElements();
-      kmsSetQueuePanelState(window.__kmsLastQueuePanelState || {});
+      kmsSetSelectedPaneState(window.__kmsLastSelectedPaneState || {});
+      kmsSyncVisibilityMode();
 
       kmsEmbeddedLoaded = true;
     } catch (err) {
@@ -1560,12 +1454,9 @@ document.addEventListener('DOMContentLoaded', function() {
   if (saveBtn) saveBtn.addEventListener('click', kmsSaveConfigState);
   if (reloadBtn) reloadBtn.addEventListener('click', kmsReloadConfigState);
 
-  document.querySelectorAll('#kmsVisibilityMode input[type="radio"][name="visibility-mode"]').forEach((radio) => {
-    radio.addEventListener('change', () => kmsSetVisibilityMode(radio.value));
-  });
-
   kmsEnsureEmbeddedLoaded();
   kmsRefreshStatus();
+  kmsSyncVisibilityMode();
 });
 </script>
 </div>

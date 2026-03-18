@@ -352,32 +352,32 @@
     <div class="test-group">
       <div class="test-group-title">9. Workspace Verification</div>
       <div class="test-item">
-        <div class="test-name">Queue panel drops below first between 769px and 1200px</div>
+        <div class="test-name">Above 1200px, Live View, Pane Layout, and Selected Pane can share one row</div>
         <div id="test-9-1" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-1-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">Mobile stacking at 768px and below keeps Live View, Pane Layout, then Queue</div>
+        <div class="test-name">Between 769px and 1200px, Selected Pane drops below while Live View and Pane Layout stay side by side</div>
         <div id="test-9-2" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-2-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">Queue panel collapses for terminal-pane selection</div>
+        <div class="test-name">Mobile stacking at 768px and below keeps Live View, Pane Layout, then Selected Pane</div>
         <div id="test-9-3" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-3-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">Selecting an mpv pane reopens the queue panel with the correct title</div>
+        <div class="test-name">Selected Pane stays visible with an empty state when no pane is selected</div>
         <div id="test-9-4" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-4-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">Thumbnails fill row height and the queue index sits inside the thumbnail region</div>
+        <div class="test-name">Selecting an mpv pane shows inline queue editing and terminal panes omit the queue section</div>
         <div id="test-9-5" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-5-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">Border dragging and numeric fields resize the same pane geometry</div>
+        <div class="test-name">Layout suggestions and pane target list are gone; queue rows and resize controls still behave correctly</div>
         <div id="test-9-6" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-6-result" style="display: none;" class="test-result"></div>
@@ -476,9 +476,25 @@
       const studio = checkPageElement('kmsStudioPlaceholder', 'Layout Studio');
       setTestResult('test-1-4', studio.found ? 'pass' : 'fail', studio.message);
 
-      // Test 1.5: Config Editor
-      const editor = checkPageElement('kmsUiMount', 'Configuration Editor');
-      setTestResult('test-1-5', editor.found ? 'pass' : 'fail', editor.message);
+      // Test 1.5: No bottom Configuration Editor panel
+      const editorMount = document.getElementById('kmsUiMount');
+      const editorHidden = !!editorMount && editorMount.hidden === true;
+      setTestResult('test-1-5', editorHidden ? 'pass' : 'fail',
+        editorHidden ? 'Embedded editor mount stays hidden from the main shell' : 'Bottom Configuration Editor panel is still visible');
+
+      // Test 1.6: Visibility controls sit above the main apply action
+      const visibilityGroup = document.getElementById('kmsVisibilityGroup');
+      const applyButton = Array.from(document.querySelectorAll('button')).find((btn) => btn.textContent.trim() === 'Apply Settings');
+      const visibilityAboveApply = !!visibilityGroup && !!applyButton &&
+        !!(visibilityGroup.compareDocumentPosition(applyButton) & Node.DOCUMENT_POSITION_FOLLOWING);
+      setTestResult('test-1-6', visibilityAboveApply ? 'pass' : 'fail',
+        visibilityAboveApply ? 'Visibility buttons are placed before Apply Settings' : 'Visibility buttons are not above Apply Settings');
+
+      // Test 1.7: No Terminal label is used for the mpv-hide toggle
+      const noPanesBtn = document.getElementById('kmsVisibilityNoPanesBtn');
+      const noTerminalLabel = !!noPanesBtn && noPanesBtn.textContent.trim() === 'No Terminal';
+      setTestResult('test-1-7', noTerminalLabel ? 'pass' : 'fail',
+        noTerminalLabel ? 'Visibility toggle is labeled No Terminal' : 'Visibility toggle still uses a different label');
 
       log('✓ Full page load test complete', 'success');
     }
@@ -508,11 +524,17 @@
     function test3CrossSectionInteraction() {
       log('Testing: Cross-section interaction...', 'info');
 
-      // Test 3.1: Visibility mode
-      const visMode = document.getElementById('kmsVisibilityMode');
-      const buttons = visMode ? visMode.querySelectorAll('button[data-mode]').length : 0;
-      setTestResult('test-3-1', buttons >= 3 ? 'pass' : 'fail',
-        buttons >= 3 ? `${buttons} visibility mode buttons found` : 'Visibility buttons not found');
+      // Test 3.1: Visibility controls remain in the service shell and keep the updated naming
+      const visGroup = document.getElementById('kmsVisibilityGroup');
+      const visButtons = visGroup ? visGroup.querySelectorAll('button').length : 0;
+      const noTerminalBtn = document.getElementById('kmsVisibilityNoPanesBtn');
+      const applyButton = Array.from(document.querySelectorAll('button')).find((btn) => btn.textContent.trim() === 'Apply Settings');
+      const visLayoutOk = !!visGroup && !!noTerminalBtn && !!applyButton &&
+        visButtons >= 3 &&
+        noTerminalBtn.textContent.trim() === 'No Terminal' &&
+        !!(visGroup.compareDocumentPosition(applyButton) & Node.DOCUMENT_POSITION_FOLLOWING);
+      setTestResult('test-3-1', visLayoutOk ? 'pass' : 'fail',
+        visLayoutOk ? 'Visibility controls are above Apply Settings and use No Terminal naming' : 'Visibility controls are missing or out of order');
 
       // Test 3.2: Status display
       const statusEl = document.getElementById('kmsStatus');
@@ -693,6 +715,25 @@
       log('✓ Overall assessment complete', 'success');
     }
 
+    function test9WorkspaceVerification() {
+      log('Test 9: Workspace verification checkpoints...', 'info');
+
+      const manualChecks = [
+        ['test-9-1', 'Verify on the installed Unraid page that Live View, Pane Layout, and Selected Pane can share one row above 1200px.'],
+        ['test-9-2', 'Verify on the installed Unraid page that Selected Pane drops below first between 769px and 1200px while Live View and Pane Layout stay side by side.'],
+        ['test-9-3', 'Verify on the installed Unraid page that mobile stacking at 768px and below keeps Live View, Pane Layout, then Selected Pane.'],
+        ['test-9-4', 'Verify on the installed Unraid page that Selected Pane stays visible with a compact empty state when no pane is selected.'],
+        ['test-9-5', 'Verify on the installed Unraid page that queue controls appear only for the selected mpv pane, and terminal panes keep the queue section hidden.'],
+        ['test-9-6', 'Verify on the installed Unraid page that layout suggestions and pane target buttons are gone, queue thumbnails still fill row height with the index inside the thumbnail region, and border dragging plus numeric size fields mutate the same pane geometry.'],
+      ];
+
+      manualChecks.forEach(([id, message]) => {
+        setTestResult(id, 'warn', message);
+      });
+
+      log('✓ Workspace verification checklist marked for manual Unraid-page validation', 'success');
+    }
+
     function getEventListenerCount() {
       // Simplified estimation
       return document.querySelectorAll('[onclick]').length +
@@ -711,6 +752,7 @@
       await test6StabilityTest();
       test7BrowserCompatibility();
       test8OverallAssessment();
+      test9WorkspaceVerification();
 
       const duration = ((Date.now() - testStartTime) / 1000).toFixed(1);
       log(`=== TEST SUITE COMPLETE (${duration}s) ===`, 'success');
