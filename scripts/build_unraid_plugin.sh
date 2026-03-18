@@ -28,6 +28,10 @@ install -m 0755 "$ROOT_DIR/tools/kms_mosaic_web.py" "$STAGE/usr/local/bin/kms_mo
 # Set to root:root for consistency (will be correct when installed)
 find "$STAGE" -exec chown 0:0 {} \; 2>/dev/null || true
 
+# Restore execute permissions on scripts after chown
+find "$STAGE/usr/local/bin" -type f -exec chmod 0755 {} \; 2>/dev/null || true
+find "$STAGE/usr/local/emhttp/plugins/kms.mosaic/scripts" -type f -exec chmod 0755 {} \; 2>/dev/null || true
+
 PLUGIN_BUNDLE="$DIST_DIR/${PLUGIN_NAME}-${VERSION}.tgz"
 (
   cd "$STAGE"
