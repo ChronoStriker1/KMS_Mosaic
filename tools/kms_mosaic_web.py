@@ -1694,8 +1694,8 @@ HTML = r"""<!doctype html>
         </details>
 
         <div class="actions">
-          <button type="button" id="saveBtn">Save Config</button>
-          <button type="button" id="reloadBtn">Reload From Disk</button>
+          <button class="secondary" id="saveBtn">Save Config</button>
+          <button class="secondary" id="reloadBtn">Reload From Disk</button>
         </div>
 
       </div>
