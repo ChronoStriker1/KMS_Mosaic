@@ -1693,6 +1693,11 @@ HTML = r"""<!doctype html>
           </div>
         </details>
 
+        <div class="actions">
+          <button type="button" id="saveBtn">Save Config</button>
+          <button type="button" id="reloadBtn">Reload From Disk</button>
+        </div>
+
       </div>
     </section>
   </div>
