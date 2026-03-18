@@ -2723,7 +2723,22 @@ HTML = r"""<!doctype html>
           matchingRoles.push(role);
         }
       }
-      return matchingRoles.length === 1 ? matchingRoles[0] : -1;
+      if (matchingRoles.length <= 1) {
+        return matchingRoles.length === 1 ? matchingRoles[0] : -1;
+      }
+      let narrowedRoles = matchingRoles.slice();
+      const splitTree = parseSplitTreeSpec(nextState.split_tree || "");
+      if (splitTree && snapshot.path != null) {
+        const nodeAtPath = splitTreeNodeAtPath(splitTree, snapshot.path);
+        const roleAtPath = nodeAtPath?.leaf ? Number(nodeAtPath.role) : null;
+        if (Number.isFinite(roleAtPath) && narrowedRoles.includes(roleAtPath)) {
+          narrowedRoles = [roleAtPath];
+        }
+      }
+      if (narrowedRoles.length > 1 && snapshot.role > 0 && narrowedRoles.includes(snapshot.role)) {
+        narrowedRoles = [snapshot.role];
+      }
+      return narrowedRoles.length === 1 ? narrowedRoles[0] : -1;
     }
 
     function ensureSelectedRole() {
@@ -3308,6 +3323,7 @@ HTML = r"""<!doctype html>
       document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
         state.pane_types[paneIndex] = event.target.value;
         renderPaneList(state);
+        renderPlaylistEditor();
         renderStudioBoard();
         renderStudioInspector();
       });
