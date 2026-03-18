@@ -186,6 +186,19 @@ The goal is a thumbnail-first queue row where the preview is readable at a glanc
 
 The outer plugin shell should not become responsible for board geometry logic.
 
+### Packaging And Install Safety
+
+Any plugin packaging or install-script changes made to support this UI/editor work must normalize file and directory permissions for the Unraid target environment instead of preserving metadata from the macOS build machine.
+
+The required contract is:
+
+- install-time scripts must set the intended directory and file modes explicitly on the Unraid side
+- packaging steps must avoid relying on macOS owner, group, or mode metadata being correct for the extracted plugin tree
+- the installer path must leave plugin files owned and readable in the same way as a normal Unraid plugin install, regardless of the local workstation's defaults
+- validation must include confirming that installed wrappers, page assets, PHP files, and service scripts are usable by the expected Unraid runtime users after installation
+
+This requirement applies even if the UI changes are otherwise frontend-only, because the plugin is built on macOS and installed on a different permission model.
+
 ## Error Handling
 
 - If queue data is unavailable for a selected `mpv` pane, show a clear empty/error state inside the queue panel.
@@ -207,6 +220,7 @@ Implementation is complete only when all of the following are verified:
 - The queue item index is visually attached to the thumbnail area.
 - Thumbnails fill the intended media-cell height.
 - Packaging and install validation continue to use the plugin installer path so file ownership and permission behavior remain safe for Unraid.
+- Packaging and install validation confirm that extracted files and directories have the intended Unraid-side permissions and do not retain incompatible macOS ownership/mode assumptions.
 
 ## Out of Scope
 
