@@ -2684,19 +2684,16 @@ HTML = r"""<!doctype html>
       }
       const paneIndex = role - 1;
       const paneType = nextState.pane_types?.[paneIndex] || "terminal";
-      if (paneType !== "mpv") {
-        return {
-          kind: "pane",
-          paneType,
-          command: String(nextState.pane_commands?.[paneIndex] || ""),
-        };
-      }
       return {
         kind: "pane",
         paneType,
+        command: String(nextState.pane_commands?.[paneIndex] || ""),
         playlist: String(nextState.pane_playlists?.[paneIndex] || ""),
         playlistExtended: String(nextState.pane_playlist_extended?.[paneIndex] || ""),
         playlistFifo: String(nextState.pane_playlist_fifos?.[paneIndex] || ""),
+        mpvOut: String(nextState.pane_mpv_outs?.[paneIndex] || ""),
+        videoRotate: String(nextState.pane_video_rotate?.[paneIndex] || ""),
+        panscan: String(nextState.pane_panscan?.[paneIndex] || ""),
         videoPaths: Array.isArray(nextState.pane_video_paths?.[paneIndex]) ? nextState.pane_video_paths[paneIndex].slice() : [],
         mpvOpts: Array.isArray(nextState.pane_mpv_opts?.[paneIndex]) ? nextState.pane_mpv_opts[paneIndex].slice() : [],
       };
