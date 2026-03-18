@@ -1258,6 +1258,26 @@ HTML = r"""<!doctype html>
       letter-spacing: 0.12em;
       text-transform: uppercase;
     }
+    .studio-size-inputs {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .studio-size-input {
+      width: 32px;
+      padding: 2px 4px;
+      border: 1px solid rgba(0,0,0,0.16);
+      border-radius: 3px;
+      background: rgba(255,255,255,0.7);
+      color: #333;
+      font-size: 9px;
+      font-family: "Menlo", "Consolas", monospace;
+    }
+    .studio-size-input:focus {
+      outline: none;
+      border-color: rgba(181,83,47,0.5);
+      background: #fff;
+    }
     .studio-tag {
       display: inline-flex;
       align-items: center;
@@ -2899,7 +2919,11 @@ HTML = r"""<!doctype html>
         card.innerHTML = `
           <div class="studio-top">
             <span class="studio-tag">${paneType === "mpv" ? "mpv" : "shell"}</span>
-            <span>${Math.round(rect.w)} x ${Math.round(rect.h)}</span>
+            <div class="studio-size-inputs">
+              <input type="number" class="studio-size-input" value="${Math.round(rect.w)}" min="5" max="95" data-role="${role}" data-axis="w" step="1">
+              <span>x</span>
+              <input type="number" class="studio-size-input" value="${Math.round(rect.h)}" min="5" max="95" data-role="${role}" data-axis="h" step="1">
+            </div>
           </div>
           <div class="studio-card-body">
             <div class="studio-card-title">${roleTitle(role)}</div>
@@ -2984,6 +3008,18 @@ HTML = r"""<!doctype html>
             selectedRole = role;
             removeSelectedPane();
             setStatus("Removed the selected pane.", false);
+          });
+        });
+        card.querySelectorAll(".studio-size-input").forEach((input) => {
+          input.addEventListener("change", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const newValue = Math.min(95, Math.max(5, parseInt(input.value) || 50));
+            input.value = newValue;
+            setStatus("Note: Drag pane borders to resize (coming soon) or use split actions.", false);
+          });
+          input.addEventListener("click", (event) => {
+            event.stopPropagation();
           });
         });
         studioBoard.appendChild(card);

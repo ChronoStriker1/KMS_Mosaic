@@ -41,19 +41,25 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   }
   .kms-live-studio {
     display: grid !important;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr !important;
     gap: 0 !important;
     padding: 0 !important;
     align-items: stretch !important;
-    height: 100% !important;
+    align-content: stretch !important;
+    height: 600px !important;
+    min-height: 600px !important;
   }
   .kms-preview-frame,
   .kms-studio-frame {
     padding: 0 !important;
-    min-height: 0;
+    margin: 0 !important;
+    min-height: 0 !important;
     height: 100% !important;
+    width: 100% !important;
     display: flex !important;
     flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
   }
   .kms-preview-frame {
     border-right: 1px solid var(--box_border, rgba(0,0,0,.12));
@@ -388,15 +394,6 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     </div>
   </section>
 
-  <!-- Section 5: Advanced (Collapsible) -->
-  <section class="kms-panel">
-    <details>
-      <summary>Advanced</summary>
-      <div class="kms-panel-body">
-        <p class="kms-meta">Advanced configuration options and diagnostics go here.</p>
-      </div>
-    </details>
-  </section>
 
 <script>
 const kmsActionUrl = '/plugins/kms.mosaic/include/actions.php';
