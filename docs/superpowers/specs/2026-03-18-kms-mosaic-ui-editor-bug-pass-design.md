@@ -90,6 +90,8 @@ Everything else moves into `Selected Pane`.
 
 This means the board should no longer attempt to show long summaries, duplicate pane-local configuration, or other metadata that causes text collisions in small tiles.
 
+The editable size marker is the one allowed board-side editing exception. It stays on the tile because it belongs to direct layout manipulation, while all other detailed pane controls remain in `Selected Pane`.
+
 ### Selection Behavior
 
 Clicking a pane selects it and updates `Selected Pane`.
@@ -200,6 +202,7 @@ Implementation is complete only when all of the following are verified:
 - selecting a pane does not break the live preview
 - the queue shows at most five visible rows before scrolling
 - queue thumbnails are smaller and hover previews stay bounded to the viewport
+- queue editing appears only for the selected `mpv` pane and terminal panes do not render a queue section
 - `Neither`, `No Video`, and `No Terminal` appear above the main apply action
 - visibility controls apply immediately
 - `No Video` affects all video panes only
