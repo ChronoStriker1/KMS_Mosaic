@@ -1412,8 +1412,8 @@ function kmsSetQueuePanelState(detail = {}) {
   const placeholder = document.getElementById('kmsQueuePlaceholder');
   const summary = document.getElementById('kmsQueueSummary');
   if (!shell || !panel || !placeholder) return;
-  const visible = !!detail.visible;
-  const paneType = detail.paneType || (visible ? 'mpv' : 'none');
+  const paneType = detail.paneType || 'none';
+  const visible = !!detail.visible && paneType === 'mpv';
   const roleLabel = detail.roleLabel || '';
   const queueTitle = detail.queueTitle || '';
   shell.dataset.kmsQueueState = visible ? 'open' : 'collapsed';
