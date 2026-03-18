@@ -899,16 +899,18 @@
       }
       queueThumb.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true, cancelable: true, view: window }));
 
-      const controlsRow = portraitItem ? portraitItem.querySelector('.playlist-controls-row') : null;
-      const repeatWrap = portraitItem ? portraitItem.querySelector('.playlist-repeat-wrap') : null;
-      const relocatedStylingOk = !portraitItem || (
-        !!controlsRow &&
-        window.getComputedStyle(controlsRow).display === 'grid' &&
-        !!repeatWrap &&
-        Math.abs(repeatWrap.getBoundingClientRect().width - controlsRow.getBoundingClientRect().width) <= 2
-      );
-      setTestResult('test-9-6', relocatedStylingOk ? 'pass' : 'fail',
-        relocatedStylingOk ? 'Relocated queue styling matches the portrait/mobile control layout rules' : 'Relocated queue styling is missing the portrait/mobile control layout rules');
+      if (!portraitItem) {
+        setTestResult('test-9-6', 'skip', 'Select an mpv pane with a portrait queue item to verify the relocated portrait/mobile queue styling.');
+      } else {
+        const controlsRow = portraitItem.querySelector('.playlist-controls-row');
+        const repeatWrap = portraitItem.querySelector('.playlist-repeat-wrap');
+        const relocatedStylingOk = !!controlsRow &&
+          window.getComputedStyle(controlsRow).display === 'grid' &&
+          !!repeatWrap &&
+          Math.abs(repeatWrap.getBoundingClientRect().width - controlsRow.getBoundingClientRect().width) <= 2;
+        setTestResult('test-9-6', relocatedStylingOk ? 'pass' : 'fail',
+          relocatedStylingOk ? 'Relocated queue styling matches the portrait/mobile control layout rules' : 'Relocated queue styling is missing the portrait/mobile control layout rules');
+      }
 
       log('✓ Task 3 queue verification complete', 'success');
     }
