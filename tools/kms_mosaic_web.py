@@ -1492,7 +1492,7 @@ HTML = r"""<!doctype html>
     .playlist-list {
       display: grid;
       gap: 7px;
-      max-height: calc(4 * 116px + 3 * 7px);
+      max-height: calc(5 * 104px + 4 * 7px);
       overflow-y: auto;
       padding-right: 6px;
     }
@@ -1550,12 +1550,12 @@ HTML = r"""<!doctype html>
     .playlist-item.drag-over { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(181,83,47,0.14); }
     .playlist-row {
       display: grid;
-      grid-template-columns: minmax(0, 170px) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 138px) minmax(0, 1fr);
       gap: 8px 10px;
       align-items: start;
     }
     .playlist-item.portrait-thumb .playlist-row {
-      grid-template-columns: minmax(0, 148px) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 124px) minmax(0, 1fr);
     }
     .playlist-media-cell {
       width: auto;
@@ -1583,8 +1583,8 @@ HTML = r"""<!doctype html>
     .playlist-thumb {
       height: auto;
       width: 100%;
-      min-height: 88px;
-      border-radius: 9px;
+      min-height: 72px;
+      border-radius: 8px;
       overflow: hidden;
       background:
         linear-gradient(140deg, rgba(181,83,47,0.15), transparent),
@@ -1599,7 +1599,7 @@ HTML = r"""<!doctype html>
       display: grid;
       place-items: center;
       overflow: hidden;
-      padding: 4px;
+      padding: 3px;
       transition: transform 160ms ease, box-shadow 160ms ease;
       transform-origin: center center;
     }
@@ -1621,7 +1621,7 @@ HTML = r"""<!doctype html>
       display: grid;
       place-items: center;
       color: var(--muted);
-      font-size: 16px;
+      font-size: 14px;
       opacity: 0.5;
     }
     .playlist-path { width: 100%; margin-top: 1px; }
@@ -1636,18 +1636,18 @@ HTML = r"""<!doctype html>
     .playlist-thumb-media.quarter-turn { padding: 0; }
     .playlist-index {
       position: absolute;
-      top: 6px;
-      right: 6px;
+      top: 5px;
+      right: 5px;
       z-index: 3;
-      width: 26px;
-      height: 26px;
-      border-radius: 6px;
+      width: 22px;
+      height: 22px;
+      border-radius: 5px;
       display: grid;
       place-items: center;
       background: rgba(0,0,0,0.56);
       color: #fff8f0;
       font-family: "Menlo", "Consolas", monospace;
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 700;
       pointer-events: none;
       backdrop-filter: blur(4px);
@@ -1669,7 +1669,7 @@ HTML = r"""<!doctype html>
       letter-spacing: 0.12em;
       text-transform: uppercase;
       font-family: "Menlo", "Consolas", monospace;
-      width: 80px;
+      width: 72px;
     }
     .playlist-item.portrait-thumb .playlist-controls-row {
       flex-direction: column;
@@ -1684,12 +1684,12 @@ HTML = r"""<!doctype html>
     }
     .playlist-repeat-wrap span { display: block; line-height: 9px; }
     .playlist-mini-btn {
-      padding: 6px 9px;
+      padding: 5px 8px;
       border-radius: 6px;
       background: var(--surface-high);
       border: 1px solid var(--line);
       color: var(--ink);
-      height: 30px;
+      height: 28px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -3343,6 +3343,50 @@ HTML = r"""<!doctype html>
       `;
     }
 
+    function playlistHoverOverlayBounds(rect) {
+      const viewportPadding = 12;
+      const maxWidth = Math.max(1, window.innerWidth - viewportPadding * 2);
+      const maxHeight = Math.max(1, window.innerHeight - viewportPadding * 2);
+      const preferredWidth = Math.round(Math.max(220, rect.width * 2.4));
+      const preferredHeight = Math.round(Math.max(180, rect.height * 2.4));
+      return {
+        width: Math.min(preferredWidth, maxWidth),
+        height: Math.min(preferredHeight, maxHeight),
+      };
+    }
+
+    function playlistHoverOverlayPosition(rect, overlayWidth, overlayHeight) {
+      const viewportPadding = 12;
+      const left = Math.max(viewportPadding, Math.min(window.innerWidth - overlayWidth - viewportPadding, rect.left));
+      const above = rect.top - overlayHeight - 10;
+      const below = rect.bottom + 10;
+      const top = above >= viewportPadding
+        ? Math.max(viewportPadding, Math.min(above, window.innerHeight - overlayHeight - viewportPadding))
+        : Math.max(viewportPadding, Math.min(below, window.innerHeight - overlayHeight - viewportPadding));
+      return { left, top };
+    }
+
+    function playlistHoverOverlayFallback(overlay, message) {
+      overlay.innerHTML = "";
+      const fallback = document.createElement("div");
+      fallback.style.width = "100%";
+      fallback.style.height = "100%";
+      fallback.style.display = "grid";
+      fallback.style.placeItems = "center";
+      fallback.style.padding = "16px";
+      fallback.style.textAlign = "center";
+      fallback.style.color = "#f0f0f2";
+      fallback.style.fontFamily = '"Menlo", "Consolas", monospace';
+      fallback.style.fontSize = "12px";
+      fallback.style.fontWeight = "700";
+      fallback.style.letterSpacing = "0.08em";
+      fallback.style.textTransform = "uppercase";
+      fallback.style.background = "linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))";
+      fallback.textContent = message || "Preview unavailable";
+      overlay.appendChild(fallback);
+      overlay.style.display = "block";
+    }
+
     function renderStudioInspector() {
       if (!state || !studioInspector) return;
       ensureSelectedRole();
@@ -3676,6 +3720,8 @@ HTML = r"""<!doctype html>
             overlay.style.overflow = "hidden";
             overlay.style.background = "rgba(8,8,10,0.96)";
             overlay.style.boxShadow = "0 18px 40px rgba(0,0,0,0.42)";
+            overlay.style.maxWidth = "calc(100vw - 24px)";
+            overlay.style.maxHeight = "calc(100vh - 24px)";
             document.body.appendChild(overlay);
             window.__kmsThumbHoverOverlay = overlay;
           }
@@ -3683,7 +3729,19 @@ HTML = r"""<!doctype html>
           overlay.innerHTML = "";
           const src = thumb.dataset.hoverSrc || "";
           const isVideo = thumb.dataset.hoverVideo === "1";
+          const rect = thumb.getBoundingClientRect();
+          const size = playlistHoverOverlayBounds(rect);
+          const position = playlistHoverOverlayPosition(rect, size.width, size.height);
+          overlay.style.width = `${size.width}px`;
+          overlay.style.height = `${size.height}px`;
+          overlay.style.left = `${position.left}px`;
+          overlay.style.top = `${position.top}px`;
           let media;
+          if (!src) {
+            playlistHoverOverlayFallback(overlay, "Preview unavailable");
+            overlay.style.display = "block";
+            return;
+          }
           if (isVideo) {
             media = document.createElement("video");
             media.src = `${src}#t=5`;
@@ -3696,16 +3754,15 @@ HTML = r"""<!doctype html>
             media.src = src;
             media.alt = thumb.dataset.hoverPath || "Preview";
           }
+          media.addEventListener("error", () => {
+            playlistHoverOverlayFallback(overlay, "Preview unavailable");
+          }, { once: true });
           media.style.width = "100%";
           media.style.height = "100%";
           media.style.display = "block";
-          media.style.objectFit = "cover";
+          media.style.objectFit = "contain";
+          media.style.background = "#000";
           overlay.appendChild(media);
-          const rect = thumb.getBoundingClientRect();
-          overlay.style.width = `${rect.width * 4}px`;
-          overlay.style.height = `${rect.height * 4}px`;
-          overlay.style.left = `${Math.max(12, Math.min(window.innerWidth - rect.width * 4 - 12, rect.left))}px`;
-          overlay.style.top = `${Math.max(12, Math.min(window.innerHeight - rect.height * 4 - 12, rect.top - rect.height * 1.5))}px`;
           overlay.style.display = "block";
         });
         thumb.addEventListener("mouseleave", () => {
