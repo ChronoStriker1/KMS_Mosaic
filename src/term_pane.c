@@ -683,7 +683,23 @@ term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const ch
 
 void term_pane_destroy(term_pane *tp) {
     if (!tp) return;
-    if (tp->child_pid>0) kill(tp->child_pid, SIGTERM);
+    if (tp->child_pid > 0) {
+        int status = 0;
+        kill(tp->child_pid, SIGTERM);
+        for (int i = 0; i < 20; i++) {
+            pid_t r = waitpid(tp->child_pid, &status, WNOHANG);
+            if (r == tp->child_pid || (r < 0 && errno == ECHILD)) {
+                tp->child_pid = -1;
+                break;
+            }
+            usleep(10000);
+        }
+        if (tp->child_pid > 0) {
+            kill(tp->child_pid, SIGKILL);
+            waitpid(tp->child_pid, &status, 0);
+            tp->child_pid = -1;
+        }
+    }
     if (tp->pty_master>=0) close(tp->pty_master);
     pane_tex_destroy(&tp->surface);
     font_destroy(&tp->font);

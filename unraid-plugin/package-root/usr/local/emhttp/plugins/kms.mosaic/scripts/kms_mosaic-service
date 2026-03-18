@@ -27,6 +27,10 @@ is_kms_running() {
   pgrep -x kms_mosaic.bin >/dev/null 2>&1
 }
 
+kms_pid_from_system() {
+  pgrep -x kms_mosaic.bin | head -n1 2>/dev/null || true
+}
+
 is_web_running() {
   local pid=""
   if [ -f "$WEB_PIDFILE" ]; then
@@ -100,9 +104,20 @@ start_kms() {
 }
 
 stop_kms() {
-  if is_kms_running; then
-    pkill -x kms_mosaic.bin || true
-    sleep 5
+  local pid=""
+  pid="$(kms_pid_from_system)"
+  if [ -n "$pid" ]; then
+    kill "$pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        break
+      fi
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+      sleep 1
+    fi
   fi
   cleanup_pidfile "$KMS_PIDFILE"
 }

@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 PLUGIN_DIR="$ROOT_DIR/unraid-plugin"
 STAGE="$(mktemp -d)"
-VERSION="2026.03.17"
+VERSION="2026.03.18"
 PLUGIN_NAME="kms.mosaic"
 
 cleanup() {

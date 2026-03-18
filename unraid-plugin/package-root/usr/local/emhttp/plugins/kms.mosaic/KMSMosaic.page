@@ -29,6 +29,51 @@ if (is_string($service_status_raw) && trim($service_status_raw) !== '') {
 }
 $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 ?>
+<!--
+AUDIT FINDINGS (Task 1: Plugin Page Embedding and Drag-Drop):
+
+1. CRITICAL: Fetch Shim Installation Order Bug
+   - Issue: Scripts execute immediately when appended (line 700) before fetch shim is installed (line 696)
+   - Effect: Initial loadState() call fails because fetch() isn't intercepted yet
+   - Root cause: kmsInstallFetchShim() called AFTER scripts.forEach() completes
+   - Fix: Move kmsInstallFetchShim() call to BEFORE script execution
+   - Impact: Blocks initial editor state loading, preventing drag-drop setup
+
+2. Drag-Drop Handler Binding
+   - Issue: Studio board cards get event listeners dynamically in renderStudioBoard()
+   - Status: Should work correctly IF renderStudioBoard() executes after DOM is ready
+   - Depends on: Event handlers binding before user interaction (drag attempted)
+   - Test: Verify that dragstart/dragend/drop handlers fire in browser DevTools
+
+3. Event Handler Scope in Extracted/Re-injected Scripts
+   - Issue: Scripts are extracted as strings, parsed, and re-executed in plugin page context
+   - Status: Module-level variables (draggedStudioRole, studioBoard, etc.) should be in scope
+   - Note: Inline scripts maintain closure context when re-executed at top level
+   - Test: Check if draggedStudioRole updates in debugger when drag starts
+
+4. DOM ID Collision Risk (Per AGENTS.md line 30)
+   - Current plugin IDs: kmsSaveConfigBtn, kmsReloadConfigBtn, kmsVisibilityMode
+   - Embedded editor IDs: saveBtn, reloadBtn, studioBoard, studioInspector, etc.
+   - Status: No collision currently, but must maintain separate naming
+   - Danger: If plugin reuses IDs like "saveBtn", embedded JS will bind wrong handlers
+
+5. Styling and CSS Scoping
+   - Issue: CSS is scoped to #kmsUiMount via kmsScopeCss() regex transformation
+   - Status: Should not affect drag-drop, only visual styling
+   - Note: Inline styles on cards should override, ensure box-shadow/borders work
+
+6. Fetch Shim Correctness
+   - Issue: Shim converts JSON POSTs to form-encoded with 'payload' field
+   - Status: actions.php expects this format (see line 186, 198 in actions.php)
+   - Test: Verify payload encoding when saveState() POST fires
+
+7. Missing Error Handling in Script Execution
+   - Issue: Scripts execute but errors won't propagate if not caught
+   - Status: No try/catch around scripts.forEach() block
+   - Impact: Hidden errors could prevent event binding silently
+   - Test: Check console for errors when editor loads
+-->
+
 <style>
   .kms-page {
     display: grid;
@@ -99,6 +144,55 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   .kms-actions.service-actions {
     align-self: end;
     justify-content: flex-start;
+  }
+  .kms-inline-field {
+    display: inline-grid;
+    gap: 4px;
+    min-width: 260px;
+  }
+  .kms-inline-field label {
+    font-size: 11px;
+    font-weight: 700;
+    color: #4a4f55;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .kms-segmented {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    border: 1px solid rgba(0,0,0,.14);
+    border-radius: 9px;
+    background: #f4f5f6;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.75);
+    overflow: hidden;
+    min-height: 38px;
+  }
+  .kms-segmented button {
+    border: 0;
+    border-right: 1px solid rgba(0,0,0,.10);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    padding: 9px 14px;
+    min-width: 84px;
+    font-size: 12px;
+    font-weight: 700;
+    color: #5b6470;
+  }
+  .kms-segmented button:last-child {
+    border-right: 0;
+  }
+  .kms-segmented button:hover {
+    transform: none;
+    box-shadow: none;
+    background: rgba(255,255,255,.58);
+    color: #27303a;
+  }
+  .kms-segmented button.kms-active {
+    background: linear-gradient(180deg, #ffffff 0%, #eef2f6 100%);
+    color: #1f2328;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 3px rgba(0,0,0,.06);
   }
   .kms-status {
     font-weight: 700;
@@ -182,6 +276,14 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
           <button type="button" onclick="kmsControl('restart')">Restart</button>
           <button type="button" onclick="kmsControl('stop')">Stop</button>
           <button type="button" onclick="kmsRefreshStatus()">Refresh</button>
+          <div class="kms-inline-field">
+            <label>Visibility</label>
+            <div class="kms-segmented" id="kmsVisibilityMode">
+              <button type="button" data-mode="neither" title="Show all mpv panes and all terminal panes.">Neither</button>
+              <button type="button" data-mode="no-video" title="Hide all mpv video panes and keep all terminal panes visible.">No Videos</button>
+              <button type="button" data-mode="no-panes" title="Hide all terminal panes and keep all mpv video panes visible.">No Terminals</button>
+            </div>
+          </div>
           <button type="button" class="orange" id="kmsSaveConfigBtn">Save Config</button>
           <button type="button" id="kmsReloadConfigBtn">Reload From Disk</button>
         </div>
@@ -195,6 +297,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
 <script>
 const kmsActionUrl = '/plugins/kms.mosaic/include/actions.php';
 const kmsInitialStatus = <?=$initial_status_json ?: '{}';?>;
+const kmsCsrfToken = typeof window.csrf_token === 'string' ? window.csrf_token : '';
 let kmsEmbeddedLoaded = false;
 let kmsEmbeddedStylesInstalled = false;
 let kmsEmbeddedLoadPromise = null;
@@ -215,17 +318,40 @@ function kmsRewriteBackendHtml(html) {
 function kmsInstallFetchShim() {
   if (window.__kmsFetchShimInstalled) return;
   const originalFetch = window.fetch.bind(window);
-  window.fetch = (input, init = undefined) => {
-    const url = typeof input === 'string' ? input : (input?.url || '');
-    if (url.includes('action=backend_webrtc_offer')) {
-      const payload = typeof init?.body === 'string' ? init.body : '';
-      const qs = new URLSearchParams({ action: 'backend_webrtc_offer', payload }).toString();
-      return originalFetch(`${kmsActionUrl}?${qs}`, {
-        method: 'GET',
-        credentials: init?.credentials,
+  window.fetch = async (input, init = undefined) => {
+    const rawUrl = typeof input === 'string' ? input : (input?.url || '');
+    if (!rawUrl.includes('/plugins/kms.mosaic/include/actions.php')) {
+      return originalFetch(input, init);
+    }
+    const url = new URL(rawUrl, window.location.origin);
+    const method = (init?.method || (typeof input !== 'string' ? input.method : '') || 'GET').toUpperCase();
+    if (method === 'POST') {
+      const form = new URLSearchParams();
+      if (kmsCsrfToken) form.set('csrf_token', kmsCsrfToken);
+      const contentType = (init?.headers && (init.headers['Content-Type'] || init.headers['content-type'])) || '';
+      if (contentType.includes('application/json') && typeof init?.body === 'string') {
+        form.set('payload', init.body);
+      } else if (typeof init?.body === 'string') {
+        const source = new URLSearchParams(init.body);
+        source.forEach((value, key) => form.append(key, value));
+      }
+      return originalFetch(url.toString(), {
+        method: 'POST',
+        credentials: init?.credentials || 'same-origin',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+        body: form.toString(),
       });
     }
-    return originalFetch(input, init);
+    if (kmsCsrfToken && !url.searchParams.has('csrf_token')) {
+      url.searchParams.set('csrf_token', kmsCsrfToken);
+    }
+    const nextInput = typeof input === 'string'
+      ? url.toString()
+      : new Request(url.toString(), input);
+    return originalFetch(nextInput, init);
   };
   window.__kmsFetchShimInstalled = true;
 }
@@ -310,6 +436,9 @@ function kmsEmbeddedOverrides() {
       background: #e9eef5 !important;
       border-color: #8ca0ba !important;
       color: #1d3048 !important;
+    }
+    #kmsUiMount .flag-mode-row {
+      display: none !important;
     }
     #kmsUiMount .stage {
       padding: 0 0 16px;
@@ -451,13 +580,17 @@ function kmsUpdateStatus(data) {
 async function kmsPost(action, extra = {}, jsonBody = false) {
   let response;
   if (jsonBody) {
-    response = await fetch(`${kmsActionUrl}?action=${encodeURIComponent(action)}`, {
+    const url = new URL(kmsActionUrl, window.location.origin);
+    url.searchParams.set('action', action);
+    if (kmsCsrfToken) url.searchParams.set('csrf_token', kmsCsrfToken);
+    response = await fetch(url.toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(extra)
     });
   } else {
-    const qs = new URLSearchParams({ action, ...extra }).toString();
+    const qs = new URLSearchParams({ action, ...extra });
+    if (kmsCsrfToken) qs.set('csrf_token', kmsCsrfToken);
     response = await fetch(`${kmsActionUrl}?${qs}`, { method: 'GET' });
   }
   const contentType = response.headers.get('content-type') || '';
@@ -473,7 +606,11 @@ async function kmsRefreshStatus() {
   try {
     const data = await kmsPost('status');
     kmsUpdateStatus(data);
-    await kmsEnsureEmbeddedLoaded();
+    try {
+      await kmsEnsureEmbeddedLoaded();
+    } catch (err) {
+      console.error('KMS Mosaic editor load failed during status refresh', err);
+    }
   } catch (err) {
     document.getElementById('kmsStatus').className = 'kms-status bad';
     document.getElementById('kmsStatus').textContent = err.message || 'Status failed';
@@ -489,7 +626,11 @@ async function kmsSavePluginSettings() {
       CONFIG_PATH: document.getElementById('kmsConfigPath').value
     });
     kmsUpdateStatus(data);
-    await kmsEnsureEmbeddedLoaded();
+    try {
+      await kmsEnsureEmbeddedLoaded();
+    } catch (err) {
+      console.error('KMS Mosaic editor load failed after applying plugin settings', err);
+    }
   } catch (err) {
     document.getElementById('kmsStatus').className = 'kms-status bad';
     document.getElementById('kmsStatus').textContent = err.message || 'Apply failed';
@@ -500,7 +641,11 @@ async function kmsControl(action) {
   try {
     const data = await kmsPost(action);
     kmsUpdateStatus(data);
-    await kmsEnsureEmbeddedLoaded();
+    try {
+      await kmsEnsureEmbeddedLoaded();
+    } catch (err) {
+      console.error(`KMS Mosaic editor load failed after ${action}`, err);
+    }
   } catch (err) {
     document.getElementById('kmsStatus').className = 'kms-status bad';
     document.getElementById('kmsStatus').textContent = err.message || `${action} failed`;
@@ -535,6 +680,34 @@ async function kmsReloadConfigState() {
   }
 }
 
+function kmsSyncVisibilityMode() {
+  const group = document.getElementById('kmsVisibilityMode');
+  if (!group || typeof window.currentVisibilityMode !== 'function') return;
+  try {
+    const mode = window.currentVisibilityMode();
+    group.querySelectorAll('button[data-mode]').forEach((button) => {
+      button.classList.toggle('kms-active', button.dataset.mode === mode);
+    });
+  } catch (err) {
+    console.error('Unable to sync KMS Mosaic visibility mode', err);
+  }
+}
+
+async function kmsSetVisibilityMode(mode) {
+  try {
+    await kmsEnsureEmbeddedLoaded();
+    if (typeof window.setVisibilityMode !== 'function') {
+      throw new Error('Embedded visibility mode control is unavailable');
+    }
+    await window.setVisibilityMode(mode);
+    kmsSyncVisibilityMode();
+    setTimeout(() => { kmsRefreshStatus().catch(() => {}); }, 1200);
+  } catch (err) {
+    document.getElementById('kmsStatus').className = 'kms-status bad';
+    document.getElementById('kmsStatus').textContent = err.message || 'Visibility update failed';
+  }
+}
+
 async function kmsEnsureEmbeddedLoaded() {
   if (kmsEmbeddedLoaded) return;
   if (kmsEmbeddedLoadPromise) return kmsEmbeddedLoadPromise;
@@ -549,10 +722,15 @@ async function kmsEnsureEmbeddedLoaded() {
       if (!htmlResponse.ok) throw new Error(html || 'Unable to load editor');
       const statePayload = await stateResponse.json();
       if (!stateResponse.ok) throw new Error(statePayload.error || 'Unable to load editor state');
-      const rewritten = kmsRewriteBackendHtml(html).replace(
-        'document.getElementById("configPath").textContent = `Config: ${configPath}`;',
-        'const configPathNode = document.getElementById("configPath"); if (configPathNode) configPathNode.textContent = `Config: ${configPath}`;'
-      );
+      const rewritten = kmsRewriteBackendHtml(html)
+        .replace(
+          'document.getElementById("configPath").textContent = `Config: ${configPath}`;',
+          'const configPathNode = document.getElementById("configPath"); if (configPathNode) configPathNode.textContent = `Config: ${configPath}`;'
+        )
+        .replace(
+          'loadState().catch(err => setStatus(err.message, true));',
+          'window.__kmsEmbeddedInitialLoadDeferred = true;'
+        );
       const doc = new DOMParser().parseFromString(rewritten, 'text/html');
       kmsInstallEmbeddedStyles(doc);
       const scripts = Array.from(doc.querySelectorAll('script')).map((script) => script.textContent || '');
@@ -569,6 +747,7 @@ async function kmsEnsureEmbeddedLoaded() {
       if (typeof window.fillForm === 'function') {
         window.fillForm(statePayload.state, statePayload.config_path, statePayload.raw_config);
       }
+      kmsSyncVisibilityMode();
       if (typeof window.scheduleLivePreview === 'function') {
         window.scheduleLivePreview();
       }
@@ -590,6 +769,9 @@ async function kmsEnsureEmbeddedLoaded() {
 $(function() {
   document.getElementById('kmsSaveConfigBtn').addEventListener('click', kmsSaveConfigState);
   document.getElementById('kmsReloadConfigBtn').addEventListener('click', kmsReloadConfigState);
+  document.querySelectorAll('#kmsVisibilityMode button[data-mode]').forEach((button) => {
+    button.addEventListener('click', () => kmsSetVisibilityMode(button.dataset.mode));
+  });
   kmsEnsureEmbeddedLoaded();
   kmsRefreshStatus();
 });

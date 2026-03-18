@@ -2,25 +2,25 @@
 <PLUGIN
   name="kms.mosaic"
   author="OpenAI / chronostriker1"
-  version="2026.03.17"
+  version="2026.03.18"
   launch="Settings/KMSMosaic"
   pluginURL="https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/unraid-plugin/kms.mosaic.plg"
   icon="desktop"
   description="Direct-rendered DRM video wall and terminal compositor with pane layout editing, mpv-backed media panes, and live preview management from Unraid.">
 
 <CHANGES>
-###2026.03.17
+###2026.03.18
 - Add native Unraid plugin packaging for KMS Mosaic.
 - Manage `kms_mosaic` and the web UI without the old userscript.
 - Host the full configuration UI directly inside the Unraid Settings page.
 </CHANGES>
 
-<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.03.17.tgz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.03.17.tgz</URL>
+<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.03.18.tgz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.03.18.tgz</URL>
 </FILE>
 
-<FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.03.17-x86_64-1.txz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.03.17-x86_64-1.txz</URL>
+<FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.03.18-x86_64-1.txz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.03.18-x86_64-1.txz</URL>
 </FILE>
 
 <FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic.cfg">
@@ -38,11 +38,11 @@ CONFIG_PATH="/boot/config/kms_mosaic.conf"
 <INLINE>
 <![CDATA[
 mkdir -p /usr/local/emhttp/plugins/kms.mosaic
-tar --no-same-owner -xzf /boot/config/plugins/kms.mosaic/kms.mosaic-2026.03.17.tgz -C /
+tar --no-same-owner -xzf /boot/config/plugins/kms.mosaic/kms.mosaic-2026.03.18.tgz -C /
 chown root:root /usr/local /usr/local/bin /usr/local/emhttp /usr/local/emhttp/plugins
 chown -R root:root /usr/local/emhttp/plugins/kms.mosaic
 chown root:root /usr/local/bin/kms_mosaic_web /usr/local/bin/kms_mosaic_web.py
-upgradepkg --install-new --reinstall /boot/config/plugins/kms.mosaic/kms_mosaic-2026.03.17-x86_64-1.txz
+upgradepkg --install-new --reinstall /boot/config/plugins/kms.mosaic/kms_mosaic-2026.03.18-x86_64-1.txz
 chmod +x /usr/local/bin/kms_mosaic_web
 chmod +x /usr/local/bin/kms_mosaic_web.py
 chmod +x /usr/local/emhttp/plugins/kms.mosaic/event/started
@@ -57,7 +57,7 @@ fi
 echo ""
 echo "-----------------------------------------------------------"
 echo " Plugin kms.mosaic is installed."
-echo " Version: 2026.03.17"
+echo " Version: 2026.03.18"
 echo "-----------------------------------------------------------"
 echo ""
 ]]>

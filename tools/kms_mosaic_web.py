@@ -1133,6 +1133,24 @@ HTML = r"""<!doctype html>
       font-size: 13px;
     }
     .check input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+    .flag-mode-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .flag-mode-buttons {
+      display: inline-flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .flag-mode-note {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.4;
+    }
     /* ─── buttons ─────────────────────────────────────── */
     .actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .actions.tight { gap: 6px; }
@@ -1608,17 +1626,25 @@ HTML = r"""<!doctype html>
 
         <div>
           <h2 class="section-title">Flags</h2>
+          <input id="flagNoVideo" type="hidden" />
+          <input id="flagNoPanes" type="hidden" />
+          <div class="flag-mode-row">
+            <div class="flag-mode-buttons" id="visibilityModeButtons">
+              <button type="button" class="secondary" id="visibilityModeNeitherBtn" title="Show both media panes and terminal panes.">Neither</button>
+              <button type="button" class="secondary" id="visibilityModeNoVideoBtn" title="Hide all video panes and run terminal panes only.">No Video</button>
+              <button type="button" class="secondary" id="visibilityModeNoPanesBtn" title="Hide all terminal panes and show only video panes.">No Panes</button>
+            </div>
+            <div class="flag-mode-note">Saves immediately. Only one of these modes can be active at a time.</div>
+          </div>
           <div class="checks">
-            <label class="check"><input id="flagNoVideo" type="checkbox" /> No Video</label>
-            <label class="check"><input id="flagNoPanes" type="checkbox" /> No Panes</label>
-            <label class="check"><input id="flagSmooth" type="checkbox" /> Smooth Preset</label>
-            <label class="check"><input id="flagLoop" type="checkbox" /> Loop File</label>
-            <label class="check"><input id="flagLoopPlaylist" type="checkbox" /> Loop Playlist</label>
-            <label class="check"><input id="flagShuffle" type="checkbox" /> Shuffle</label>
-            <label class="check"><input id="flagAtomic" type="checkbox" /> Atomic</label>
-            <label class="check"><input id="flagAtomicNonblock" type="checkbox" /> Atomic Nonblock</label>
-            <label class="check"><input id="flagGlFinish" type="checkbox" /> glFinish</label>
-            <label class="check"><input id="flagNoOsd" type="checkbox" /> No OSD</label>
+            <label class="check" title="Enable the compositor's smooth-presentation preset for gentler frame pacing defaults."><input id="flagSmooth" type="checkbox" /> Smooth Preset</label>
+            <label class="check" title="Loop the current file when a pane or queue is pointed at a single item."><input id="flagLoop" type="checkbox" /> Loop File</label>
+            <label class="check" title="Loop each pane playlist instead of stopping at the end."><input id="flagLoopPlaylist" type="checkbox" /> Loop Playlist</label>
+            <label class="check" title="Shuffle playlist order before playback advances through the queue."><input id="flagShuffle" type="checkbox" /> Shuffle</label>
+            <label class="check" title="Use DRM atomic modesetting when the GPU and connector support it."><input id="flagAtomic" type="checkbox" /> Atomic</label>
+            <label class="check" title="Request non-blocking atomic commits when atomic modesetting is enabled."><input id="flagAtomicNonblock" type="checkbox" /> Atomic Nonblock</label>
+            <label class="check" title="Force a glFinish after rendering each frame. Useful for troubleshooting timing issues, but it can hurt performance."><input id="flagGlFinish" type="checkbox" /> glFinish</label>
+            <label class="check" title="Hide the on-screen display and control overlay text."><input id="flagNoOsd" type="checkbox" /> No OSD</label>
           </div>
         </div>
 
@@ -1688,11 +1714,13 @@ HTML = r"""<!doctype html>
     const queueEditorTitleEl = document.getElementById("queueEditorTitle");
     const queueEditorNoteEl = document.getElementById("queueEditorNote");
     const addQueueItemBtn = document.getElementById("addQueueItemBtn");
+    const visibilityModeButtons = document.getElementById("visibilityModeButtons");
     const statusEl = document.getElementById("status");
     let state = null;
     let rawConfigText = "";
     let selectedRole = 0;
     let playlistTargetRole = 0;
+    let paneTargetRole = 0;
     let draggedStudioRole = null;
     let pendingNewPaneIndexes = new Set();
     let livePreviewTimer = null;
@@ -1736,6 +1764,36 @@ HTML = r"""<!doctype html>
       if (role === 2) return "Pane B";
       if (role <= 26) return `Pane ${String.fromCharCode(64 + role + 1)}`;
       return `Pane ${role}`;
+    }
+
+    function normalizeVisibilityFlags() {
+      if (!state?.flags) return;
+      if (state.flags.no_video && state.flags.no_panes) {
+        state.flags.no_video = false;
+        state.flags.no_panes = false;
+      }
+    }
+
+    function currentVisibilityMode() {
+      normalizeVisibilityFlags();
+      if (state?.flags?.no_video) return "no-video";
+      if (state?.flags?.no_panes) return "no-panes";
+      return "neither";
+    }
+
+    function renderVisibilityModeButtons() {
+      if (!visibilityModeButtons) return;
+      const mode = currentVisibilityMode();
+      [
+        ["visibilityModeNeitherBtn", "neither"],
+        ["visibilityModeNoVideoBtn", "no-video"],
+        ["visibilityModeNoPanesBtn", "no-panes"],
+      ].forEach(([id, value]) => {
+        const button = document.getElementById(id);
+        if (!button) return;
+        button.classList.toggle("primary", mode === value);
+        button.classList.toggle("secondary", mode !== value);
+      });
     }
 
     function parseMpvOptionGroups(opts) {
@@ -1886,6 +1944,17 @@ HTML = r"""<!doctype html>
       }
     }
 
+    function ensurePaneTargetRole() {
+      const roles = availablePaneTargets().map((target) => target.role);
+      if (!roles.length) {
+        paneTargetRole = 0;
+        return;
+      }
+      if (!roles.includes(paneTargetRole)) {
+        paneTargetRole = roles[0];
+      }
+    }
+
     function renderPlaylistTargets() {
       if (!playlistTargets) return;
       ensurePlaylistTargetRole();
@@ -1908,19 +1977,22 @@ HTML = r"""<!doctype html>
 
     function renderMediaTargets() {
       if (!mediaTargets) return;
-      ensurePlaylistTargetRole();
+      ensurePaneTargetRole();
       mediaTargets.innerHTML = "";
       availablePaneTargets().forEach((target) => {
         const button = document.createElement("button");
         button.type = "button";
-        button.className = `playlist-target-btn${playlistTargetRole === target.role ? " active" : ""}`;
+        button.className = `playlist-target-btn${paneTargetRole === target.role ? " active" : ""}`;
         button.textContent = target.title;
         button.addEventListener("click", () => {
-          playlistTargetRole = target.role;
-          renderPlaylistTargets();
+          paneTargetRole = target.role;
+          if (target.type === "mpv") {
+            playlistTargetRole = target.role;
+            renderPlaylistTargets();
+            renderPlaylistEditor();
+          }
           renderMediaTargets();
           renderMediaEditor();
-          renderPlaylistEditor();
         });
         mediaTargets.appendChild(button);
       });
@@ -1929,8 +2001,8 @@ HTML = r"""<!doctype html>
     function renderMediaEditor() {
       if (!state || !mediaEditor) return;
       renderMediaTargets();
-      ensurePlaylistTargetRole();
-      if (playlistTargetRole === 0) {
+      ensurePaneTargetRole();
+      if (paneTargetRole === 0) {
         const groups = parseMpvOptionGroups(state.mpv_opts || []);
         mediaEditor.innerHTML = `
           <div class="grid">
@@ -1999,7 +2071,7 @@ HTML = r"""<!doctype html>
         });
         return;
       }
-      const paneIndex = playlistTargetRole - 1;
+      const paneIndex = paneTargetRole - 1;
       const paneType = state.pane_types?.[paneIndex] || "terminal";
       if (paneType !== "mpv") {
         mediaEditor.innerHTML = `
@@ -2014,10 +2086,11 @@ HTML = r"""<!doctype html>
               <input id="mediaPaneCommand" type="text" value="${(state.pane_commands?.[paneIndex] || "").replace(/"/g, "&quot;")}" placeholder="btop --utf-force" />
             </label>
           </div>
-          <p class="muted-note">${roleTitle(playlistTargetRole)} is a terminal pane. Configure its command here or switch it to mpv for a dedicated media pane.</p>
+          <p class="muted-note">${roleTitle(paneTargetRole)} is a terminal pane. Configure its command here or switch it to mpv for a dedicated media pane.</p>
         `;
         document.getElementById("mediaPaneType").addEventListener("change", (event) => {
           state.pane_types[paneIndex] = event.target.value;
+          if (event.target.value === "mpv") playlistTargetRole = paneIndex + 1;
           renderPaneList(state);
           renderStudioBoard();
           renderStudioInspector();
@@ -2077,7 +2150,7 @@ HTML = r"""<!doctype html>
             <textarea id="mediaPaneOtherOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${groups.other.join("\n")}</textarea>
           </label>
         </div>
-        <p class="muted-note">This target controls ${roleTitle(playlistTargetRole)} with the same media field layout as ${roleTitle(0)}. The connector stays visible here for parity, but it remains a global-only field on ${roleTitle(0)}.</p>
+        <p class="muted-note">This target controls ${roleTitle(paneTargetRole)} with the same media field layout as ${roleTitle(0)}. The connector stays visible here for parity, but it remains a global-only field on ${roleTitle(0)}.</p>
       `;
       const syncPane = () => {
         state.pane_mpv_outs[paneIndex] = document.getElementById("mediaPaneMpvOut").value.trim();
@@ -3752,6 +3825,7 @@ HTML = r"""<!doctype html>
       if (fsCycleEl) state.fs_cycle_sec = readInt("fsCycleSec", 5);
       state.flags.no_video = document.getElementById("flagNoVideo").checked;
       state.flags.no_panes = document.getElementById("flagNoPanes").checked;
+      normalizeVisibilityFlags();
       state.flags.smooth = document.getElementById("flagSmooth").checked;
       state.flags.loop_file = document.getElementById("flagLoop").checked;
       state.flags.loop_playlist = document.getElementById("flagLoopPlaylist").checked;
@@ -3779,6 +3853,8 @@ HTML = r"""<!doctype html>
       if (state.pane_commands.length !== previousPaneCount) renderPaneList(state);
       renderLayoutSuggestions();
       renderMediaEditor();
+      renderVisibilityModeButtons();
+      paneTargetRole = 0;
       renderPlaylistEditor();
       renderStudioBoard();
       renderStudioInspector();
@@ -3787,6 +3863,7 @@ HTML = r"""<!doctype html>
 
     function fillForm(nextState, configPath, nextRawConfig) {
       state = nextState;
+      normalizeVisibilityFlags();
       rawConfigText = nextRawConfig;
       pendingNewPaneIndexes = new Set();
       playlistTargetRole = 0;
@@ -3828,6 +3905,7 @@ HTML = r"""<!doctype html>
       document.getElementById("rawConfig").value = rawConfigText;
       renderLayoutSuggestions();
       renderMediaEditor();
+      renderVisibilityModeButtons();
       renderPaneList(state);
       renderPlaylistEditor();
       renderStudioBoard();
@@ -3908,6 +3986,18 @@ HTML = r"""<!doctype html>
       setStatus(`Saved raw config to ${payload.config_path}.`, false, true);
     }
 
+    async function setVisibilityMode(mode) {
+      if (!state?.flags) return;
+      state.flags.no_video = mode === "no-video";
+      state.flags.no_panes = mode === "no-panes";
+      const noVideoField = document.getElementById("flagNoVideo");
+      const noPanesField = document.getElementById("flagNoPanes");
+      if (noVideoField) noVideoField.checked = !!state.flags.no_video;
+      if (noPanesField) noPanesField.checked = !!state.flags.no_panes;
+      renderVisibilityModeButtons();
+      await saveState();
+    }
+
     function setStatus(message, isError, isSuccess) {
       statusEl.textContent = message;
       statusEl.className = `status${isError ? " error" : isSuccess ? " success" : ""}`;
@@ -3957,6 +4047,27 @@ HTML = r"""<!doctype html>
     document.getElementById("saveRawBtn").addEventListener("click", async () => {
       try {
         await saveRawConfig();
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    });
+    document.getElementById("visibilityModeNeitherBtn").addEventListener("click", async () => {
+      try {
+        await setVisibilityMode("neither");
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    });
+    document.getElementById("visibilityModeNoVideoBtn").addEventListener("click", async () => {
+      try {
+        await setVisibilityMode("no-video");
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    });
+    document.getElementById("visibilityModeNoPanesBtn").addEventListener("click", async () => {
+      try {
+        await setVisibilityMode("no-panes");
       } catch (err) {
         setStatus(err.message, true);
       }
