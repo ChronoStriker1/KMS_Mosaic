@@ -1410,6 +1410,7 @@ function kmsSetQueuePanelState(detail = {}) {
   const placeholder = document.getElementById('kmsQueuePlaceholder');
   const summary = document.getElementById('kmsQueueSummary');
   if (!shell || !panel || !placeholder) return;
+  window.__kmsLastQueuePanelState = detail;
   const paneType = detail.paneType || 'none';
   const visible = !!detail.visible && paneType === 'mpv';
   const roleLabel = detail.roleLabel || '';
@@ -1430,32 +1431,12 @@ function kmsSetQueuePanelState(detail = {}) {
   }
 }
 
-function kmsSyncQueuePanelFromBoard() {
-  const selectedCard = document.querySelector('#kmsStudioPlaceholder .studio-card.selected');
-  const selectedTitle = selectedCard?.querySelector('.studio-card-title')?.textContent?.trim() || '';
-  const paneType = selectedCard?.classList.contains('video')
-    ? 'mpv'
-    : (selectedCard ? 'terminal' : 'none');
-  kmsSetQueuePanelState({
-    visible: paneType === 'mpv',
-    paneType,
-    roleLabel: selectedTitle,
-    queueTitle: paneType === 'mpv' && selectedTitle ? `${selectedTitle} Queue` : '',
-  });
-}
-
 function kmsInstallWorkspaceHooks() {
   if (window.__kmsWorkspaceHooksInstalled) return;
-  const originalRenderStudioBoard = window.renderStudioBoard;
-  if (typeof originalRenderStudioBoard === 'function' && !window.__kmsRenderStudioBoardWrapped) {
-    window.renderStudioBoard = function(...args) {
-      const result = originalRenderStudioBoard.apply(this, args);
-      kmsSyncQueuePanelFromBoard();
-      return result;
-    };
-    window.__kmsRenderStudioBoardWrapped = true;
-  }
-  kmsSyncQueuePanelFromBoard();
+  window.addEventListener('kms:selected-pane-queue-state', (event) => {
+    kmsSetQueuePanelState(event?.detail || {});
+  });
+  kmsSetQueuePanelState(window.__kmsLastQueuePanelState || {});
   window.__kmsWorkspaceHooksInstalled = true;
 }
 
@@ -1493,8 +1474,7 @@ function kmsRelocateWorkspaceElements() {
 
   const queueDest = document.getElementById('kmsQueuePlaceholder');
   if (queueDest && queueDest.dataset.kmsQueueRelocated !== 'true') {
-    const queueTitle = document.getElementById('queueEditorTitle');
-    const queueRoot = queueTitle?.closest('.panel-wide');
+    const queueRoot = document.getElementById('queueEditorShell');
     queueDest.innerHTML = '';
     if (queueRoot) {
       queueRoot.classList.add('queue-structure');
@@ -1559,7 +1539,7 @@ async function kmsEnsureEmbeddedLoaded() {
 
       // Move live DOM elements (with bound event handlers) to dedicated panels
       kmsRelocateWorkspaceElements();
-      kmsSyncQueuePanelFromBoard();
+      kmsSetQueuePanelState(window.__kmsLastQueuePanelState || {});
 
       kmsEmbeddedLoaded = true;
     } catch (err) {
