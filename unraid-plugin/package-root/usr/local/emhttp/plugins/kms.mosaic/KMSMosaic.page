@@ -74,10 +74,22 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   @media (max-width: 1200px) {
     .kms-live-studio {
       flex-direction: column !important;
+      gap: 2% !important;
     }
     .kms-preview-frame {
       border: none !important;
       margin: 0 !important;
+    }
+  }
+  @media (max-width: 768px) {
+    .kms-live-studio {
+      flex-direction: column !important;
+      min-height: 90vh !important;
+      gap: 2% !important;
+    }
+    .kms-preview-frame,
+    .kms-studio-frame {
+      height: 40vh !important;
     }
   }
   .kms-panel {
