@@ -10,10 +10,10 @@ KMS Mosaic experiences random frame drops during video playback. Interestingly, 
 
 ## Success Criteria
 
-1. Confirm whether VA-API hardware decoding is actually being used
-2. Compare frame drop frequency with explicit `hwdec=vaapi` vs. current `auto-copy-safe`
-3. Identify root cause (hwdec fallback vs. rendering/sync issue)
-4. Provide actionable fix (hwdec config update or render path fix)
+1. Confirm whether VA-API hardware decoding is actually being used (decoder messages in mpv log)
+2. Compare frame drop frequency with explicit `hwdec=vaapi` vs. current `auto-copy-safe` (baseline comparison over 5+ minute playback)
+3. Identify root cause (hwdec fallback vs. rendering/sync issue including FBO reallocation stalls, GPU state corruption, or pane geometry mismatches)
+4. Provide actionable fix (hwdec config update or render path optimization, with measurements to justify the change)
 
 ## Approach
 
@@ -31,6 +31,7 @@ KMS Mosaic experiences random frame drops during video playback. Interestingly, 
    - Check config file at `/boot/config/kms_mosaic.conf` for current hwdec and mpv-out settings
    - Look for any existing mpv logs from previous runs
    - Verify the running kms_mosaic process and its effective hwdec setting
+   - Note: `--mpv-out` (global mpv log) is separate from `KMS_MPV_DEBUG=1` environment variable (compositor debug)
 
 **Deliverable:** Understanding of logging infrastructure and baseline hwdec status
 
@@ -41,7 +42,7 @@ KMS Mosaic experiences random frame drops during video playback. Interestingly, 
 **Steps:**
 1. **Enable VA-API explicitly** - Update Unraid config to force VA-API:
    - Set `hwdec=vaapi` in `/boot/config/kms_mosaic.conf` (or via `--mpv-opt hwdec=vaapi`)
-   - Enable mpv logging: `--mpv-out /tmp/mpv.log`
+   - Enable mpv logging: `--mpv-out /tmp/mpv.log` (global) and `--pane-mpv-out N /tmp/mpv-pane-N.log` for each media pane to verify per-pane decode
    - Restart kms_mosaic
 
 2. **Verify decoder activation** - Check mpv logs for VA-API initialization:
@@ -65,7 +66,7 @@ KMS Mosaic experiences random frame drops during video playback. Interestingly, 
 
 | Scenario | Finding | Next Action |
 |----------|---------|-------------|
-| VA-API works + drops still occur | Render/sync issue | Inspect `src/frame.c` for FBO reallocation and swap reporting issues |
+| VA-API works + drops still occur | Render/sync issue | Inspect `src/frame.c` for FBO reallocation stalls (line 199), GPU state corruption under multi-pane load; measure GPU stall time via `glFinish()` instrumentation and FBO reallocation frequency |
 | VA-API works + drops decrease significantly | hwdec was limiting factor | Update default hwdec to `vaapi`, document in code |
 | VA-API fails to initialize | Fallback chain issue | Test fallback options (`vaapi-copy`, driver support), investigate why VAAPI isn't available |
 | VA-API initialization indeterminate | Logging insufficient | Enable `KMS_MPV_DEBUG=1` for more verbose output |
