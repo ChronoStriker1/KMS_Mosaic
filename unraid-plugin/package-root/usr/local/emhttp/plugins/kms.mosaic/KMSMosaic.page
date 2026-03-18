@@ -703,18 +703,25 @@ function kmsEmbeddedOverrides() {
     }
     #kmsStudioPlaceholder .studio-grid {
       display: flex !important;
-      flex-direction: column-reverse;
+      flex-direction: column;
       gap: 0 !important;
       height: 100%;
+    }
+    #kmsStudioPlaceholder .studio-board {
+      order: 1;
     }
     #kmsStudioPlaceholder .actions {
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
-      padding-top: 12px;
+      padding: 12px 0;
       border-top: 1px solid rgba(0,0,0,.08);
-      margin-top: 12px;
-      margin-bottom: 0;
+      border-bottom: 1px solid rgba(0,0,0,.08);
+      margin: 0;
+      order: 2;
+    }
+    #kmsStudioPlaceholder .studio-inspector {
+      order: 3;
     }
     #kmsStudioPlaceholder .actions button {
       color: #222;
