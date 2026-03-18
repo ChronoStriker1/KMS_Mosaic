@@ -826,7 +826,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
           <div class="kms-visibility-options" id="kmsVisibilityButtons">
             <button type="button" class="secondary" id="kmsVisibilityNeitherBtn" onclick="kmsSetVisibilityMode('neither')">Neither</button>
             <button type="button" class="secondary" id="kmsVisibilityNoVideoBtn" onclick="kmsSetVisibilityMode('no-video')">No Video</button>
-            <button type="button" class="secondary" id="kmsVisibilityNoPanesBtn" onclick="kmsSetVisibilityMode('no-panes')">No Terminal</button>
+            <button type="button" class="secondary" id="kmsVisibilityNoPanesBtn" onclick="kmsSetVisibilityMode('no-terminal')">No Terminal</button>
           </div>
           <div class="kms-visibility-note">Saves immediately. Only one of these modes can be active at a time.</div>
         </div>
@@ -1460,7 +1460,7 @@ function kmsSyncVisibilityMode() {
     [
       ['kmsVisibilityNeitherBtn', 'neither'],
       ['kmsVisibilityNoVideoBtn', 'no-video'],
-      ['kmsVisibilityNoPanesBtn', 'no-panes'],
+      ['kmsVisibilityNoPanesBtn', 'no-terminal'],
     ].forEach(([id, value]) => {
       const button = document.getElementById(id);
       if (!button) return;

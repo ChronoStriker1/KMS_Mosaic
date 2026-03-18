@@ -93,6 +93,7 @@ def empty_state() -> dict[str, Any]:
         "layout": "stack",
         "roles": "",
         "fs_cycle_sec": 5,
+        "visibility_mode": "neither",
         "pane_types": ["terminal", "terminal"],
         "pane_commands": DEFAULT_PANE_COMMANDS.copy(),
         "pane_playlists": ["", ""],
@@ -125,6 +126,14 @@ def empty_state() -> dict[str, Any]:
         "mpv_opts": [],
         "extra_lines": "",
     }
+
+
+def visibility_mode_from_flags(flags: dict[str, Any]) -> str:
+    if bool(flags.get("no_video")):
+        return "no-video"
+    if bool(flags.get("no_panes")):
+        return "no-terminal"
+    return "neither"
 
 
 def ensure_panes(state: dict[str, Any]) -> None:
@@ -382,6 +391,7 @@ def parse_config_text(text: str) -> dict[str, Any]:
 
     ensure_panes(state)
     state["extra_lines"] = "\n".join(extra_lines).strip()
+    state["visibility_mode"] = visibility_mode_from_flags(state.get("flags", {}))
     return state
 
 
@@ -1947,19 +1957,187 @@ HTML = r"""<!doctype html>
       return `Pane ${role}`;
     }
 
+    function visibilityModeForState(nextState = state) {
+      if (!nextState) return "neither";
+      if (typeof nextState.visibility_mode === "string" && nextState.visibility_mode) {
+        if (nextState.visibility_mode === "no-panes") return "no-terminal";
+        return nextState.visibility_mode;
+      }
+      if (nextState?.flags?.no_video) return "no-video";
+      if (nextState?.flags?.no_panes) return "no-terminal";
+      return "neither";
+    }
+
     function normalizeVisibilityFlags() {
       if (!state?.flags) return;
-      if (state.flags.no_video && state.flags.no_panes) {
-        state.flags.no_video = false;
-        state.flags.no_panes = false;
-      }
+      const mode = visibilityModeForState(state);
+      state.visibility_mode = mode;
+      state.flags.no_video = mode === "no-video";
+      state.flags.no_panes = mode === "no-terminal";
     }
 
     function currentVisibilityMode() {
       normalizeVisibilityFlags();
-      if (state?.flags?.no_video) return "no-video";
-      if (state?.flags?.no_panes) return "no-panes";
-      return "neither";
+      return visibilityModeForState(state);
+    }
+
+    function visibilityModeHidesRole(nextState, role) {
+      const mode = visibilityModeForState(nextState);
+      const paneType = role === 0 ? "mpv" : (nextState?.pane_types?.[role - 1] || "terminal");
+      if (mode === "no-video") return paneType === "mpv";
+      if (mode === "no-terminal") return paneType === "terminal";
+      return false;
+    }
+
+    function visibleStudioRoles(nextState = state) {
+      const paneCount = Math.max(1, Number(nextState?.pane_count || 2));
+      const roleCount = 1 + paneCount;
+      const roles = [];
+      for (let role = 0; role < roleCount; role += 1) {
+        if (!visibilityModeHidesRole(nextState, role)) roles.push(role);
+      }
+      return roles;
+    }
+
+    function buildStudioSlots(nextState, count) {
+      const screen = { x: 0, y: 0, w: 100, h: 100 };
+      if (count <= 1) {
+        return [screen];
+      }
+      if (count === 2) {
+        return layoutNames.indexOf(nextState.layout || "stack") === 1
+          ? splitHorizontal(screen, 2)
+          : splitVertical(screen, 2);
+      }
+      const paneCount = Math.max(1, Number(count > 0 ? count - 1 : 1));
+      const roleCount = Math.max(1, Number(count || 1));
+      const mode = layoutNames.indexOf(nextState.layout || "stack");
+      const splitPct = Math.max(10, Math.min(90, Number(nextState.pane_split || 50)));
+      const colPct = Math.max(20, Math.min(80, 100 - Number(nextState.right_frac || 33)));
+      let slots = Array.from({ length: roleCount }, () => ({ x: 0, y: 0, w: 0, h: 0 }));
+
+      if (paneCount > 2) {
+        if (mode === 0) slots = splitVertical(screen, roleCount);
+        else if (mode === 1) slots = splitHorizontal(screen, roleCount);
+        else if (mode === 2) {
+          const wleft = Math.floor(screen.w * colPct / 100);
+          slots[0] = { x: wleft, y: 0, w: screen.w - wleft, h: screen.h };
+          const paneRects = tileRects({ x: 0, y: 0, w: wleft, h: screen.h }, paneCount);
+          paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
+        } else if (mode === 3) {
+          const wleft = Math.floor(screen.w * colPct / 100);
+          slots[0] = { x: 0, y: 0, w: wleft, h: screen.h };
+          const paneRects = tileRects({ x: wleft, y: 0, w: screen.w - wleft, h: screen.h }, paneCount);
+          paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
+        } else if (mode === 4) {
+          const htop = Math.floor(screen.h * splitPct / 100);
+          const paneRects = tileRects({ x: 0, y: screen.h - htop, w: screen.w, h: htop }, paneCount);
+          slots[0] = { x: 0, y: 0, w: screen.w, h: screen.h - htop };
+          paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
+        } else if (mode === 5) {
+          const htop = Math.floor(screen.h * splitPct / 100);
+          slots[0] = { x: 0, y: screen.h - htop, w: screen.w, h: htop };
+          const paneRects = tileRects({ x: 0, y: 0, w: screen.w, h: screen.h - htop }, paneCount);
+          paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
+        } else {
+          slots[0] = screen;
+          const paneRects = tileRects({ x: 10, y: 10, w: 80, h: 80 }, paneCount);
+          paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
+        }
+      } else {
+        const s = [];
+        if (mode === 6) {
+          s.push(screen);
+          const horizontal = Number(nextState.rotation || 0) === 0 || Number(nextState.rotation || 0) === 180;
+          if (horizontal) {
+            const wleft = Math.floor(screen.w * splitPct / 100);
+            s.push({ x: 0, y: 0, w: wleft, h: screen.h });
+            s.push({ x: wleft, y: 0, w: screen.w - wleft, h: screen.h });
+          } else {
+            const htop = Math.floor(screen.h * splitPct / 100);
+            s.push({ x: 0, y: screen.h - htop, w: screen.w, h: htop });
+            s.push({ x: 0, y: 0, w: screen.w, h: screen.h - htop });
+          }
+        } else if (mode === 0) {
+          const h = Math.floor(screen.h / 3);
+          const h2 = h;
+          s.push({ x: 0, y: screen.h - h, w: screen.w, h });
+          s.push({ x: 0, y: screen.h - h - h2, w: screen.w, h: h2 });
+          s.push({ x: 0, y: 0, w: screen.w, h: screen.h - h - h2 });
+        } else if (mode === 1) {
+          const w = Math.floor(screen.w / 3);
+          const w2 = w;
+          s.push({ x: 0, y: 0, w, h: screen.h });
+          s.push({ x: w, y: 0, w: w2, h: screen.h });
+          s.push({ x: w + w2, y: 0, w: screen.w - w - w2, h: screen.h });
+        } else if (mode === 2) {
+          const wleft = Math.floor(screen.w * colPct / 100);
+          const wright = screen.w - wleft;
+          const htop = Math.floor(screen.h * splitPct / 100);
+          const hbot = screen.h - htop;
+          s.push({ x: 0, y: screen.h - htop, w: wleft, h: htop });
+          s.push({ x: 0, y: 0, w: wleft, h: hbot });
+          s.push({ x: wleft, y: 0, w: wright, h: screen.h });
+        } else if (mode === 3) {
+          const wleft = Math.floor(screen.w * colPct / 100);
+          const wright = screen.w - wleft;
+          const htop = Math.floor(screen.h * splitPct / 100);
+          const hbot = screen.h - htop;
+          s.push({ x: 0, y: 0, w: wleft, h: screen.h });
+          s.push({ x: wleft, y: screen.h - htop, w: wright, h: htop });
+          s.push({ x: wleft, y: 0, w: wright, h: hbot });
+        } else if (mode === 4) {
+          const wleft = Math.floor(screen.w * colPct / 100);
+          const wright = screen.w - wleft;
+          const htop = Math.floor(screen.h * splitPct / 100);
+          const hbot = screen.h - htop;
+          s.push({ x: 0, y: screen.h - htop, w: wleft, h: htop });
+          s.push({ x: wleft, y: screen.h - htop, w: wright, h: htop });
+          s.push({ x: 0, y: 0, w: screen.w, h: hbot });
+        } else {
+          const wleft = Math.floor(screen.w * colPct / 100);
+          const wright = screen.w - wleft;
+          const htop = Math.floor(screen.h * splitPct / 100);
+          const hbot = screen.h - htop;
+          s.push({ x: 0, y: screen.h - htop, w: screen.w, h: htop });
+          s.push({ x: 0, y: 0, w: wleft, h: hbot });
+          s.push({ x: wleft, y: 0, w: wright, h: hbot });
+        }
+        slots = s;
+      }
+
+      return slots;
+    }
+
+    function visibilityLayoutForState(nextState = state) {
+      const roleCount = 1 + Math.max(1, Number(nextState?.pane_count || 2));
+      const allRoles = Array.from({ length: roleCount }, (_, role) => role);
+      const visibleRoles = allRoles.filter((role) => !visibilityModeHidesRole(nextState, role));
+      const rects = Array.from({ length: roleCount }, () => ({ x: 0, y: 0, w: 0, h: 0 }));
+      const mode = visibilityModeForState(nextState);
+      const splitTree = nextState === state ? normalizeSplitTreeState() : parseSplitTreeSpec(nextState.split_tree || "");
+
+      if (visibleRoles.length === roleCount && splitTree) {
+        splitTreeApplyRects(splitTree, { x: 0, y: 0, w: 100, h: 100 }, rects);
+        return { mode, visibleRoles, hiddenRoles: [], rects };
+      }
+
+      const orderedRoles = splitTree ? (() => {
+        const roles = [];
+        splitTreeCollectRoles(splitTree, roles);
+        return roles;
+      })() : allRoles;
+      const visibleOrderedRoles = orderedRoles.filter((role) => visibleRoles.includes(role));
+      const slots = buildStudioSlots(nextState, visibleOrderedRoles.length || 1);
+      visibleOrderedRoles.forEach((role, index) => {
+        rects[role] = slots[index] || { x: 0, y: 0, w: 100, h: 100 };
+      });
+      return {
+        mode,
+        visibleRoles: visibleOrderedRoles,
+        hiddenRoles: allRoles.filter((role) => !visibleRoles.includes(role)),
+        rects,
+      };
     }
 
     function parseMpvOptionGroups(opts) {
@@ -2904,112 +3082,7 @@ HTML = r"""<!doctype html>
     }
 
     function computeStudioRects(nextState) {
-      const screen = { x: 0, y: 0, w: 100, h: 100 };
-      const paneCount = Math.max(1, Number(nextState.pane_count || 2));
-      const roleCount = 1 + paneCount;
-      const splitTree = nextState === state ? normalizeSplitTreeState() : parseSplitTreeSpec(nextState.split_tree || "");
-      if (splitTree) {
-        const rects = Array.from({ length: roleCount }, () => ({ x: 0, y: 0, w: 0, h: 0 }));
-        splitTreeApplyRects(splitTree, screen, rects);
-        return rects;
-      }
-      const mode = layoutNames.indexOf(nextState.layout || "stack");
-      const splitPct = Math.max(10, Math.min(90, Number(nextState.pane_split || 50)));
-      const colPct = Math.max(20, Math.min(80, 100 - Number(nextState.right_frac || 33)));
-      const perm = parseRolesString(nextState);
-      let slots = Array.from({ length: roleCount }, () => ({ x: 0, y: 0, w: 0, h: 0 }));
-
-      if (paneCount > 2) {
-        if (mode === 0) slots = splitVertical(screen, roleCount);
-        else if (mode === 1) slots = splitHorizontal(screen, roleCount);
-        else if (mode === 2) {
-          const wleft = Math.floor(screen.w * colPct / 100);
-          slots[0] = { x: wleft, y: 0, w: screen.w - wleft, h: screen.h };
-          const paneRects = tileRects({ x: 0, y: 0, w: wleft, h: screen.h }, paneCount);
-          paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
-        } else if (mode === 3) {
-          const wleft = Math.floor(screen.w * colPct / 100);
-          slots[0] = { x: 0, y: 0, w: wleft, h: screen.h };
-          const paneRects = tileRects({ x: wleft, y: 0, w: screen.w - wleft, h: screen.h }, paneCount);
-          paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
-        } else if (mode === 4) {
-          const htop = Math.floor(screen.h * splitPct / 100);
-          const paneRects = tileRects({ x: 0, y: screen.h - htop, w: screen.w, h: htop }, paneCount);
-          slots[0] = { x: 0, y: 0, w: screen.w, h: screen.h - htop };
-          paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
-        } else if (mode === 5) {
-          const htop = Math.floor(screen.h * splitPct / 100);
-          slots[0] = { x: 0, y: screen.h - htop, w: screen.w, h: htop };
-          const paneRects = tileRects({ x: 0, y: 0, w: screen.w, h: screen.h - htop }, paneCount);
-          paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
-        } else {
-          slots[0] = screen;
-          const paneRects = tileRects({ x: 10, y: 10, w: 80, h: 80 }, paneCount);
-          paneRects.forEach((rect, index) => { slots[index + 1] = rect; });
-        }
-      } else {
-        const s = [];
-        if (mode === 6) {
-          s.push(screen);
-          const horizontal = Number(nextState.rotation || 0) === 0 || Number(nextState.rotation || 0) === 180;
-          if (horizontal) {
-            const wleft = Math.floor(screen.w * splitPct / 100);
-            s.push({ x: 0, y: 0, w: wleft, h: screen.h });
-            s.push({ x: wleft, y: 0, w: screen.w - wleft, h: screen.h });
-          } else {
-            const htop = Math.floor(screen.h * splitPct / 100);
-            s.push({ x: 0, y: screen.h - htop, w: screen.w, h: htop });
-            s.push({ x: 0, y: 0, w: screen.w, h: screen.h - htop });
-          }
-        } else if (mode === 0) {
-          const h = Math.floor(screen.h / 3);
-          const h2 = h;
-          s.push({ x: 0, y: screen.h - h, w: screen.w, h });
-          s.push({ x: 0, y: screen.h - h - h2, w: screen.w, h: h2 });
-          s.push({ x: 0, y: 0, w: screen.w, h: screen.h - h - h2 });
-        } else if (mode === 1) {
-          const w = Math.floor(screen.w / 3);
-          const w2 = w;
-          s.push({ x: 0, y: 0, w, h: screen.h });
-          s.push({ x: w, y: 0, w: w2, h: screen.h });
-          s.push({ x: w + w2, y: 0, w: screen.w - w - w2, h: screen.h });
-        } else if (mode === 2) {
-          const wleft = Math.floor(screen.w * colPct / 100);
-          const wright = screen.w - wleft;
-          const htop = Math.floor(screen.h * splitPct / 100);
-          const hbot = screen.h - htop;
-          s.push({ x: 0, y: screen.h - htop, w: wleft, h: htop });
-          s.push({ x: 0, y: 0, w: wleft, h: hbot });
-          s.push({ x: wleft, y: 0, w: wright, h: screen.h });
-        } else if (mode === 3) {
-          const wleft = Math.floor(screen.w * colPct / 100);
-          const wright = screen.w - wleft;
-          const htop = Math.floor(screen.h * splitPct / 100);
-          const hbot = screen.h - htop;
-          s.push({ x: 0, y: 0, w: wleft, h: screen.h });
-          s.push({ x: wleft, y: screen.h - htop, w: wright, h: htop });
-          s.push({ x: wleft, y: 0, w: wright, h: hbot });
-        } else if (mode === 4) {
-          const wleft = Math.floor(screen.w * colPct / 100);
-          const wright = screen.w - wleft;
-          const htop = Math.floor(screen.h * splitPct / 100);
-          const hbot = screen.h - htop;
-          s.push({ x: 0, y: screen.h - htop, w: wleft, h: htop });
-          s.push({ x: wleft, y: screen.h - htop, w: wright, h: htop });
-          s.push({ x: 0, y: 0, w: screen.w, h: hbot });
-        } else {
-          const wleft = Math.floor(screen.w * colPct / 100);
-          const wright = screen.w - wleft;
-          const htop = Math.floor(screen.h * splitPct / 100);
-          const hbot = screen.h - htop;
-          s.push({ x: 0, y: screen.h - htop, w: screen.w, h: htop });
-          s.push({ x: 0, y: 0, w: wleft, h: hbot });
-          s.push({ x: wleft, y: 0, w: wright, h: hbot });
-        }
-        slots = s;
-      }
-
-      return Array.from({ length: roleCount }, (_, role) => slots[perm[role]] || screen);
+      return visibilityLayoutForState(nextState).rects;
     }
 
     function transformRectByDegrees(rect, total) {
@@ -3167,10 +3240,13 @@ HTML = r"""<!doctype html>
       if (!state) return;
       ensureSelectedRole();
       applyStudioGeometry();
-      const rects = computeStudioRects(state);
+      const layout = visibilityLayoutForState(state);
+      const rects = layout.rects;
       studioBoard.classList.toggle("resizing", !!studioResizeDrag);
       studioBoard.innerHTML = "";
-      rects.forEach((rect, role) => {
+      layout.visibleRoles.forEach((role) => {
+        const rect = rects[role];
+        if (!rect || rect.w <= 0 || rect.h <= 0) return;
         const displayRect = transformStudioPaneRect(rect);
         const resizeCtx = splitTreeResizeContext(state, role);
         const widthValue = effectiveStudioSizeValue(rect.w);
@@ -4291,6 +4367,9 @@ HTML = r"""<!doctype html>
       if (fsCycleEl) state.fs_cycle_sec = readInt("fsCycleSec", 5);
       state.flags.no_video = document.getElementById("flagNoVideo").checked;
       state.flags.no_panes = document.getElementById("flagNoPanes").checked;
+      state.visibility_mode = document.getElementById("flagNoVideo").checked
+        ? "no-video"
+        : (document.getElementById("flagNoPanes").checked ? "no-terminal" : "neither");
       normalizeVisibilityFlags();
       state.flags.smooth = document.getElementById("flagSmooth").checked;
       state.flags.loop_file = document.getElementById("flagLoop").checked;
@@ -4325,6 +4404,7 @@ HTML = r"""<!doctype html>
     function fillForm(nextState, configPath, nextRawConfig) {
       const previousSelection = captureSelectedPaneSnapshot(state);
       state = nextState;
+      state.visibility_mode = visibilityModeForState(state);
       normalizeVisibilityFlags();
       rawConfigText = nextRawConfig;
       pendingNewPaneIndexes = new Set();
@@ -4448,13 +4528,42 @@ HTML = r"""<!doctype html>
 
     async function setVisibilityMode(mode) {
       if (!state?.flags) return;
-      state.flags.no_video = mode === "no-video";
-      state.flags.no_panes = mode === "no-panes";
+      const nextMode = mode === "no-video"
+        ? "no-video"
+        : (mode === "no-terminal" || mode === "no-panes")
+          ? "no-terminal"
+          : "neither";
+      const previousMode = visibilityModeForState(state);
+      const previousFlags = {
+        no_video: !!state.flags.no_video,
+        no_panes: !!state.flags.no_panes,
+      };
+      state.visibility_mode = nextMode;
+      state.flags.no_video = nextMode === "no-video";
+      state.flags.no_panes = nextMode === "no-terminal";
       const noVideoField = document.getElementById("flagNoVideo");
       const noPanesField = document.getElementById("flagNoPanes");
-      if (noVideoField) noVideoField.checked = !!state.flags.no_video;
-      if (noPanesField) noPanesField.checked = !!state.flags.no_panes;
-      await saveState();
+      if (typeof noVideoField !== "undefined" && noVideoField) noVideoField.checked = !!state.flags.no_video;
+      if (typeof noPanesField !== "undefined" && noPanesField) noPanesField.checked = !!state.flags.no_panes;
+      try {
+        await saveState();
+      } catch (err) {
+        state.visibility_mode = previousMode;
+        state.flags.no_video = previousFlags.no_video;
+        state.flags.no_panes = previousFlags.no_panes;
+        if (noVideoField) noVideoField.checked = !!state.flags.no_video;
+        if (noPanesField) noPanesField.checked = !!state.flags.no_panes;
+        renderPlaylistEditor();
+        renderStudioBoard();
+        renderStudioInspector();
+        applyPreviewGeometry();
+        try {
+          await loadState();
+        } catch (_) {
+          // Keep the rolled-back local state if the reload path is unavailable.
+        }
+        throw err;
+      }
     }
 
     function setStatus(message, isError, isSuccess) {

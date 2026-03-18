@@ -261,6 +261,26 @@
         <div id="test-3-4" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-3-4-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
+        <div class="test-name">Visibility changes apply immediately before the save cycle completes</div>
+        <div id="test-3-5" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-3-5-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
+        <div class="test-name">No Video hides video panes only and reflows the remaining visible panes</div>
+        <div id="test-3-6" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-3-6-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
+        <div class="test-name">No Terminal hides terminal panes only and reflows the remaining visible panes</div>
+        <div id="test-3-7" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-3-7-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
+        <div class="test-name">Visibility failures restore board and preview state instead of drifting out of sync</div>
+        <div id="test-3-8" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-3-8-result" style="display: none;" class="test-result"></div>
     </div>
 
     <!-- Test 4: Responsive Layout -->
@@ -647,6 +667,124 @@
         setTestResult('test-3-4', selectionOk ? 'pass' : 'fail',
           selectionOk ? 'Pane click left the preview layout, preview video node, and stream object intact while updating Selected Pane' : 'Pane click replaced preview state or did not update selected-pane state');
       }
+
+      // Test 3.5: Visibility changes apply immediately before the save cycle completes
+      const visibilityStateResponse = await fetch('/api/state');
+      const visibilityStatePayload = await visibilityStateResponse.json();
+      const originalMode = typeof window.currentVisibilityMode === 'function'
+        ? window.currentVisibilityMode()
+        : 'neither';
+      const visibilityState = JSON.parse(JSON.stringify(visibilityStatePayload.state || {}));
+      visibilityState.flags = visibilityState.flags || {};
+      const buildStateResponse = (mode) => {
+        const nextState = JSON.parse(JSON.stringify(visibilityState));
+        nextState.flags = nextState.flags || {};
+        nextState.flags.no_video = mode === 'no-video';
+        nextState.flags.no_panes = mode === 'no-terminal';
+        nextState.visibility_mode = mode;
+        return new Response(JSON.stringify({
+          ok: true,
+          config_path: visibilityStatePayload.config_path,
+          raw_config: visibilityStatePayload.raw_config,
+          state: nextState,
+        }), { headers: { 'Content-Type': 'application/json' } });
+      };
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : (input?.url || '');
+        if (url.includes('/api/config')) {
+          return buildStateResponse('no-terminal');
+        }
+        if (url.includes('/api/state')) {
+          return buildStateResponse(originalMode);
+        }
+        return originalFetch(input, init);
+      };
+      let immediateModeOk = false;
+      try {
+        const pendingVisibility = window.setVisibilityMode('no-terminal');
+        immediateModeOk = typeof window.currentVisibilityMode === 'function' && window.currentVisibilityMode() === 'no-terminal';
+        await pendingVisibility;
+        await window.setVisibilityMode(originalMode);
+      } finally {
+        window.fetch = originalFetch;
+      }
+      setTestResult('test-3-5', immediateModeOk ? 'pass' : 'fail',
+        immediateModeOk ? 'Visibility mode flips immediately before the save round-trip completes' : 'Visibility mode did not update immediately');
+
+      // Test 3.6: No Video hides video panes only and reflows the remaining visible panes
+      const visibilityProbeState = {
+        pane_count: 3,
+        pane_types: ['mpv', 'terminal', 'mpv'],
+        layout: 'stack',
+        pane_split: 50,
+        right_frac: 33,
+        split_tree: '',
+        visibility_mode: 'no-video',
+      };
+      const noVideoLayout = typeof window.visibilityLayoutForState === 'function'
+        ? window.visibilityLayoutForState(visibilityProbeState)
+        : null;
+      const noVideoVisibleOk = !!noVideoLayout &&
+        Array.isArray(noVideoLayout.visibleRoles) &&
+        noVideoLayout.visibleRoles.length === 1 &&
+        String(noVideoLayout.visibleRoles[0]) === '2';
+      const noVideoFillOk = !!noVideoLayout && !!noVideoLayout.rects && !!noVideoLayout.rects[2] &&
+        noVideoLayout.rects[2].x === 0 &&
+        noVideoLayout.rects[2].y === 0 &&
+        noVideoLayout.rects[2].w === 100 &&
+        noVideoLayout.rects[2].h === 100;
+      setTestResult('test-3-6', noVideoVisibleOk && noVideoFillOk ? 'pass' : 'fail',
+        noVideoVisibleOk && noVideoFillOk
+          ? 'No Video removes only video-pane roles and the remaining terminal pane fills the available space'
+          : 'No Video did not hide the expected panes or failed to reflow the remaining pane');
+
+      // Test 3.7: No Terminal hides terminal panes only and reflows the remaining visible panes
+      const noTerminalLayout = typeof window.visibilityLayoutForState === 'function'
+        ? window.visibilityLayoutForState({ ...visibilityProbeState, visibility_mode: 'no-terminal' })
+        : null;
+      const noTerminalVisibleOk = !!noTerminalLayout &&
+        Array.isArray(noTerminalLayout.visibleRoles) &&
+        noTerminalLayout.visibleRoles.length === 3 &&
+        noTerminalLayout.visibleRoles.join(',') === '0,1,3';
+      const noTerminalFillOk = !!noTerminalLayout && !!noTerminalLayout.rects &&
+        [0, 1, 3].every((role) => !!noTerminalLayout.rects[role] && noTerminalLayout.rects[role].x === 0 && noTerminalLayout.rects[role].w === 100 && noTerminalLayout.rects[role].h > 0) &&
+        (noTerminalLayout.rects[0].h + noTerminalLayout.rects[1].h + noTerminalLayout.rects[3].h === 100);
+      setTestResult('test-3-7', noTerminalVisibleOk && noTerminalFillOk ? 'pass' : 'fail',
+        noTerminalVisibleOk && noTerminalFillOk
+          ? 'No Terminal removes only terminal-pane roles and the visible mpv panes fill the available space'
+          : 'No Terminal did not hide the expected panes or failed to reflow the remaining panes');
+
+      // Test 3.8: Failed visibility updates roll back instead of drifting out of sync
+      const boardCardsBeforeFailure = Array.from(document.querySelectorAll('#kmsStudioPlaceholder .studio-card')).length;
+      const previewNodeBeforeFailure = document.querySelector('#kmsPreviewPlaceholder .preview-layout');
+      const previewVideoBeforeFailure = document.querySelector('#kmsPreviewPlaceholder #previewVideo');
+      const previewStreamBeforeFailure = previewVideoBeforeFailure ? previewVideoBeforeFailure.srcObject : null;
+      const modeBeforeFailure = typeof window.currentVisibilityMode === 'function'
+        ? window.currentVisibilityMode()
+        : 'neither';
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : (input?.url || '');
+        if (url.includes('/api/config')) {
+          throw new Error('simulated save failure');
+        }
+        return originalFetch(input, init);
+      };
+      let failureRolledBack = false;
+      try {
+        await window.setVisibilityMode(modeBeforeFailure === 'no-video' ? 'no-terminal' : 'no-video');
+      } catch (err) {
+        failureRolledBack = typeof window.currentVisibilityMode === 'function' &&
+          window.currentVisibilityMode() === modeBeforeFailure &&
+          Array.from(document.querySelectorAll('#kmsStudioPlaceholder .studio-card')).length === boardCardsBeforeFailure &&
+          document.querySelector('#kmsPreviewPlaceholder .preview-layout') === previewNodeBeforeFailure &&
+          document.querySelector('#kmsPreviewPlaceholder #previewVideo') === previewVideoBeforeFailure &&
+          (previewVideoBeforeFailure ? previewVideoBeforeFailure.srcObject : null) === previewStreamBeforeFailure;
+      } finally {
+        window.fetch = originalFetch;
+      }
+      setTestResult('test-3-8', failureRolledBack ? 'pass' : 'fail',
+        failureRolledBack ? 'Failed visibility saves restore the prior board and preview state' : 'Visibility failure left the board or preview out of sync');
 
       log('✓ Cross-section interaction test complete', 'success');
     }
