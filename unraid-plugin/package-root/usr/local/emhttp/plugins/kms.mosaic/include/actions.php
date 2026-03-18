@@ -183,22 +183,24 @@ try {
 
   if ($action === 'backend_config') {
     header('Content-Type: application/json');
+    $json_payload = $_POST['payload'] ?? file_get_contents('php://input');
     echo run_web_wrapper_with_temp_json(
       $web_wrapper,
       $cfg['CONFIG_PATH'],
       '--write-state-json',
-      file_get_contents('php://input')
+      (string)$json_payload
     );
     exit;
   }
 
   if ($action === 'backend_raw_config') {
     header('Content-Type: application/json');
+    $json_payload = $_POST['payload'] ?? file_get_contents('php://input');
     echo run_web_wrapper_with_temp_json(
       $web_wrapper,
       $cfg['CONFIG_PATH'],
       '--write-raw-json',
-      file_get_contents('php://input')
+      (string)$json_payload
     );
     exit;
   }

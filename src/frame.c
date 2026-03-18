@@ -322,6 +322,13 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
     if (use_mpv && m->mpv_gl) {
         mpv_render_context_report_swap(m->mpv_gl);
     }
+    if (pane_media && opt->pane_media) {
+        for (int i = 0; i < pane_count; ++i) {
+            if (opt->pane_media[i].enabled && pane_media[i].mpv_gl) {
+                mpv_render_context_report_swap(pane_media[i].mpv_gl);
+            }
+        }
+    }
     if (use_mpv) rt->mpv_needs_render = 1;
     rt->frame++;
 }
