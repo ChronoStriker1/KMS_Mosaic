@@ -729,15 +729,15 @@ function kmsEmbeddedOverrides() {
       font-size: 12px;
     }
     #kmsStudioPlaceholder .studio-inspector {
-      order: 3 !important;
+      display: none !important;
     }
     #kmsStudioPlaceholder .studio-board {
       display: block !important;
       position: relative !important;
       aspect-ratio: 9 / 16 !important;
       flex: 1;
-      min-height: 400px;
-      max-height: none;
+      min-height: 0 !important;
+      max-height: 100% !important;
       border-radius: 0;
       background: linear-gradient(180deg, #f7f3ee, #ede8e1);
       border: 1px solid rgba(0,0,0,.10);
