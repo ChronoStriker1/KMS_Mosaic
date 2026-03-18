@@ -2666,6 +2666,79 @@ HTML = r"""<!doctype html>
       return current;
     }
 
+    function splitTreePathForRole(node, role, path = "") {
+      if (!node) return null;
+      if (node.leaf) return node.role === role ? path : null;
+      const firstPath = splitTreePathForRole(node.first, role, `${path}0`);
+      if (firstPath != null) return firstPath;
+      return splitTreePathForRole(node.second, role, `${path}1`);
+    }
+
+    function paneIdentityForRole(nextState, role) {
+      if (!nextState || role < 0) return null;
+      if (role === 0) {
+        return {
+          kind: "main",
+          paneType: "mpv",
+        };
+      }
+      const paneIndex = role - 1;
+      const paneType = nextState.pane_types?.[paneIndex] || "terminal";
+      if (paneType !== "mpv") {
+        return {
+          kind: "pane",
+          paneType,
+          command: String(nextState.pane_commands?.[paneIndex] || ""),
+        };
+      }
+      return {
+        kind: "pane",
+        paneType,
+        playlist: String(nextState.pane_playlists?.[paneIndex] || ""),
+        playlistExtended: String(nextState.pane_playlist_extended?.[paneIndex] || ""),
+        playlistFifo: String(nextState.pane_playlist_fifos?.[paneIndex] || ""),
+        videoPaths: Array.isArray(nextState.pane_video_paths?.[paneIndex]) ? nextState.pane_video_paths[paneIndex].slice() : [],
+        mpvOpts: Array.isArray(nextState.pane_mpv_opts?.[paneIndex]) ? nextState.pane_mpv_opts[paneIndex].slice() : [],
+      };
+    }
+
+    function paneIdentityEquals(left, right) {
+      if (!left || !right) return false;
+      return JSON.stringify(left) === JSON.stringify(right);
+    }
+
+    function captureSelectedPaneSnapshot(nextState) {
+      if (!nextState || selectedRole < 0) return null;
+      const splitTree = nextState === state ? normalizeSplitTreeState() : parseSplitTreeSpec(nextState.split_tree || "");
+      return {
+        role: selectedRole,
+        path: splitTree ? splitTreePathForRole(splitTree, selectedRole) : null,
+        identity: paneIdentityForRole(nextState, selectedRole),
+      };
+    }
+
+    function restoreSelectedRole(nextState, snapshot) {
+      if (!nextState || !snapshot?.identity) return -1;
+      if (snapshot.identity.kind === "main") return 0;
+      const splitTree = parseSplitTreeSpec(nextState.split_tree || "");
+      if (splitTree && snapshot.path != null) {
+        const nodeAtPath = splitTreeNodeAtPath(splitTree, snapshot.path);
+        if (nodeAtPath?.leaf) {
+          const pathRole = Number(nodeAtPath.role);
+          if (paneIdentityEquals(paneIdentityForRole(nextState, pathRole), snapshot.identity)) {
+            return pathRole;
+          }
+        }
+      }
+      const matchingRoles = [];
+      for (let role = 1; role <= Number(nextState.pane_count || 0); role += 1) {
+        if (paneIdentityEquals(paneIdentityForRole(nextState, role), snapshot.identity)) {
+          matchingRoles.push(role);
+        }
+      }
+      return matchingRoles.length === 1 ? matchingRoles[0] : -1;
+    }
+
     function ensureSelectedRole() {
       const maxRole = Math.max(0, Number(state?.pane_count || 0));
       if (!Number.isFinite(selectedRole)) selectedRole = -1;
@@ -3968,14 +4041,14 @@ HTML = r"""<!doctype html>
     }
 
     function fillForm(nextState, configPath, nextRawConfig) {
-      const previousSelectedRole = selectedRole;
+      const previousSelection = captureSelectedPaneSnapshot(state);
       state = nextState;
       normalizeVisibilityFlags();
       rawConfigText = nextRawConfig;
       pendingNewPaneIndexes = new Set();
       ensurePaneCommands(state);
       state.splitTreeModel = parseSplitTreeSpec(state.split_tree || "");
-      selectedRole = previousSelectedRole;
+      selectedRole = restoreSelectedRole(state, previousSelection);
       ensureSelectedRole();
       document.getElementById("configPath").textContent = `Config: ${configPath}`;
       const modeEl = document.getElementById("mode");
