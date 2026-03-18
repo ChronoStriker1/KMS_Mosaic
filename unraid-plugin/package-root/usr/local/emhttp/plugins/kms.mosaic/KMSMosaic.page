@@ -715,16 +715,7 @@ function kmsEmbeddedOverrides() {
       flex: 1;
     }
     #kmsStudioPlaceholder .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      padding: 12px 0;
-      border-top: 1px solid rgba(0,0,0,.08);
-      border-bottom: 1px solid rgba(0,0,0,.08);
-      margin: 0;
-    }
-    #kmsStudioPlaceholder .actions {
-      order: 2 !important;
+      display: none !important;
     }
     #kmsStudioPlaceholder .actions button {
       color: #222;
