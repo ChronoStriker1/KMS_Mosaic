@@ -1278,6 +1278,19 @@ HTML = r"""<!doctype html>
       font-size: 10px;
       font-family: "Menlo", "Consolas", monospace;
     }
+    .studio-remove-btn {
+      border: 1px solid rgba(186, 59, 42, 0.30);
+      background: rgba(186, 59, 42, 0.12);
+      color: #d77a61;
+      padding: 5px 8px;
+      border-radius: 6px;
+      font-size: 10px;
+      font-family: "Menlo", "Consolas", monospace;
+    }
+    .studio-remove-btn:hover {
+      background: rgba(186, 59, 42, 0.20);
+      border-color: rgba(186, 59, 42, 0.45);
+    }
     .studio-card-title { font-size: 16px; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; }
     .studio-card-meta { font-size: 11px; opacity: 0.80; line-height: 1.4; max-width: 26ch; }
     .studio-inspector {
@@ -1577,10 +1590,7 @@ HTML = r"""<!doctype html>
           <h2 class="section-title">Layout Studio</h2>
           <div class="studio-grid">
             <div>
-              <div class="actions tight" style="margin-bottom:10px;">
-                <button class="secondary" id="addPaneBtn">Add Pane</button>
-                <button class="secondary" id="removePaneBtn">Remove Selected Pane</button>
-              </div>
+              <div class="actions tight" style="margin-bottom:10px;"></div>
               <div class="studio-board" id="studioBoard"></div>
             </div>
             <div class="studio-inspector" id="studioInspector">
@@ -2884,6 +2894,7 @@ HTML = r"""<!doctype html>
         const splitActions = `<div class="studio-split-actions">
                <button type="button" class="studio-split-btn" data-studio-split="col">Split V</button>
                <button type="button" class="studio-split-btn" data-studio-split="row">Split H</button>
+               <button type="button" class="studio-remove-btn" data-studio-remove="true">Remove</button>
              </div>`;
         card.innerHTML = `
           <div class="studio-top">
@@ -2953,6 +2964,26 @@ HTML = r"""<!doctype html>
               return;
             }
             setStatus(button.dataset.studioSplit === "col" ? "Split the selected pane vertically." : "Split the selected pane horizontally.", false);
+          });
+        });
+        card.querySelectorAll("[data-studio-remove]").forEach((button) => {
+          button.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const tree = ensureSplitTreeModel();
+            if (!tree) {
+              setStatus("Could not remove pane.", true);
+              return;
+            }
+            const allRoles = [];
+            splitTreeCollectRoles(tree, allRoles);
+            if (allRoles.length <= 1) {
+              setStatus("Cannot remove the last pane. At least one pane must remain.", true);
+              return;
+            }
+            selectedRole = role;
+            removeSelectedPane();
+            setStatus("Removed the selected pane.", false);
           });
         });
         studioBoard.appendChild(card);
@@ -4072,18 +4103,6 @@ HTML = r"""<!doctype html>
       } catch (err) {
         setStatus(err.message, true);
       }
-    });
-    document.getElementById("addPaneBtn").addEventListener("click", () => {
-      addPane();
-      setStatus("Added a pane by splitting the selected slot.", false);
-    });
-    document.getElementById("removePaneBtn").addEventListener("click", () => {
-      if (selectedRole === 0) {
-        setStatus("Select a terminal pane first.", true);
-        return;
-      }
-      removeSelectedPane();
-      setStatus("Removed the selected terminal pane.", false);
     });
     addQueueItemBtn.addEventListener("click", () => {
       addQueueItem();
