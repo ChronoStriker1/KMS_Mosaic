@@ -3289,6 +3289,11 @@ HTML = r"""<!doctype html>
       return { x, y };
     }
 
+    function displayPointToLogicalPoint(point) {
+      if (!point) return null;
+      return inversePointByDegrees(point.x, 100 - point.y, normalizedRotationDegrees());
+    }
+
     function displayEdgeForLogicalEdge(logicalEdge, total) {
       const candidates = [
         { edge: "left", point: { x: 0, y: 50 } },
@@ -3297,7 +3302,7 @@ HTML = r"""<!doctype html>
         { edge: "bottom", point: { x: 50, y: 100 } },
       ];
       for (const candidate of candidates) {
-        const logicalPoint = inversePointByDegrees(candidate.point.x, candidate.point.y, total);
+        const logicalPoint = inversePointByDegrees(candidate.point.x, 100 - candidate.point.y, total);
         const xBias = Math.abs(logicalPoint.x - 50);
         const yBias = Math.abs(logicalPoint.y - 50);
         const resolvedEdge = xBias > yBias
@@ -3371,7 +3376,7 @@ HTML = r"""<!doctype html>
       if (!studioResizeDrag) return;
       const pointer = studioBoardPointerPosition(event);
       if (!pointer) return;
-      const logicalPointer = inversePointByDegrees(pointer.x, pointer.y, normalizedRotationDegrees());
+      const logicalPointer = displayPointToLogicalPoint(pointer);
       const ctx = splitTreeResizeContext(state, studioResizeDrag.role);
       if (!ctx) return;
       let changed = false;
