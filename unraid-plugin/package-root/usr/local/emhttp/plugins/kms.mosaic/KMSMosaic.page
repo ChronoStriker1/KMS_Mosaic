@@ -34,51 +34,32 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   .kms-page {
     display: grid;
     gap: 18px;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto auto auto auto;
   }
   .kms-page > style,
   .kms-page > script {
     display: none !important;
   }
-  /* Service controls span full width */
-  .kms-page > .kms-panel:nth-of-type(1) {
-    grid-column: 1 / -1;
+  .kms-live-studio {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 !important;
+    padding: 0 !important;
   }
-  /* Live Preview on left, Layout Studio on right */
-  .kms-page > .kms-panel:nth-of-type(2) {
-    grid-column: 1;
-    grid-row: 2;
+  .kms-preview-frame,
+  .kms-studio-frame {
+    padding: 16px !important;
+    min-height: 0;
   }
-  .kms-page > .kms-panel:nth-of-type(3) {
-    grid-column: 2;
-    grid-row: 2;
+  .kms-preview-frame {
+    border-right: 1px solid var(--box_border, rgba(0,0,0,.12));
   }
-  /* Configuration Editor and Advanced span full width */
-  .kms-page > .kms-panel:nth-of-type(4) {
-    grid-column: 1 / -1;
-    grid-row: 3;
-  }
-  .kms-page > .kms-panel:nth-of-type(5) {
-    grid-column: 1 / -1;
-    grid-row: 4;
-  }
-  @media (max-width: 1400px) {
-    .kms-page {
+  @media (max-width: 1200px) {
+    .kms-live-studio {
       grid-template-columns: 1fr;
     }
-    .kms-page > .kms-panel:nth-of-type(2),
-    .kms-page > .kms-panel:nth-of-type(3) {
-      grid-column: 1;
-    }
-    .kms-page > .kms-panel:nth-of-type(3) {
-      grid-row: 3;
-    }
-    .kms-page > .kms-panel:nth-of-type(4) {
-      grid-row: 4;
-    }
-    .kms-page > .kms-panel:nth-of-type(5) {
-      grid-row: 5;
+    .kms-preview-frame {
+      border-right: none;
+      border-bottom: 1px solid var(--box_border, rgba(0,0,0,.12));
     }
   }
   .kms-panel {
@@ -336,23 +317,14 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     </div>
   </section>
 
-  <!-- Section 2: Live Preview (placeholder) -->
+  <!-- Section 2: Live View & Layout Studio Combined -->
   <section class="kms-panel">
     <div class="kms-panel-head">
-      <h2>Live Preview</h2>
+      <h2>Live View & Layout Studio</h2>
     </div>
-    <div class="kms-panel-body">
-      <div id="kmsPreviewPlaceholder" class="kms-ui-loading">Loading live preview…</div>
-    </div>
-  </section>
-
-  <!-- Section 3: Layout Studio (placeholder) -->
-  <section class="kms-panel">
-    <div class="kms-panel-head">
-      <h2>Layout Studio</h2>
-    </div>
-    <div class="kms-panel-body">
-      <div id="kmsStudioPlaceholder" class="kms-ui-loading">Loading layout studio…</div>
+    <div class="kms-panel-body kms-live-studio">
+      <div id="kmsPreviewPlaceholder" class="kms-preview-frame kms-ui-loading">Loading live preview…</div>
+      <div id="kmsStudioPlaceholder" class="kms-studio-frame kms-ui-loading">Loading layout studio…</div>
     </div>
   </section>
 
@@ -620,34 +592,36 @@ function kmsEmbeddedOverrides() {
       color: #1f2328 !important;
       border-color: rgba(0,0,0,.12) !important;
     }
-    /* ─── Relocated preview styling ─────────────────────────────────────── */
+    /* ─── Combined preview styling ─────────────────────────────────────── */
     #kmsPreviewPlaceholder {
       display: flex;
+      flex-direction: column;
       justify-content: center;
     }
     #kmsPreviewPlaceholder .preview-layout {
       display: block;
       width: 100%;
+      height: 100%;
     }
     #kmsPreviewPlaceholder .preview-wrap {
       display: block !important;
       position: relative !important;
-      max-height: 55vh !important;
-      min-height: 180px !important;
-      border-radius: 10px !important;
+      width: 100% !important;
+      height: 100% !important;
+      min-height: 400px !important;
+      max-height: none !important;
+      border-radius: 0 !important;
       background: linear-gradient(180deg, #1a1714, #0c0b09) !important;
-      border: 1px solid rgba(0,0,0,0.28) !important;
-      overflow: hidden !important;
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04), 0 4px 12px rgba(0,0,0,0.18) !important;
-      margin: 0 auto !important;
+      border: none !important;
+      box-shadow: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
     }
     #kmsPreviewPlaceholder .preview-layout.portrait .preview-wrap {
       aspect-ratio: 9 / 16 !important;
-      max-width: 340px !important;
     }
     #kmsPreviewPlaceholder .preview-layout.landscape .preview-wrap {
       aspect-ratio: 16 / 9 !important;
-      max-width: 800px !important;
     }
     #kmsPreviewPlaceholder .preview-stage {
       position: absolute;
@@ -676,36 +650,39 @@ function kmsEmbeddedOverrides() {
       text-transform: uppercase;
       font-weight: 500;
     }
-    /* ─── Relocated studio styling ─────────────────────────────────────── */
-    #kmsStudioPlaceholder .studio-grid {
-      display: grid !important;
-      grid-template-columns: 1fr;
-      gap: 16px;
+    /* ─── Combined studio styling ─────────────────────────────────────── */
+    #kmsStudioPlaceholder {
+      display: flex;
+      flex-direction: column;
     }
-    @media (min-width: 1200px) {
-      #kmsStudioPlaceholder .studio-grid {
-        grid-template-columns: 1fr 1fr;
-      }
+    #kmsStudioPlaceholder .studio-grid {
+      display: flex !important;
+      flex-direction: column;
+      gap: 0 !important;
+      height: 100%;
     }
     #kmsStudioPlaceholder .actions {
       display: flex;
       flex-wrap: wrap;
-      gap: 8px;
-      margin-bottom: 10px;
+      gap: 6px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(0,0,0,.08);
+      margin-bottom: 12px;
     }
     #kmsStudioPlaceholder .actions button {
       color: #222;
-      min-height: 32px;
-      padding: 6px 14px;
-      font-size: 13px;
+      min-height: 28px;
+      padding: 5px 12px;
+      font-size: 12px;
     }
     #kmsStudioPlaceholder .studio-board {
       display: block !important;
       position: relative !important;
       aspect-ratio: 9 / 16 !important;
+      flex: 1;
       min-height: 400px;
       max-height: none;
-      border-radius: 10px;
+      border-radius: 0;
       background: linear-gradient(180deg, #f7f3ee, #ede8e1);
       border: 1px solid rgba(0,0,0,.10);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.55);
