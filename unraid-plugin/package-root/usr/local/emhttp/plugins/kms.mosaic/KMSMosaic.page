@@ -456,6 +456,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     box-shadow: none;
     display: grid;
     gap: 8px;
+    min-height: 112px;
     padding: 8px 9px;
     transition: border-color 120ms ease, box-shadow 120ms ease;
   }
@@ -476,7 +477,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   #kmsSelectedPanePlaceholder .playlist-list {
     display: grid;
     gap: 7px;
-    max-height: calc(5 * 104px + 4 * 7px);
+    max-height: calc(5 * 112px + 4 * 7px);
     overflow-y: auto;
     padding-right: 6px;
   }
@@ -507,10 +508,16 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   #kmsSelectedPanePlaceholder .playlist-thumb {
     background: linear-gradient(140deg, rgba(0,0,0,0.03), transparent), #f1f3f5;
     border-color: rgba(0,0,0,.10);
+    height: 72px;
     min-height: 72px;
+    max-height: 72px;
     border-radius: 8px;
     position: relative;
     overflow: hidden;
+  }
+  #kmsSelectedPanePlaceholder .playlist-item.portrait-thumb .playlist-thumb {
+    width: 92px;
+    margin-inline: auto;
   }
   #kmsSelectedPanePlaceholder .playlist-thumb-media {
     position: absolute;
@@ -576,6 +583,11 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     gap: 6px;
     align-items: end;
   }
+  #kmsSelectedPanePlaceholder .playlist-item.portrait-thumb .playlist-controls-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
   #kmsSelectedPanePlaceholder .playlist-controls-row .playlist-mini-btn {
     margin-top: 0;
   }
@@ -591,6 +603,11 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     font-family: "Menlo", "Consolas", monospace;
     width: 72px;
   }
+  #kmsSelectedPanePlaceholder .playlist-item.portrait-thumb .playlist-repeat-wrap {
+    width: 100%;
+    justify-items: stretch;
+    grid-column: 1 / -1;
+  }
   #kmsSelectedPanePlaceholder .playlist-repeat-wrap span {
     display: block;
     line-height: 9px;
@@ -600,6 +617,9 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     font-family: "Menlo", "Consolas", monospace;
     height: 28px;
     padding: 6px 8px;
+  }
+  #kmsSelectedPanePlaceholder .playlist-item.portrait-thumb .playlist-repeat {
+    width: 100%;
   }
   #kmsSelectedPanePlaceholder .playlist-thumb-media.quarter-turn {
     padding: 0;
@@ -728,6 +748,19 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     .kms-panel-body { padding: 12px; }
     .kms-panel-head { padding: 12px 14px; }
     .kms-actions { gap: 6px; }
+    #kmsSelectedPanePlaceholder .playlist-row {
+      grid-template-columns: auto 1fr;
+    }
+    #kmsSelectedPanePlaceholder .playlist-item.portrait-thumb .playlist-row {
+      grid-template-columns: auto 1fr;
+    }
+    #kmsSelectedPanePlaceholder .playlist-media-cell,
+    #kmsSelectedPanePlaceholder .playlist-thumb {
+      width: 100%;
+    }
+    #kmsSelectedPanePlaceholder .playlist-item.portrait-thumb .playlist-thumb {
+      width: 100%;
+    }
   }
   @media (max-width: 680px) {
     #kmsAdvancedPlaceholder .grid,
