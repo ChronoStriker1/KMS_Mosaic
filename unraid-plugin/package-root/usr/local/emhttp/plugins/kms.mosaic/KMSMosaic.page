@@ -64,11 +64,12 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     overflow: hidden !important;
   }
   .kms-preview-frame {
-    border-right: 1px solid var(--box_border, rgba(0,0,0,.12));
-    margin-right: 6px;
+    border: none !important;
+    margin: 0 !important;
   }
   .kms-studio-frame {
-    margin-left: 6px;
+    border: none !important;
+    margin: 0 !important;
   }
   @media (max-width: 1200px) {
     .kms-live-studio {
