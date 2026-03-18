@@ -582,6 +582,9 @@ function kmsEmbeddedOverrides() {
     #kmsUiMount .flag-mode-row {
       display: none !important;
     }
+    #kmsUiMount .studio-grid {
+      display: none !important;
+    }
     #kmsUiMount .stage {
       padding: 0 0 16px;
     }
@@ -723,6 +726,27 @@ function kmsEmbeddedOverrides() {
       letter-spacing: 0.04em;
       text-transform: uppercase;
       font-weight: 500;
+    }
+    /* ─── Extracted studio styling ─────────────────────────────────────── */
+    #kmsStudioPlaceholder .studio-grid {
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 16px;
+    }
+    #kmsStudioPlaceholder .studio-board {
+      background: linear-gradient(180deg, #f7f3ee, #ede8e1) !important;
+      border-color: rgba(0,0,0,.10) !important;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.55) !important;
+    }
+    #kmsStudioPlaceholder .studio-card {
+      position: absolute;
+      border-color: rgba(0,0,0,.12) !important;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.5), 0 6px 14px rgba(0,0,0,.08) !important;
+    }
+    #kmsStudioPlaceholder .studio-inspector {
+      background: #fbfbfc !important;
+      border-color: rgba(0,0,0,.09) !important;
+      box-shadow: none !important;
     }
     @media (max-width: 1200px) {
       #kmsUiMount .shell {
@@ -934,6 +958,17 @@ async function kmsEnsureEmbeddedLoaded() {
           previewContainer.innerHTML = previewLayout.outerHTML;
           // Remove from embedded doc to prevent duplication
           previewLayout.remove();
+        }
+      }
+
+      // Extract studio grid and move it to prominent Layout Studio section
+      const studioGrid = doc.querySelector('.studio-grid');
+      if (studioGrid) {
+        const studioContainer = document.getElementById('kmsStudioPlaceholder');
+        if (studioContainer) {
+          studioContainer.className = '';
+          studioContainer.innerHTML = studioGrid.outerHTML;
+          // Keep in embedded doc too, hide it with CSS to avoid duplication
         }
       }
 
