@@ -1324,6 +1324,29 @@ HTML = r"""<!doctype html>
     .studio-empty { color: var(--muted); font-size: 12px; line-height: 1.5; }
     /* ─── playlist ────────────────────────────────────── */
     .playlist-editor { display: grid; gap: 10px; }
+    .queue-editor-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .queue-editor-note {
+      margin-top: 4px;
+      margin-bottom: 0;
+    }
+    .queue-editor-target {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 11px;
+      font-family: "Menlo", "Consolas", monospace;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent-dark);
+      background: rgba(255,255,255,0.03);
+      white-space: nowrap;
+    }
     .playlist-list {
       display: grid;
       gap: 7px;
@@ -1577,6 +1600,8 @@ HTML = r"""<!doctype html>
       .shell { margin: 8px auto 16px; }
       .grid, .checks { grid-template-columns: 1fr; }
       .panel-body > div, details.advanced-block { padding: 10px 12px; }
+      .queue-editor-head { flex-direction: column; align-items: stretch; }
+      .queue-editor-target { white-space: normal; }
       .playlist-row { grid-template-columns: auto 1fr; }
       .playlist-media-cell, .playlist-thumb { width: 100%; }
     }
@@ -1631,14 +1656,19 @@ HTML = r"""<!doctype html>
           <div class="media-editor" id="mediaEditor"></div>
         </div>
 
-        <div class="panel-wide">
-          <h2 class="section-title" id="queueEditorTitle">Queue Editor</h2>
-          <div class="playlist-targets" id="playlistTargets"></div>
+        <div class="panel-wide queue-editor-shell" id="queueEditorShell">
+          <div class="queue-editor-head">
+            <div>
+              <h2 class="section-title" id="queueEditorTitle">Selected Pane Queue</h2>
+              <p class="muted-note queue-editor-note" id="queueEditorNote">Select an mpv pane to view its queue.</p>
+            </div>
+            <div class="queue-editor-target" id="queueEditorTarget">No pane selected</div>
+          </div>
           <div class="playlist-editor" id="playlistEditor"></div>
           <details class="playlist-bulk" id="playlistBulk">
             <summary>Bulk Add Videos</summary>
             <div class="playlist-bulk-body">
-              <p class="muted-note">Paste one path or URL per line to replace the current queue for the selected playlist target.</p>
+              <p class="muted-note">Paste one path or URL per line to replace the current queue for the selected mpv pane.</p>
               <label id="videoListWrap">Video Files
                 <textarea id="videoList" spellcheck="false" placeholder="/path/one.mp4&#10;/path/two.mp4"></textarea>
               </label>
@@ -1647,7 +1677,6 @@ HTML = r"""<!doctype html>
           <div class="actions tight">
             <button class="secondary" id="addQueueItemBtn">Add Video</button>
           </div>
-          <p class="muted-note" id="queueEditorNote">Pick which mpv pane you want to edit.</p>
         </div>
 
         <div>
@@ -1740,17 +1769,17 @@ HTML = r"""<!doctype html>
     const mediaTargets = document.getElementById("mediaTargets");
     const mediaEditor = document.getElementById("mediaEditor");
     const playlistEditor = document.getElementById("playlistEditor");
-    const playlistTargets = document.getElementById("playlistTargets");
     const layoutSuggestions = document.getElementById("layoutSuggestions");
+    const queueEditorShellEl = document.getElementById("queueEditorShell");
     const queueEditorTitleEl = document.getElementById("queueEditorTitle");
     const queueEditorNoteEl = document.getElementById("queueEditorNote");
+    const queueEditorTargetEl = document.getElementById("queueEditorTarget");
     const addQueueItemBtn = document.getElementById("addQueueItemBtn");
     const visibilityModeButtons = document.getElementById("visibilityModeButtons");
     const statusEl = document.getElementById("status");
     let state = null;
     let rawConfigText = "";
-    let selectedRole = 0;
-    let playlistTargetRole = 0;
+    let selectedRole = -1;
     let paneTargetRole = 0;
     let draggedStudioRole = null;
     let pendingNewPaneIndexes = new Set();
@@ -1938,18 +1967,6 @@ HTML = r"""<!doctype html>
       return state?.pane_types?.[role - 1] === "mpv" ? "video" : "terminal";
     }
 
-    function availablePlaylistTargets() {
-      if (!state) return [];
-      const targets = [{ role: 0, title: roleTitle(0) }];
-      for (let role = 1; role <= Number(state.pane_count || 0); role += 1) {
-        const paneIndex = role - 1;
-        if (pendingNewPaneIndexes.has(paneIndex)) continue;
-        if ((state.pane_types?.[paneIndex] || "terminal") !== "mpv") continue;
-        targets.push({ role, title: roleTitle(role) });
-      }
-      return targets;
-    }
-
     function availablePaneTargets() {
       if (!state) return [];
       const targets = [{ role: 0, title: roleTitle(0), type: "mpv" }];
@@ -1964,17 +1981,6 @@ HTML = r"""<!doctype html>
       return targets.sort((a, b) => a.title.localeCompare(b.title));
     }
 
-    function ensurePlaylistTargetRole() {
-      const roles = availablePlaylistTargets().map((target) => target.role);
-      if (!roles.length) {
-        playlistTargetRole = 0;
-        return;
-      }
-      if (!roles.includes(playlistTargetRole)) {
-        playlistTargetRole = roles[0];
-      }
-    }
-
     function ensurePaneTargetRole() {
       const roles = availablePaneTargets().map((target) => target.role);
       if (!roles.length) {
@@ -1984,26 +1990,6 @@ HTML = r"""<!doctype html>
       if (!roles.includes(paneTargetRole)) {
         paneTargetRole = roles[0];
       }
-    }
-
-    function renderPlaylistTargets() {
-      if (!playlistTargets) return;
-      ensurePlaylistTargetRole();
-      playlistTargets.innerHTML = "";
-      availablePlaylistTargets().forEach((target) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = `playlist-target-btn${playlistTargetRole === target.role ? " active" : ""}`;
-        button.textContent = target.title;
-        button.addEventListener("click", () => {
-          playlistTargetRole = target.role;
-          renderPlaylistTargets();
-          renderMediaTargets();
-          renderMediaEditor();
-          renderPlaylistEditor();
-        });
-        playlistTargets.appendChild(button);
-      });
     }
 
     function renderMediaTargets() {
@@ -2017,11 +2003,6 @@ HTML = r"""<!doctype html>
         button.textContent = target.title;
         button.addEventListener("click", () => {
           paneTargetRole = target.role;
-          if (target.type === "mpv") {
-            playlistTargetRole = target.role;
-            renderPlaylistTargets();
-            renderPlaylistEditor();
-          }
           renderMediaTargets();
           renderMediaEditor();
         });
@@ -2121,13 +2102,11 @@ HTML = r"""<!doctype html>
         `;
         document.getElementById("mediaPaneType").addEventListener("change", (event) => {
           state.pane_types[paneIndex] = event.target.value;
-          if (event.target.value === "mpv") playlistTargetRole = paneIndex + 1;
           renderPaneList(state);
           renderStudioBoard();
           renderStudioInspector();
           renderMediaTargets();
           renderMediaEditor();
-          renderPlaylistTargets();
           renderPlaylistEditor();
         });
         document.getElementById("mediaPaneCommand").addEventListener("input", (event) => {
@@ -2207,41 +2186,71 @@ HTML = r"""<!doctype html>
 
     function queueEditorContext() {
       if (!state) return null;
-      ensurePlaylistTargetRole();
-      if (playlistTargetRole === 0) {
+      const paneType = selectedPaneType();
+      if (selectedRole < 0) {
+        return {
+          title: "Selected Pane Queue",
+          note: "Select an mpv pane on the board to view or edit its queue.",
+          targetLabel: "No pane selected",
+          emptyMessage: "Select an mpv pane to view its queue.",
+          paths: [],
+          editable: false,
+          paneType: "none",
+          role: -1,
+          visible: false,
+          apply() {}
+        };
+      }
+      if (paneType !== "mpv") {
+        return {
+          title: "Selected Pane Queue",
+          note: `${roleTitle(selectedRole)} is a terminal pane. Select an mpv pane to edit a queue.`,
+          targetLabel: roleTitle(selectedRole),
+          emptyMessage: "This pane does not have a media queue.",
+          paths: [],
+          editable: false,
+          paneType,
+          role: selectedRole,
+          visible: false,
+          apply() {}
+        };
+      }
+      if (selectedRole === 0) {
+        const noteParts = [`This queue controls ${roleTitle(0)}.`];
+        const mainMpvOpts = Array.isArray(state.mpv_opts) ? state.mpv_opts.slice() : [];
+        if (mainMpvOpts.length) noteParts.push(`${mainMpvOpts.length} global mpv option${mainMpvOpts.length === 1 ? "" : "s"}.`);
         return {
           title: `${roleTitle(0)} Queue`,
-          note: `This queue controls ${roleTitle(0)}.`,
+          note: noteParts.join(" "),
+          targetLabel: roleTitle(0),
+          emptyMessage: "No videos queued yet. Add one below or open Bulk Add Videos.",
           paths: Array.isArray(state.video_paths) ? state.video_paths.slice() : [],
           editable: true,
+          paneType,
+          role: selectedRole,
+          visible: true,
           apply(paths) {
             state.video_paths = paths.slice();
             document.getElementById("videoList").value = state.video_paths.join("\n");
           }
         };
       }
-      const paneIndex = playlistTargetRole - 1;
-      const paneType = state.pane_types?.[paneIndex] || "terminal";
-      if (paneType !== "mpv") {
-        return {
-          title: `${roleTitle(playlistTargetRole)} Queue`,
-          note: "This pane is not currently an mpv pane.",
-          paths: [],
-          editable: false,
-          apply() {}
-        };
-      }
+      const paneIndex = selectedRole - 1;
       const playlistPath = state.pane_playlists?.[paneIndex] || "";
-      const playlistExtended = state.pane_playlist_extended?.[paneIndex] || "";
       const paneMpvOpts = Array.isArray(state.pane_mpv_opts?.[paneIndex]) ? state.pane_mpv_opts[paneIndex].slice() : [];
-      const noteParts = [`This queue controls ${roleTitle(playlistTargetRole)}.`];
+      const noteParts = [`This queue controls ${roleTitle(selectedRole)}.`];
       if (playlistPath) noteParts.push(`Playlist: ${playlistPath}`);
       if (paneMpvOpts.length) noteParts.push(`${paneMpvOpts.length} pane-local mpv option${paneMpvOpts.length === 1 ? "" : "s"}.`);
       return {
-        title: `${roleTitle(playlistTargetRole)} Queue`,
+        title: `${roleTitle(selectedRole)} Queue`,
         note: noteParts.join(" "),
+        targetLabel: roleTitle(selectedRole),
+        emptyMessage: "No videos queued yet. Add one below or open Bulk Add Videos.",
         paths: Array.isArray(state.pane_video_paths?.[paneIndex]) ? state.pane_video_paths[paneIndex].slice() : [],
         editable: true,
+        paneType,
+        role: selectedRole,
+        visible: true,
         apply(paths) {
           state.pane_video_paths[paneIndex] = paths.slice();
           document.getElementById("videoList").value = state.pane_video_paths[paneIndex].join("\n");
@@ -2298,7 +2307,7 @@ HTML = r"""<!doctype html>
       return /\.(m4v|mkv|mov|mp4|mpeg|mpg|ts|webm)$/i.test(String(path || ""));
     }
 
-    function targetPlaylistMetrics(role = playlistTargetRole) {
+    function targetPlaylistMetrics(role = (selectedRole >= 0 ? selectedRole : 0)) {
       const rotation = effectivePlaylistThumbRotationDegrees(role);
       const rects = computeStudioRects(state);
       const rawRect = rects?.[role] || { w: 16, h: 9 };
@@ -2659,8 +2668,36 @@ HTML = r"""<!doctype html>
 
     function ensureSelectedRole() {
       const maxRole = Math.max(0, Number(state?.pane_count || 0));
-      if (!Number.isFinite(selectedRole) || selectedRole < 0) selectedRole = 0;
-      if (selectedRole > maxRole) selectedRole = maxRole;
+      if (!Number.isFinite(selectedRole)) selectedRole = -1;
+      if (selectedRole < -1) selectedRole = -1;
+      if (selectedRole > maxRole) selectedRole = -1;
+    }
+
+    function selectedPaneType() {
+      if (!state || selectedRole < 0) return "none";
+      if (selectedRole === 0) return "mpv";
+      return state.pane_types?.[selectedRole - 1] || "terminal";
+    }
+
+    function dispatchQueuePanelState() {
+      const ctx = queueEditorContext();
+      const detail = {
+        selectedRole: ctx?.role ?? -1,
+        paneType: ctx?.paneType || "none",
+        visible: !!ctx?.visible,
+        queueTitle: ctx?.title || "Selected Pane Queue",
+        roleLabel: ctx?.targetLabel || "",
+      };
+      window.dispatchEvent(new CustomEvent("kms:selected-pane-queue-state", { detail }));
+    }
+
+    function selectRole(role) {
+      if (!Number.isFinite(role)) {
+        selectedRole = -1;
+      } else {
+        selectedRole = Number(role);
+      }
+      ensureSelectedRole();
     }
 
     function parseRolesString(nextState) {
@@ -2932,7 +2969,8 @@ HTML = r"""<!doctype html>
           </div>
         `;
         card.addEventListener("click", () => {
-          selectedRole = role;
+          selectRole(role);
+          renderPlaylistEditor();
           renderStudioBoard();
           renderStudioInspector();
         });
@@ -2973,7 +3011,8 @@ HTML = r"""<!doctype html>
           state.splitTreeModel = tree;
           syncSplitTreeState();
           draggedStudioRole = null;
-          selectedRole = sourceRole;
+          selectRole(sourceRole);
+          renderPlaylistEditor();
           renderStudioBoard();
           renderStudioInspector();
           setStatus(`Swapped ${roleTitle(sourceRole)} with ${roleTitle(role)}.`, false);
@@ -2982,7 +3021,7 @@ HTML = r"""<!doctype html>
           button.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
-            selectedRole = role;
+            selectRole(role);
             if (!splitSelectedRole(button.dataset.studioSplit)) {
               setStatus("Could not split the selected pane.", true);
               return;
@@ -3005,7 +3044,7 @@ HTML = r"""<!doctype html>
               setStatus("Cannot remove the last pane. At least one pane must remain.", true);
               return;
             }
-            selectedRole = role;
+            selectRole(role);
             removeSelectedPane();
             setStatus("Removed the selected pane.", false);
           });
@@ -3029,6 +3068,10 @@ HTML = r"""<!doctype html>
     function renderStudioInspector() {
       if (!state) return;
       ensureSelectedRole();
+      if (selectedRole < 0) {
+        studioInspector.innerHTML = `<div class="studio-empty">Select a pane to edit it.</div>`;
+        return;
+      }
       if (selectedRole === 0) {
         const mainMpvGroups = parseMpvOptionGroups(state.mpv_opts || []);
         studioInspector.innerHTML = `
@@ -3066,7 +3109,7 @@ HTML = r"""<!doctype html>
           <label>Additional mpv Options
             <textarea id="inspectorMainMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${mainMpvGroups.other.join("\n")}</textarea>
           </label>
-          <p class="muted-note">This inspector controls ${roleTitle(0)}. The queue editor below still controls that pane's video list.</p>
+          <p class="muted-note">This inspector controls ${roleTitle(0)}. Its queue now follows the current board selection in the Selected Pane Queue panel.</p>
         `;
         [
           "inspectorMainAudioMode",
@@ -3111,12 +3154,12 @@ HTML = r"""<!doctype html>
           document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
             state.pane_types[paneIndex] = event.target.value;
             renderPaneList(state);
+            renderPlaylistEditor();
             renderStudioBoard();
             renderStudioInspector();
           });
           return;
         }
-        const paneVideos = (state.pane_video_paths?.[paneIndex] || []).join("\n");
         const paneMpvGroups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
         studioInspector.innerHTML = `
           <div>
@@ -3153,24 +3196,17 @@ HTML = r"""<!doctype html>
           <label>Shader Stack
             <textarea id="inspectorPaneShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${paneMpvGroups.shaders.join("\n")}</textarea>
           </label>
-          <label>Videos
-            <textarea id="inspectorPaneVideos" spellcheck="false" placeholder="/path/one.mp4&#10;/path/two.mp4">${paneVideos}</textarea>
-          </label>
           <label>Additional mpv Options
             <textarea id="inspectorPaneMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${paneMpvGroups.other.join("\n")}</textarea>
           </label>
-          <p class="muted-note">This pane writes its own per-pane mpv config and queue. The structured controls above generate common pane-local mpv options, and the final box keeps any extra per-pane flags that do not have a dedicated control yet.</p>
+          <p class="muted-note">This pane writes its own per-pane mpv config. Queue edits now live only in the Selected Pane Queue panel so selection stays aligned with the board.</p>
         `;
         document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
           state.pane_types[paneIndex] = event.target.value;
           renderPaneList(state);
+          renderPlaylistEditor();
           renderStudioBoard();
           renderStudioInspector();
-        });
-        document.getElementById("inspectorPaneVideos").addEventListener("input", (event) => {
-          state.pane_video_paths[paneIndex] = event.target.value.split("\n").map(v => v.trim()).filter(Boolean);
-          renderStudioBoard();
-          renderPlaylistEditor();
         });
         [
           "inspectorPaneAudioMode",
@@ -3224,26 +3260,28 @@ HTML = r"""<!doctype html>
 
     function renderPlaylistEditor() {
       if (!state) return;
-      renderPlaylistTargets();
       const ctx = queueEditorContext();
       if (!ctx) return;
       const previewRotation = effectivePlaylistThumbRotationDegrees();
       const previewQuarterTurn = previewRotation === 90 || previewRotation === 270;
+      if (queueEditorShellEl) queueEditorShellEl.dataset.queueVisible = ctx.visible ? "true" : "false";
       queueEditorTitleEl.textContent = ctx.title;
       queueEditorNoteEl.textContent = ctx.note;
+      queueEditorTargetEl.textContent = ctx.targetLabel || "No pane selected";
       addQueueItemBtn.disabled = !ctx.editable;
       document.getElementById("videoList").value = (ctx.paths || []).join("\n");
       document.getElementById("videoList").disabled = !ctx.editable;
       playlistEditor.innerHTML = "";
       const paths = ctx.paths;
+      dispatchQueuePanelState();
       const groups = compressPlaylistPaths(paths);
       if (!ctx.editable) {
-        playlistEditor.innerHTML = `<div class="studio-empty">No media queue is available for this target.</div>`;
+        playlistEditor.innerHTML = `<div class="studio-empty">${ctx.emptyMessage}</div>`;
         return;
       }
-      const thumbMetrics = targetPlaylistMetrics(playlistTargetRole);
+      const thumbMetrics = targetPlaylistMetrics(ctx.role);
       if (!groups.length) {
-        playlistEditor.innerHTML = `<div class="studio-empty">No videos queued yet. Add one below or open Bulk Add Videos.</div>`;
+        playlistEditor.innerHTML = `<div class="studio-empty">${ctx.emptyMessage}</div>`;
         return;
       }
       const list = document.createElement("div");
@@ -3562,7 +3600,7 @@ HTML = r"""<!doctype html>
       syncSplitTreeState();
       const paneCountInput = document.getElementById("paneCount");
       if (paneCountInput) paneCountInput.value = String(state.pane_count);
-      selectedRole = newRole;
+      selectRole(newRole);
       renderPaneList(state);
       renderPlaylistEditor();
       renderStudioBoard();
@@ -3576,7 +3614,7 @@ HTML = r"""<!doctype html>
     }
 
     function removeSelectedPane() {
-      if (!state || selectedRole === 0) return;
+      if (!state || selectedRole <= 0) return;
       const tree = ensureSplitTreeModel();
       const paneIndex = selectedRole - 1;
       const role = selectedRole;
@@ -3599,7 +3637,7 @@ HTML = r"""<!doctype html>
       syncSplitTreeState();
       const paneCountInput = document.getElementById("paneCount");
       if (paneCountInput) paneCountInput.value = String(state.pane_count);
-      selectedRole = Math.min(selectedRole, state.pane_count);
+      selectRole(-1);
       renderPaneList(state);
       renderPlaylistEditor();
       renderStudioBoard();
@@ -3788,7 +3826,7 @@ HTML = r"""<!doctype html>
       return normalizedRotationDegrees();
     }
 
-    function configuredVideoRotationDegrees(role = playlistTargetRole) {
+    function configuredVideoRotationDegrees(role = (selectedRole >= 0 ? selectedRole : 0)) {
       let rawValue = state?.video_rotate || "0";
       if (Number(role) > 0) {
         const paneIndex = Number(role) - 1;
@@ -3801,7 +3839,7 @@ HTML = r"""<!doctype html>
       return total;
     }
 
-    function effectivePlaylistThumbRotationDegrees(role = playlistTargetRole) {
+    function effectivePlaylistThumbRotationDegrees(role = (selectedRole >= 0 ? selectedRole : 0)) {
       let total = (normalizedRotationDegrees() + configuredVideoRotationDegrees(role)) % 360;
       if (total < 0) total += 360;
       return total;
@@ -3930,13 +3968,15 @@ HTML = r"""<!doctype html>
     }
 
     function fillForm(nextState, configPath, nextRawConfig) {
+      const previousSelectedRole = selectedRole;
       state = nextState;
       normalizeVisibilityFlags();
       rawConfigText = nextRawConfig;
       pendingNewPaneIndexes = new Set();
-      playlistTargetRole = 0;
       ensurePaneCommands(state);
       state.splitTreeModel = parseSplitTreeSpec(state.split_tree || "");
+      selectedRole = previousSelectedRole;
+      ensureSelectedRole();
       document.getElementById("configPath").textContent = `Config: ${configPath}`;
       const modeEl = document.getElementById("mode");
       const rotationEl = document.getElementById("rotation");
