@@ -277,6 +277,11 @@
       </div>
       <div id="test-3-7-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
+        <div class="test-name">Fallback visibility layouts still honor custom roles ordering</div>
+        <div id="test-3-7b" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-3-7b-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
         <div class="test-name">Visibility failures restore board and preview state instead of drifting out of sync</div>
         <div id="test-3-8" class="test-status status-pending">PENDING</div>
       </div>
@@ -755,14 +760,39 @@
           ? 'No Terminal removes only terminal-pane roles and the visible mpv panes fill the available space'
           : 'No Terminal did not hide the expected panes or failed to reflow the remaining panes');
 
+      // Test 3.7b: roles permutation still applies in fallback visibility layouts
+      const rolesProbeLayout = typeof window.visibilityLayoutForState === 'function'
+        ? window.visibilityLayoutForState({
+            pane_count: 3,
+            pane_types: ['terminal', 'terminal', 'terminal'],
+            layout: 'row',
+            roles: 'BAC',
+            split_tree: '',
+            visibility_mode: 'neither',
+          })
+        : null;
+      const rolesPermutationOk = !!rolesProbeLayout && !!rolesProbeLayout.rects &&
+        rolesProbeLayout.rects[2].x < rolesProbeLayout.rects[1].x &&
+        rolesProbeLayout.rects[1].x < rolesProbeLayout.rects[0].x;
+      setTestResult('test-3-7b', rolesPermutationOk ? 'pass' : 'fail',
+        rolesPermutationOk ? 'Fallback visibility layouts still honor custom roles ordering' : 'Fallback visibility layouts no longer honor custom roles ordering');
+
       // Test 3.8: Failed visibility updates roll back instead of drifting out of sync
       const boardCardsBeforeFailure = Array.from(document.querySelectorAll('#kmsStudioPlaceholder .studio-card')).length;
+      const boardGeometryBeforeFailure = Array.from(document.querySelectorAll('#kmsStudioPlaceholder .studio-card')).map((card) => {
+        const style = window.getComputedStyle(card);
+        return `${style.left}|${style.top}|${style.width}|${style.height}`;
+      }).join(';');
       const previewNodeBeforeFailure = document.querySelector('#kmsPreviewPlaceholder .preview-layout');
+      const previewWrapBeforeFailure = document.querySelector('#kmsPreviewPlaceholder .preview-wrap');
       const previewVideoBeforeFailure = document.querySelector('#kmsPreviewPlaceholder #previewVideo');
       const previewStreamBeforeFailure = previewVideoBeforeFailure ? previewVideoBeforeFailure.srcObject : null;
       const modeBeforeFailure = typeof window.currentVisibilityMode === 'function'
         ? window.currentVisibilityMode()
         : 'neither';
+      const visibilityButtonsBeforeFailure = Array.from(document.querySelectorAll('#kmsVisibilityButtons button')).map((button) => {
+        return `${button.id}:${button.className}:${button.textContent.trim()}`;
+      }).join(';');
       window.fetch = async (input, init) => {
         const url = typeof input === 'string' ? input : (input?.url || '');
         if (url.includes('/api/config')) {
@@ -774,11 +804,22 @@
       try {
         await window.setVisibilityMode(modeBeforeFailure === 'no-video' ? 'no-terminal' : 'no-video');
       } catch (err) {
+        const boardGeometryAfterFailure = Array.from(document.querySelectorAll('#kmsStudioPlaceholder .studio-card')).map((card) => {
+          const style = window.getComputedStyle(card);
+          return `${style.left}|${style.top}|${style.width}|${style.height}`;
+        }).join(';');
+        const previewWrapAfterFailure = document.querySelector('#kmsPreviewPlaceholder .preview-wrap');
+        const visibilityButtonsAfterFailure = Array.from(document.querySelectorAll('#kmsVisibilityButtons button')).map((button) => {
+          return `${button.id}:${button.className}:${button.textContent.trim()}`;
+        }).join(';');
         failureRolledBack = typeof window.currentVisibilityMode === 'function' &&
           window.currentVisibilityMode() === modeBeforeFailure &&
           Array.from(document.querySelectorAll('#kmsStudioPlaceholder .studio-card')).length === boardCardsBeforeFailure &&
+          boardGeometryAfterFailure === boardGeometryBeforeFailure &&
           document.querySelector('#kmsPreviewPlaceholder .preview-layout') === previewNodeBeforeFailure &&
+          document.querySelector('#kmsPreviewPlaceholder .preview-wrap') === previewWrapBeforeFailure &&
           document.querySelector('#kmsPreviewPlaceholder #previewVideo') === previewVideoBeforeFailure &&
+          visibilityButtonsAfterFailure === visibilityButtonsBeforeFailure &&
           (previewVideoBeforeFailure ? previewVideoBeforeFailure.srcObject : null) === previewStreamBeforeFailure;
       } finally {
         window.fetch = originalFetch;

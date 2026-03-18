@@ -2126,7 +2126,10 @@ HTML = r"""<!doctype html>
         const roles = [];
         splitTreeCollectRoles(splitTree, roles);
         return roles;
-      })() : allRoles;
+      })() : (() => {
+        const perm = parseRolesString(nextState);
+        return [...allRoles].sort((left, right) => perm[left] - perm[right]);
+      })();
       const visibleOrderedRoles = orderedRoles.filter((role) => visibleRoles.includes(role));
       const slots = buildStudioSlots(nextState, visibleOrderedRoles.length || 1);
       visibleOrderedRoles.forEach((role, index) => {
