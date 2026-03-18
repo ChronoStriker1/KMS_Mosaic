@@ -703,7 +703,7 @@ function kmsEmbeddedOverrides() {
     }
     #kmsStudioPlaceholder .studio-grid {
       display: flex !important;
-      flex-direction: column;
+      flex-direction: column-reverse;
       gap: 0 !important;
       height: 100%;
     }
@@ -711,9 +711,10 @@ function kmsEmbeddedOverrides() {
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid rgba(0,0,0,.08);
-      margin-bottom: 12px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(0,0,0,.08);
+      margin-top: 12px;
+      margin-bottom: 0;
     }
     #kmsStudioPlaceholder .actions button {
       color: #222;
