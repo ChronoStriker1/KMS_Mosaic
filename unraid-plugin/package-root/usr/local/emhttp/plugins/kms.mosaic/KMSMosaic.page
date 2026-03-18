@@ -249,7 +249,8 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     color: var(--color-text-light, #666);
     line-height: 1.4;
   }
-  #kmsUiMount #queueEditorTitle {
+  #kmsUiMount #queueEditorTitle,
+  #kmsQueuePlaceholder #queueEditorTitle {
     display: none !important;
   }
   .kms-panel details {
@@ -1044,9 +1045,6 @@ function kmsEmbeddedOverrides() {
       color: #1f2328 !important;
       border-color: rgba(0,0,0,.12) !important;
     }
-    #kmsUiMount #queueEditorTitle {
-      display: none !important;
-    }
     /* ─── Combined preview styling ─────────────────────────────────────── */
     #kmsPreviewPlaceholder {
       display: flex;
@@ -1432,6 +1430,35 @@ function kmsSetQueuePanelState(detail = {}) {
   }
 }
 
+function kmsSyncQueuePanelFromBoard() {
+  const selectedCard = document.querySelector('#kmsStudioPlaceholder .studio-card.selected');
+  const selectedTitle = selectedCard?.querySelector('.studio-card-title')?.textContent?.trim() || '';
+  const paneType = selectedCard?.classList.contains('video')
+    ? 'mpv'
+    : (selectedCard ? 'terminal' : 'none');
+  kmsSetQueuePanelState({
+    visible: paneType === 'mpv',
+    paneType,
+    roleLabel: selectedTitle,
+    queueTitle: paneType === 'mpv' && selectedTitle ? `${selectedTitle} Queue` : '',
+  });
+}
+
+function kmsInstallWorkspaceHooks() {
+  if (window.__kmsWorkspaceHooksInstalled) return;
+  const originalRenderStudioBoard = window.renderStudioBoard;
+  if (typeof originalRenderStudioBoard === 'function' && !window.__kmsRenderStudioBoardWrapped) {
+    window.renderStudioBoard = function(...args) {
+      const result = originalRenderStudioBoard.apply(this, args);
+      kmsSyncQueuePanelFromBoard();
+      return result;
+    };
+    window.__kmsRenderStudioBoardWrapped = true;
+  }
+  kmsSyncQueuePanelFromBoard();
+  window.__kmsWorkspaceHooksInstalled = true;
+}
+
 function kmsRelocateWorkspaceElements() {
   // Move the live preview element (with WebRTC connection) to the dedicated panel
   const previewEl = document.querySelector('#kmsUiMount .preview-layout');
@@ -1467,25 +1494,14 @@ function kmsRelocateWorkspaceElements() {
   const queueDest = document.getElementById('kmsQueuePlaceholder');
   if (queueDest && queueDest.dataset.kmsQueueRelocated !== 'true') {
     const queueTitle = document.getElementById('queueEditorTitle');
-    const queueTargets = document.getElementById('playlistTargets');
-    const queueEditor = document.getElementById('playlistEditor');
-    const queueBulk = document.getElementById('playlistBulk');
-    const queueActions = document.getElementById('addQueueItemBtn')?.closest('.actions');
-    const queueNote = document.getElementById('queueEditorNote');
-    const queueBlock = queueTitle?.closest('.panel-wide');
+    const queueRoot = queueTitle?.closest('.panel-wide');
     queueDest.innerHTML = '';
-    const queueStructure = document.createElement('div');
-    queueStructure.className = 'queue-structure';
-    if (queueTitle) queueTitle.dataset.kmsQueueRelocated = 'true';
-    if (queueTargets) queueStructure.appendChild(queueTargets);
-    if (queueEditor) queueStructure.appendChild(queueEditor);
-    if (queueBulk) queueStructure.appendChild(queueBulk);
-    if (queueActions) queueStructure.appendChild(queueActions);
-    if (queueNote) queueStructure.appendChild(queueNote);
-    queueDest.appendChild(queueStructure);
+    if (queueRoot) {
+      queueRoot.classList.add('queue-structure');
+      queueDest.appendChild(queueRoot);
+      queueDest.dataset.kmsQueueRelocated = 'true';
+    }
     queueDest.classList.remove('kms-ui-loading');
-    queueDest.dataset.kmsQueueRelocated = 'true';
-    if (queueBlock) queueBlock.hidden = true;
   }
 }
 
@@ -1529,6 +1545,7 @@ async function kmsEnsureEmbeddedLoaded() {
         script.textContent = text;
         mount.appendChild(script);
       });
+      kmsInstallWorkspaceHooks();
       if (typeof window.fillForm === 'function') {
         window.fillForm(statePayload.state, statePayload.config_path, statePayload.raw_config);
       }
@@ -1542,6 +1559,7 @@ async function kmsEnsureEmbeddedLoaded() {
 
       // Move live DOM elements (with bound event handlers) to dedicated panels
       kmsRelocateWorkspaceElements();
+      kmsSyncQueuePanelFromBoard();
 
       kmsEmbeddedLoaded = true;
     } catch (err) {
@@ -1564,11 +1582,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
   document.querySelectorAll('#kmsVisibilityMode input[type="radio"][name="visibility-mode"]').forEach((radio) => {
     radio.addEventListener('change', () => kmsSetVisibilityMode(radio.value));
-  });
-
-  window.kmsSetQueuePanelState = kmsSetQueuePanelState;
-  window.addEventListener('kms-mosaic-selection-change', (event) => {
-    kmsSetQueuePanelState(event.detail || {});
   });
 
   kmsEnsureEmbeddedLoaded();
