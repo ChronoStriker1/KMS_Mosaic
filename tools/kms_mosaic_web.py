@@ -1223,6 +1223,10 @@ HTML = r"""<!doctype html>
       background-size: 28px 28px;
       pointer-events: none;
     }
+    .studio-board.resizing,
+    .studio-board.resizing .studio-card {
+      cursor: inherit;
+    }
     .studio-card {
       position: absolute;
       border-radius: 14px;
@@ -1231,8 +1235,10 @@ HTML = r"""<!doctype html>
       overflow: hidden;
       cursor: pointer;
       transition: border-color 120ms ease, box-shadow 120ms ease;
-      display: grid;
-      align-content: space-between;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 10px;
       padding: 10px;
       user-select: none;
     }
@@ -1258,20 +1264,58 @@ HTML = r"""<!doctype html>
       letter-spacing: 0.12em;
       text-transform: uppercase;
     }
-    .studio-size-inputs {
+    .studio-card-controls {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: auto;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      opacity: 0;
+      transform: translateY(4px);
+      transition: opacity 120ms ease, transform 120ms ease;
+      pointer-events: none;
+    }
+    .studio-card:hover .studio-card-controls,
+    .studio-card.selected .studio-card-controls {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+    .studio-size-group,
+    .studio-action-group {
       display: flex;
       align-items: center;
-      gap: 4px;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .studio-size-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 6px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(0,0,0,0.18);
+      backdrop-filter: blur(6px);
+      font-size: 9px;
+      letter-spacing: 0.1em;
+    }
+    .studio-size-chip[data-active="false"] {
+      opacity: 0.62;
     }
     .studio-size-input {
-      width: 32px;
+      width: 38px;
       padding: 2px 4px;
       border: 1px solid rgba(0,0,0,0.16);
-      border-radius: 3px;
+      border-radius: 999px;
       background: rgba(255,255,255,0.7);
       color: #333;
       font-size: 9px;
       font-family: "Menlo", "Consolas", monospace;
+      text-align: center;
     }
     .studio-size-input:focus {
       outline: none;
@@ -1287,8 +1331,12 @@ HTML = r"""<!doctype html>
       background: rgba(255,255,255,0.08);
       backdrop-filter: blur(6px);
     }
-    .studio-card-body { display: grid; gap: 5px; align-self: end; }
-    .studio-split-actions { display: flex; gap: 5px; margin-top: 6px; flex-wrap: wrap; }
+    .studio-card-body {
+      display: grid;
+      gap: 5px;
+      align-self: end;
+      min-width: 0;
+    }
     .studio-split-btn {
       border: 1px solid rgba(255,255,255,0.14);
       background: rgba(255,255,255,0.10);
@@ -1310,6 +1358,89 @@ HTML = r"""<!doctype html>
     .studio-remove-btn:hover {
       background: rgba(186, 59, 42, 0.20);
       border-color: rgba(186, 59, 42, 0.45);
+    }
+    .studio-resize-handle {
+      position: absolute;
+      border: 0;
+      background: transparent;
+      padding: 0;
+      opacity: 0;
+      transition: opacity 120ms ease;
+      pointer-events: none;
+      z-index: 4;
+    }
+    .studio-card.selected .studio-resize-handle {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .studio-resize-handle::before,
+    .studio-resize-handle::after {
+      content: "";
+      position: absolute;
+      border-radius: 999px;
+      background: rgba(255,240,200,0.84);
+      box-shadow: 0 0 0 1px rgba(26,15,10,0.22);
+    }
+    .studio-resize-handle[data-axis="w"] {
+      top: 10px;
+      bottom: 10px;
+      width: 18px;
+      cursor: ew-resize;
+    }
+    .studio-resize-handle[data-axis="w"]::before {
+      top: 16px;
+      bottom: 16px;
+      left: 8px;
+      width: 2px;
+    }
+    .studio-resize-handle[data-axis="w"][data-edge="left"] { left: -9px; }
+    .studio-resize-handle[data-axis="w"][data-edge="right"] { right: -9px; }
+    .studio-resize-handle[data-axis="h"] {
+      left: 10px;
+      right: 10px;
+      height: 18px;
+      cursor: ns-resize;
+    }
+    .studio-resize-handle[data-axis="h"]::before {
+      left: 16px;
+      right: 16px;
+      top: 8px;
+      height: 2px;
+    }
+    .studio-resize-handle[data-axis="h"][data-edge="top"] { top: -9px; }
+    .studio-resize-handle[data-axis="h"][data-edge="bottom"] { bottom: -9px; }
+    .studio-resize-handle[data-mode="corner"] {
+      width: 20px;
+      height: 20px;
+      cursor: nwse-resize;
+    }
+    .studio-resize-handle[data-mode="corner"]::before {
+      inset: 4px;
+      border: 2px solid rgba(255,240,200,0.84);
+      background: rgba(255,240,200,0.16);
+    }
+    .studio-resize-handle[data-mode="corner"]::after {
+      display: none;
+    }
+    .studio-resize-handle[data-mode="corner"][data-corner="top-left"] {
+      top: -10px;
+      left: -10px;
+      cursor: nwse-resize;
+    }
+    .studio-resize-handle[data-mode="corner"][data-corner="top-right"] {
+      top: -10px;
+      right: -10px;
+      cursor: nesw-resize;
+    }
+    .studio-resize-handle[data-mode="corner"][data-corner="bottom-left"] {
+      bottom: -10px;
+      left: -10px;
+      cursor: nesw-resize;
+    }
+    .studio-resize-handle[data-mode="corner"][data-corner="bottom-right"] {
+      bottom: -10px;
+      right: -10px;
+      cursor: nwse-resize;
     }
     .studio-card-title { font-size: 16px; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em; }
     .studio-card-meta { font-size: 11px; opacity: 0.80; line-height: 1.4; max-width: 26ch; }
@@ -1808,11 +1939,14 @@ HTML = r"""<!doctype html>
     const addQueueItemBtn = document.getElementById("addQueueItemBtn");
     const visibilityModeButtons = document.getElementById("visibilityModeButtons");
     const statusEl = document.getElementById("status");
+    const STUDIO_SIZE_MIN = 5;
+    const STUDIO_SIZE_MAX = 95;
     let state = null;
     let rawConfigText = "";
     let selectedRole = -1;
     let paneTargetRole = 0;
     let draggedStudioRole = null;
+    let studioResizeDrag = null;
     let pendingNewPaneIndexes = new Set();
     let livePreviewTimer = null;
     let livePreviewController = null;
@@ -2535,6 +2669,12 @@ HTML = r"""<!doctype html>
       };
     }
 
+    function clampStudioPercent(value, fallback = 50) {
+      const parsed = Number(value);
+      if (!Number.isFinite(parsed)) return Math.max(STUDIO_SIZE_MIN, Math.min(STUDIO_SIZE_MAX, Math.round(Number(fallback) || 50)));
+      return Math.max(STUDIO_SIZE_MIN, Math.min(STUDIO_SIZE_MAX, Math.round(parsed)));
+    }
+
     function normalizeSplitTreeState() {
       if (!state) return null;
       if (!state.splitTreeModel) {
@@ -2618,7 +2758,7 @@ HTML = r"""<!doctype html>
         rects[node.role] = area;
         return;
       }
-      const pct = Math.max(10, Math.min(90, Number(node.pct || 50)));
+      const pct = clampStudioPercent(node.pct || 50, node.pct || 50);
       if (node.kind === "row") {
         const firstH = area.h * pct / 100;
         splitTreeApplyRects(node.first, { x: area.x, y: area.y, w: area.w, h: firstH }, rects);
@@ -2703,6 +2843,155 @@ HTML = r"""<!doctype html>
       const firstPath = splitTreePathForRole(node.first, role, `${path}0`);
       if (firstPath != null) return firstPath;
       return splitTreePathForRole(node.second, role, `${path}1`);
+    }
+
+    function splitTreeTrailForRole(node, role, path = "", trail = []) {
+      if (!node) return null;
+      if (node.leaf) return node.role === role ? trail : null;
+      const firstTrail = splitTreeTrailForRole(
+        node.first,
+        role,
+        `${path}0`,
+        trail.concat({ node, path, branch: "0", childPath: `${path}0` })
+      );
+      if (firstTrail) return firstTrail;
+      return splitTreeTrailForRole(
+        node.second,
+        role,
+        `${path}1`,
+        trail.concat({ node, path, branch: "1", childPath: `${path}1` })
+      );
+    }
+
+    function splitTreeNearestAncestor(trail, kind) {
+      for (let index = (trail?.length || 0) - 1; index >= 0; index -= 1) {
+        if (trail[index]?.node?.kind === kind) return trail[index];
+      }
+      return null;
+    }
+
+    function splitTreeCollectAreas(node, area, out, path = "") {
+      if (!node) return;
+      out[path] = { x: area.x, y: area.y, w: area.w, h: area.h };
+      if (node.leaf) return;
+      const pct = clampStudioPercent(node.pct || 50, node.pct || 50);
+      if (node.kind === "row") {
+        const firstH = area.h * pct / 100;
+        splitTreeCollectAreas(node.first, { x: area.x, y: area.y, w: area.w, h: firstH }, out, `${path}0`);
+        splitTreeCollectAreas(node.second, { x: area.x, y: area.y + firstH, w: area.w, h: area.h - firstH }, out, `${path}1`);
+      } else {
+        const firstW = area.w * pct / 100;
+        splitTreeCollectAreas(node.first, { x: area.x, y: area.y, w: firstW, h: area.h }, out, `${path}0`);
+        splitTreeCollectAreas(node.second, { x: area.x + firstW, y: area.y, w: area.w - firstW, h: area.h }, out, `${path}1`);
+      }
+    }
+
+    function splitTreeUpdateNodePct(node, pct) {
+      if (!node || node.leaf) return false;
+      node.pct = clampStudioPercent(pct, node.pct || 50);
+      return true;
+    }
+
+    function rectAxisLength(rect, axis) {
+      return axis === "h" ? Number(rect?.h || 0) : Number(rect?.w || 0);
+    }
+
+    function effectiveStudioSizeValue(value) {
+      return clampStudioPercent(value, value);
+    }
+
+    function decorateSplitTreeAncestor(entry, areaMap) {
+      if (!entry) return null;
+      const area = areaMap?.[entry.path];
+      const branchArea = areaMap?.[entry.childPath];
+      if (!area || !branchArea) return null;
+      const displayArea = transformStudioPaneRect(area);
+      const displayBranch = transformStudioPaneRect(branchArea);
+      let edge = "right";
+      if (entry.node.kind === "col") {
+        const leftGap = Math.abs(displayBranch.x - displayArea.x);
+        const rightGap = Math.abs((displayArea.x + displayArea.w) - (displayBranch.x + displayBranch.w));
+        edge = leftGap > rightGap ? "left" : "right";
+      } else {
+        const topGap = Math.abs(displayBranch.y - displayArea.y);
+        const bottomGap = Math.abs((displayArea.y + displayArea.h) - (displayBranch.y + displayBranch.h));
+        edge = topGap > bottomGap ? "top" : "bottom";
+      }
+      return {
+        ...entry,
+        area,
+        branchArea,
+        displayArea,
+        displayBranch,
+        edge,
+      };
+    }
+
+    function splitTreeResizeContext(nextState, role) {
+      if (!nextState || role < 0) return null;
+      const splitTree = nextState === state ? ensureSplitTreeModel() : parseSplitTreeSpec(nextState.split_tree || "");
+      if (!splitTree) return null;
+      const trail = splitTreeTrailForRole(splitTree, role);
+      if (!trail) return null;
+      const areaMap = {};
+      splitTreeCollectAreas(splitTree, { x: 0, y: 0, w: 100, h: 100 }, areaMap);
+      const rects = computeStudioRects(nextState);
+      const rect = rects[role];
+      if (!rect) return null;
+      return {
+        splitTree,
+        trail,
+        areaMap,
+        rect,
+        displayRect: transformStudioPaneRect(rect),
+        colAncestor: decorateSplitTreeAncestor(splitTreeNearestAncestor(trail, "col"), areaMap),
+        rowAncestor: decorateSplitTreeAncestor(splitTreeNearestAncestor(trail, "row"), areaMap),
+      };
+    }
+
+    function splitTreeAncestorForAxis(ctx, axis) {
+      return axis === "h" ? ctx?.rowAncestor : ctx?.colAncestor;
+    }
+
+    function currentStudioInputValue(role, axis) {
+      const ctx = splitTreeResizeContext(state, role);
+      return effectiveStudioSizeValue(rectAxisLength(ctx?.rect, axis));
+    }
+
+    function resizePaneAxis(role, axis, requestedSize) {
+      if (!state) return { ok: false, value: effectiveStudioSizeValue(requestedSize) };
+      const tree = ensureSplitTreeModel();
+      if (!tree) return { ok: false, value: currentStudioInputValue(role, axis) };
+      const ctx = splitTreeResizeContext(state, role);
+      const ancestor = splitTreeAncestorForAxis(ctx, axis);
+      const fallbackValue = effectiveStudioSizeValue(rectAxisLength(ctx?.rect, axis));
+      if (!Number.isFinite(Number(requestedSize))) {
+        return { ok: false, value: fallbackValue, reason: "invalid" };
+      }
+      if (!ctx || !ancestor) return { ok: false, value: fallbackValue, reason: "inapplicable" };
+      const areaLength = rectAxisLength(ancestor.area, axis);
+      const branchLength = rectAxisLength(ancestor.branchArea, axis);
+      const roleLength = rectAxisLength(ctx.rect, axis);
+      if (!(areaLength > 0) || !(branchLength > 0) || !(roleLength > 0)) {
+        return { ok: false, value: fallbackValue, reason: "geometry" };
+      }
+      const coverage = roleLength / branchLength;
+      if (!(coverage > 0)) return { ok: false, value: fallbackValue, reason: "coverage" };
+      const desiredRoleLength = clampStudioPercent(requestedSize, roleLength);
+      const minBranchLength = Math.max(STUDIO_SIZE_MIN, STUDIO_SIZE_MIN / coverage);
+      const maxBranchLength = Math.max(minBranchLength, areaLength - STUDIO_SIZE_MIN);
+      const desiredBranchLength = Math.max(
+        minBranchLength,
+        Math.min(maxBranchLength, desiredRoleLength / coverage)
+      );
+      const desiredBranchPct = desiredBranchLength / areaLength * 100;
+      const nextPct = ancestor.branch === "0" ? desiredBranchPct : 100 - desiredBranchPct;
+      if (!splitTreeUpdateNodePct(ancestor.node, nextPct)) {
+        return { ok: false, value: fallbackValue, reason: "update" };
+      }
+      state.splitTreeModel = tree;
+      syncSplitTreeState();
+      return { ok: true, value: currentStudioInputValue(role, axis) };
     }
 
     function paneIdentityForRole(nextState, role) {
@@ -3010,6 +3299,102 @@ HTML = r"""<!doctype html>
       studioBoard.style.aspectRatio = (total === 90 || total === 270) ? "9 / 16" : "16 / 9";
     }
 
+    function studioResizeCursor(mode, corner = "") {
+      if (mode === "corner") {
+        return corner === "top-right" || corner === "bottom-left" ? "nesw-resize" : "nwse-resize";
+      }
+      return mode === "h" ? "ns-resize" : "ew-resize";
+    }
+
+    function studioResizeCornerName(ctx) {
+      if (!ctx?.colAncestor || !ctx?.rowAncestor) return null;
+      return `${ctx.rowAncestor.edge}-${ctx.colAncestor.edge}`;
+    }
+
+    function studioResizeHandleMarkup(ctx) {
+      if (!ctx) return "";
+      const handles = [];
+      if (ctx.colAncestor) {
+        handles.push(`<button type="button" class="studio-resize-handle" data-studio-resize="w" data-axis="w" data-edge="${ctx.colAncestor.edge}" aria-label="Resize pane width"></button>`);
+      }
+      if (ctx.rowAncestor) {
+        handles.push(`<button type="button" class="studio-resize-handle" data-studio-resize="h" data-axis="h" data-edge="${ctx.rowAncestor.edge}" aria-label="Resize pane height"></button>`);
+      }
+      const corner = studioResizeCornerName(ctx);
+      if (corner) {
+        handles.push(`<button type="button" class="studio-resize-handle" data-studio-resize="corner" data-mode="corner" data-corner="${corner}" aria-label="Resize pane width and height"></button>`);
+      }
+      return handles.join("");
+    }
+
+    function studioBoardPointerPosition(event) {
+      const bounds = studioBoard?.getBoundingClientRect();
+      if (!bounds?.width || !bounds?.height) return null;
+      return {
+        x: Math.max(0, Math.min(100, ((event.clientX - bounds.left) / bounds.width) * 100)),
+        y: Math.max(0, Math.min(100, ((event.clientY - bounds.top) / bounds.height) * 100)),
+      };
+    }
+
+    function desiredStudioSizeFromPointer(displayRect, axis, edge, pointer) {
+      if (!displayRect || !pointer) return null;
+      if (axis === "w") {
+        return edge === "left"
+          ? (displayRect.x + displayRect.w) - pointer.x
+          : pointer.x - displayRect.x;
+      }
+      return edge === "top"
+        ? (displayRect.y + displayRect.h) - pointer.y
+        : pointer.y - displayRect.y;
+    }
+
+    function applyStudioResizeDrag(event) {
+      if (!studioResizeDrag) return;
+      const pointer = studioBoardPointerPosition(event);
+      if (!pointer) return;
+      const ctx = splitTreeResizeContext(state, studioResizeDrag.role);
+      if (!ctx) return;
+      let changed = false;
+      if (studioResizeDrag.mode === "w" || studioResizeDrag.mode === "corner") {
+        const desiredWidth = desiredStudioSizeFromPointer(ctx.displayRect, "w", ctx.colAncestor?.edge, pointer);
+        if (desiredWidth != null && resizePaneAxis(studioResizeDrag.role, "w", desiredWidth).ok) changed = true;
+      }
+      if (studioResizeDrag.mode === "h" || studioResizeDrag.mode === "corner") {
+        const latestCtx = splitTreeResizeContext(state, studioResizeDrag.role) || ctx;
+        const desiredHeight = desiredStudioSizeFromPointer(latestCtx.displayRect, "h", latestCtx.rowAncestor?.edge, pointer);
+        if (desiredHeight != null && resizePaneAxis(studioResizeDrag.role, "h", desiredHeight).ok) changed = true;
+      }
+      if (changed) renderStudioBoard();
+    }
+
+    function stopStudioResizeDrag() {
+      if (!studioResizeDrag) return;
+      studioResizeDrag = null;
+      studioBoard?.classList.remove("resizing");
+      if (studioBoard) studioBoard.style.cursor = "";
+      window.removeEventListener("pointermove", applyStudioResizeDrag);
+      window.removeEventListener("pointerup", stopStudioResizeDrag);
+      window.removeEventListener("pointercancel", stopStudioResizeDrag);
+    }
+
+    function startStudioResizeDrag(event, role, mode) {
+      if (!state) return;
+      const ctx = splitTreeResizeContext(state, role);
+      if (!ctx) return;
+      if ((mode === "w" && !ctx.colAncestor) || (mode === "h" && !ctx.rowAncestor) || (mode === "corner" && !studioResizeCornerName(ctx))) {
+        return;
+      }
+      selectRole(role);
+      studioResizeDrag = { role, mode };
+      const corner = studioResizeCornerName(ctx) || "";
+      studioBoard?.classList.add("resizing");
+      if (studioBoard) studioBoard.style.cursor = studioResizeCursor(mode, corner);
+      window.addEventListener("pointermove", applyStudioResizeDrag);
+      window.addEventListener("pointerup", stopStudioResizeDrag);
+      window.addEventListener("pointercancel", stopStudioResizeDrag);
+      applyStudioResizeDrag(event);
+    }
+
     function renderLayoutSuggestions() {
       if (!state) return;
       layoutSuggestions.innerHTML = "";
@@ -3037,12 +3422,20 @@ HTML = r"""<!doctype html>
       ensureSelectedRole();
       applyStudioGeometry();
       const rects = computeStudioRects(state);
+      studioBoard.classList.toggle("resizing", !!studioResizeDrag);
       studioBoard.innerHTML = "";
       rects.forEach((rect, role) => {
         const displayRect = transformStudioPaneRect(rect);
-        const card = document.createElement("button");
-        card.type = "button";
+        const resizeCtx = splitTreeResizeContext(state, role);
+        const widthValue = effectiveStudioSizeValue(rect.w);
+        const heightValue = effectiveStudioSizeValue(rect.h);
+        const widthActive = !!resizeCtx?.colAncestor;
+        const heightActive = !!resizeCtx?.rowAncestor;
+        const handleMarkup = selectedRole === role ? studioResizeHandleMarkup(resizeCtx) : "";
+        const card = document.createElement("div");
         card.draggable = true;
+        card.tabIndex = 0;
+        card.setAttribute("role", "button");
         card.className = `studio-card ${roleType(role)}${selectedRole === role ? " selected" : ""}`;
         card.style.left = `${displayRect.x}%`;
         card.style.top = `${displayRect.y}%`;
@@ -3054,27 +3447,42 @@ HTML = r"""<!doctype html>
           : (paneType === "mpv"
               ? `${(state.pane_video_paths?.[role - 1] || []).length} queued video${(state.pane_video_paths?.[role - 1] || []).length === 1 ? "" : "s"}`
               : (state.pane_commands?.[role - 1] || "No command"));
-        const splitActions = `<div class="studio-split-actions">
-               <button type="button" class="studio-split-btn" data-studio-split="col">Split V</button>
-               <button type="button" class="studio-split-btn" data-studio-split="row">Split H</button>
-               <button type="button" class="studio-remove-btn" data-studio-remove="true">Remove</button>
-             </div>`;
         card.innerHTML = `
           <div class="studio-top">
             <span class="studio-tag">${paneType === "mpv" ? "mpv" : "shell"}</span>
-            <div class="studio-size-inputs">
-              <input type="number" class="studio-size-input" value="${Math.round(rect.w)}" min="5" max="95" data-role="${role}" data-axis="w" step="1">
-              <span>x</span>
-              <input type="number" class="studio-size-input" value="${Math.round(rect.h)}" min="5" max="95" data-role="${role}" data-axis="h" step="1">
-            </div>
           </div>
           <div class="studio-card-body">
             <div class="studio-card-title">${roleTitle(role)}</div>
             <div class="studio-card-meta">${summary}</div>
-            ${splitActions}
           </div>
+          <div class="studio-card-controls">
+            <div class="studio-size-group">
+              <label class="studio-size-chip" data-active="${widthActive ? "true" : "false"}" title="${widthActive ? "Adjusts the nearest vertical split." : "This pane has no vertical split ancestor to resize."}">
+                <span>W</span>
+                <input type="number" class="studio-size-input" value="${widthValue}" min="${STUDIO_SIZE_MIN}" max="${STUDIO_SIZE_MAX}" data-role="${role}" data-axis="w" step="1">
+              </label>
+              <label class="studio-size-chip" data-active="${heightActive ? "true" : "false"}" title="${heightActive ? "Adjusts the nearest horizontal split." : "This pane has no horizontal split ancestor to resize."}">
+                <span>H</span>
+                <input type="number" class="studio-size-input" value="${heightValue}" min="${STUDIO_SIZE_MIN}" max="${STUDIO_SIZE_MAX}" data-role="${role}" data-axis="h" step="1">
+              </label>
+            </div>
+            <div class="studio-action-group">
+              <button type="button" class="studio-split-btn" data-studio-split="col">Split V</button>
+              <button type="button" class="studio-split-btn" data-studio-split="row">Split H</button>
+              <button type="button" class="studio-remove-btn" data-studio-remove="true">Remove</button>
+            </div>
+          </div>
+          ${handleMarkup}
         `;
         card.addEventListener("click", () => {
+          selectRole(role);
+          renderPlaylistEditor();
+          renderStudioBoard();
+          renderStudioInspector();
+        });
+        card.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
           selectRole(role);
           renderPlaylistEditor();
           renderStudioBoard();
@@ -3159,11 +3567,50 @@ HTML = r"""<!doctype html>
           input.addEventListener("change", (event) => {
             event.preventDefault();
             event.stopPropagation();
-            const newValue = Math.min(95, Math.max(5, parseInt(input.value) || 50));
-            input.value = newValue;
-            setStatus("Note: Drag pane borders to resize (coming soon) or use split actions.", false);
+            selectRole(role);
+            const axis = input.dataset.axis === "h" ? "h" : "w";
+            const parsed = parseInt(input.value, 10);
+            const result = resizePaneAxis(role, axis, parsed);
+            if (!result.ok) {
+              input.value = String(result.value);
+              renderPlaylistEditor();
+              renderStudioBoard();
+              renderStudioInspector();
+              setStatus(
+                result.reason === "invalid"
+                  ? `Use an integer from ${STUDIO_SIZE_MIN} to ${STUDIO_SIZE_MAX}.`
+                  : (axis === "w"
+                      ? `${roleTitle(role)} width follows the current split tree. Choose a pane edge with a vertical split to resize it.`
+                      : `${roleTitle(role)} height follows the current split tree. Choose a pane edge with a horizontal split to resize it.`),
+                true
+              );
+              return;
+            }
+            renderPlaylistEditor();
+            renderStudioBoard();
+            renderStudioInspector();
+            setStatus(
+              axis === "w"
+                ? `Updated ${roleTitle(role)} width to ${result.value}%.`
+                : `Updated ${roleTitle(role)} height to ${result.value}%.`,
+              false
+            );
           });
           input.addEventListener("click", (event) => {
+            event.stopPropagation();
+          });
+          input.addEventListener("input", (event) => {
+            event.stopPropagation();
+          });
+        });
+        card.querySelectorAll("[data-studio-resize]").forEach((handle) => {
+          handle.addEventListener("pointerdown", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            startStudioResizeDrag(event, role, handle.dataset.studioResize || "w");
+          });
+          handle.addEventListener("click", (event) => {
+            event.preventDefault();
             event.stopPropagation();
           });
         });
