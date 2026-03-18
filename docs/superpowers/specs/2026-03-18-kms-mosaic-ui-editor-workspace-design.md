@@ -61,9 +61,9 @@ These panels are peers in the same workspace region instead of a combined `Live 
 
 ### Responsive Behavior
 
-- At wide desktop widths, all three panels may sit in one row.
-- At medium widths, `Live View` and `Pane Layout` remain side by side and the queue panel drops below first.
-- At narrow/mobile widths, panels stack vertically in this order:
+- At widths above `1200px`, all three panels may sit in one row.
+- At widths from `769px` through `1200px`, `Live View` and `Pane Layout` remain side by side and the queue panel drops below first.
+- At widths `768px` and below, panels stack vertically in this order:
   - `Live View`
   - `Pane Layout`
   - `Selected Pane Queue` when applicable
@@ -96,9 +96,27 @@ Each pane receives visible drag affordances on shared borders and corners. Dragg
 
 The width x height controls remain available as precision inputs, but they become a secondary workflow rather than the main one.
 
+The numeric contract for those controls is:
+
+- values are integer percentages of the current board extent, not pixels
+- displayed values stay in the existing `5` to `95` range
+- the width field represents the selected pane's effective width percentage after applying the current split tree
+- the height field represents the selected pane's effective height percentage after applying the current split tree
+
 Both interactions must write through the same underlying layout update path. The implementation should not create one code path for border dragging and another separate geometry model for numeric edits.
 
 Because the current layout system is split-tree driven, resize behavior should modify the effective split-tree geometry rather than introducing a second ad hoc coordinate model.
+
+The persistence contract is:
+
+- border dragging mutates the nearest enclosing split-tree ancestor that actually controls the dragged edge
+- dragging a vertical divider updates the nearest enclosing `col` node's `pct`
+- dragging a horizontal divider updates the nearest enclosing `row` node's `pct`
+- width-field edits update that same nearest enclosing `col` ancestor for the selected pane
+- height-field edits update that same nearest enclosing `row` ancestor for the selected pane
+- after each edit, the editor reserializes `state.splitTreeModel` back into `state.split_tree`
+
+Corner dragging is only enabled when the selected pane is bounded by both an adjustable `row` split and an adjustable `col` split. In that case, the interaction updates both split ancestors together. If the pane has only one adjustable split ancestor, the UI falls back to edge dragging only instead of inventing freeform rectangle resizing.
 
 ### Minimum Size Rules
 
