@@ -43,7 +43,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     display: grid !important;
     grid-template-columns: 1fr 1fr !important;
     gap: 0 !important;
-    padding: 0 !important;
+    padding: 12px !important;
     align-items: stretch !important;
     align-content: stretch !important;
     height: 600px !important;
@@ -58,11 +58,16 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     width: 100% !important;
     display: flex !important;
     flex-direction: column !important;
-    align-items: center !important;
-    justify-content: center !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+    overflow: hidden !important;
   }
   .kms-preview-frame {
     border-right: 1px solid var(--box_border, rgba(0,0,0,.12));
+    margin-right: 6px;
+  }
+  .kms-studio-frame {
+    margin-left: 6px;
   }
   @media (max-width: 1200px) {
     .kms-live-studio {
