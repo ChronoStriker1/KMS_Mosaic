@@ -348,39 +348,29 @@
       <div id="test-8-4-result" style="display: none;" class="test-result"></div>
     </div>
 
-    <!-- Test 9: Workspace-Specific Verification -->
+    <!-- Test 9: Task 1 Manual Verification -->
     <div class="test-group">
-      <div class="test-group-title">9. Workspace Verification</div>
+      <div class="test-group-title">9. Task 1 Manual Verification</div>
       <div class="test-item">
-        <div class="test-name">Above 1200px, Live View, Pane Layout, and Selected Pane can share one row</div>
+        <div class="test-name">Bottom Configuration Editor panel is removed from the page shell</div>
         <div id="test-9-1" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-1-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">Between 769px and 1200px, Selected Pane drops below while Live View and Pane Layout stay side by side</div>
+        <div class="test-name">Visibility controls sit above Apply Settings in Service Status & Controls</div>
         <div id="test-9-2" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-2-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">Mobile stacking at 768px and below keeps Live View, Pane Layout, then Selected Pane</div>
+        <div class="test-name">The immediate visibility toggle uses the No Terminal label</div>
         <div id="test-9-3" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-3-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">Selected Pane stays visible with an empty state when no pane is selected</div>
+        <div class="test-name">Queue controls appear only for the selected mpv pane and stay hidden for terminal panes</div>
         <div id="test-9-4" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-9-4-result" style="display: none;" class="test-result"></div>
-      <div class="test-item">
-        <div class="test-name">Selecting an mpv pane shows inline queue editing and terminal panes omit the queue section</div>
-        <div id="test-9-5" class="test-status status-pending">PENDING</div>
-      </div>
-      <div id="test-9-5-result" style="display: none;" class="test-result"></div>
-      <div class="test-item">
-        <div class="test-name">Layout suggestions and pane target list are gone; queue rows and resize controls still behave correctly</div>
-        <div id="test-9-6" class="test-status status-pending">PENDING</div>
-      </div>
-      <div id="test-9-6-result" style="display: none;" class="test-result"></div>
     </div>
 
     <!-- Summary and Console -->
@@ -716,22 +706,20 @@
     }
 
     function test9WorkspaceVerification() {
-      log('Test 9: Workspace verification checkpoints...', 'info');
+      log('Test 9: Task 1 manual verification checkpoints...', 'info');
 
       const manualChecks = [
-        ['test-9-1', 'Verify on the installed Unraid page that Live View, Pane Layout, and Selected Pane can share one row above 1200px.'],
-        ['test-9-2', 'Verify on the installed Unraid page that Selected Pane drops below first between 769px and 1200px while Live View and Pane Layout stay side by side.'],
-        ['test-9-3', 'Verify on the installed Unraid page that mobile stacking at 768px and below keeps Live View, Pane Layout, then Selected Pane.'],
-        ['test-9-4', 'Verify on the installed Unraid page that Selected Pane stays visible with a compact empty state when no pane is selected.'],
-        ['test-9-5', 'Verify on the installed Unraid page that queue controls appear only for the selected mpv pane, and terminal panes keep the queue section hidden.'],
-        ['test-9-6', 'Verify on the installed Unraid page that layout suggestions and pane target buttons are gone, queue thumbnails still fill row height with the index inside the thumbnail region, and border dragging plus numeric size fields mutate the same pane geometry.'],
+        ['test-9-1', 'Verify on the installed Unraid page that the bottom Configuration Editor panel is gone and only the hidden embedded mount remains.'],
+        ['test-9-2', 'Verify on the installed Unraid page that Neither, No Video, and No Terminal sit in Service Status & Controls directly above Apply Settings.'],
+        ['test-9-3', 'Verify on the installed Unraid page that the immediate visibility toggle is labeled No Terminal, not No Panes.'],
+        ['test-9-4', 'Verify on the installed Unraid page that queue controls appear only for the selected mpv pane and remain hidden for terminal panes.'],
       ];
 
       manualChecks.forEach(([id, message]) => {
         setTestResult(id, 'warn', message);
       });
 
-      log('✓ Workspace verification checklist marked for manual Unraid-page validation', 'success');
+      log('✓ Task 1 manual verification checklist marked for live Unraid-page validation', 'success');
     }
 
     function getEventListenerCount() {
