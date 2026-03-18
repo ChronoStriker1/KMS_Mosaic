@@ -2717,16 +2717,6 @@ HTML = r"""<!doctype html>
     function restoreSelectedRole(nextState, snapshot) {
       if (!nextState || !snapshot?.identity) return -1;
       if (snapshot.identity.kind === "main") return 0;
-      const splitTree = parseSplitTreeSpec(nextState.split_tree || "");
-      if (splitTree && snapshot.path != null) {
-        const nodeAtPath = splitTreeNodeAtPath(splitTree, snapshot.path);
-        if (nodeAtPath?.leaf) {
-          const pathRole = Number(nodeAtPath.role);
-          if (paneIdentityEquals(paneIdentityForRole(nextState, pathRole), snapshot.identity)) {
-            return pathRole;
-          }
-        }
-      }
       const matchingRoles = [];
       for (let role = 1; role <= Number(nextState.pane_count || 0); role += 1) {
         if (paneIdentityEquals(paneIdentityForRole(nextState, role), snapshot.identity)) {
