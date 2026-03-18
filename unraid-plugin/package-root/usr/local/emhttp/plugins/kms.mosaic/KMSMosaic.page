@@ -40,14 +40,14 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     display: none !important;
   }
   .kms-live-studio {
-    display: grid !important;
-    grid-template-columns: 1fr 1fr !important;
-    gap: 0 !important;
-    padding: 12px !important;
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 2% !important;
+    padding: 0 !important;
     align-items: stretch !important;
-    align-content: stretch !important;
-    height: 600px !important;
-    min-height: 600px !important;
+    justify-content: space-between !important;
+    min-height: 60vh !important;
+    height: auto !important;
   }
   .kms-preview-frame,
   .kms-studio-frame {
@@ -71,11 +71,11 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   }
   @media (max-width: 1200px) {
     .kms-live-studio {
-      grid-template-columns: 1fr;
+      flex-direction: column !important;
     }
     .kms-preview-frame {
-      border-right: none;
-      border-bottom: 1px solid var(--box_border, rgba(0,0,0,.12));
+      border: none !important;
+      margin: 0 !important;
     }
   }
   .kms-panel {
