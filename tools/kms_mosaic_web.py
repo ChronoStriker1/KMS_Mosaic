@@ -1410,7 +1410,7 @@ HTML = r"""<!doctype html>
       display: grid;
       grid-template-columns: minmax(0, 170px) minmax(0, 1fr);
       gap: 8px 10px;
-      align-items: stretch;
+      align-items: start;
     }
     .playlist-item.portrait-thumb .playlist-row {
       grid-template-columns: minmax(0, 148px) minmax(0, 1fr);
@@ -1418,7 +1418,7 @@ HTML = r"""<!doctype html>
     .playlist-media-cell {
       width: auto;
       display: flex;
-      align-self: stretch;
+      align-self: start;
       min-width: 0;
     }
     .playlist-duration {
@@ -1439,7 +1439,7 @@ HTML = r"""<!doctype html>
     }
     .playlist-duration:empty { display: none; }
     .playlist-thumb {
-      height: 100%;
+      height: auto;
       width: 100%;
       min-height: 88px;
       border-radius: 9px;
@@ -1633,6 +1633,7 @@ HTML = r"""<!doctype html>
       .queue-editor-head { flex-direction: column; align-items: stretch; }
       .queue-editor-target { white-space: normal; }
       .playlist-row { grid-template-columns: auto 1fr; }
+      .playlist-item.portrait-thumb .playlist-row { grid-template-columns: auto 1fr; }
       .playlist-media-cell, .playlist-thumb { width: 100%; }
     }
   </style>
