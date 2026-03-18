@@ -251,6 +251,16 @@
         <div id="test-3-2" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-3-2-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
+        <div class="test-name">Selected Pane stays visible with the compact empty state when nothing is selected</div>
+        <div id="test-3-3" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-3-3-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
+        <div class="test-name">Clicking a pane preserves preview continuity and only updates selected-pane state</div>
+        <div id="test-3-4" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-3-4-result" style="display: none;" class="test-result"></div>
     </div>
 
     <!-- Test 4: Responsive Layout -->
@@ -555,11 +565,11 @@
       log('✓ Service → Layout → Save flow test complete', 'success');
     }
 
-    function test3CrossSectionInteraction() {
+    async function test3CrossSectionInteraction() {
       log('Testing: Cross-section interaction...', 'info');
 
       if (!pluginPageMounted()) {
-        ['test-3-1', 'test-3-2'].forEach((id) => {
+        ['test-3-1', 'test-3-2', 'test-3-3', 'test-3-4'].forEach((id) => {
           setTestResult(id, 'skip', pluginPageSkipMessage);
         });
         log('Plugin page shell is not mounted in this harness; cross-section checks were skipped.', 'warn');
@@ -583,6 +593,52 @@
       const hasContent = statusEl && statusEl.textContent.trim().length > 0;
       setTestResult('test-3-2', hasContent ? 'pass' : 'fail',
         hasContent ? 'Status displays: ' + statusEl.textContent.substring(0, 50) : 'No status content');
+
+      // Test 3.3: Selected Pane keeps the compact empty state when no pane is selected
+      const selectedPanePanel = document.getElementById('kmsSelectedPanePanel');
+      const selectedPanePlaceholder = document.getElementById('kmsSelectedPanePlaceholder');
+      const selectedPaneTitle = document.getElementById('kmsSelectedPaneTitle');
+      const selectedPaneSummary = document.getElementById('kmsSelectedPaneSummary');
+      window.dispatchEvent(new CustomEvent('kms:selected-pane-state', {
+        detail: {
+          selectedRole: -1,
+          paneType: 'none',
+          roleLabel: '',
+          title: 'Selected Pane',
+          summary: 'Select a pane on the board to edit it.',
+          hasSelection: false,
+        }
+      }));
+      const emptyStateVisible = !!selectedPanePanel && selectedPanePanel.hidden === false &&
+        !!selectedPanePlaceholder && selectedPanePlaceholder.classList.contains('is-empty') &&
+        !!selectedPaneSummary && selectedPaneSummary.textContent.trim() === 'Select a pane on the board to edit it.' &&
+        !!selectedPaneTitle && selectedPaneTitle.textContent.trim() === 'Selected Pane';
+      setTestResult('test-3-3', emptyStateVisible ? 'pass' : 'fail',
+        emptyStateVisible ? 'Selected Pane stays visible with the compact empty prompt' : 'Selected Pane is hidden or not using the compact empty state');
+
+      // Test 3.4: Pane selection preserves preview continuity and only updates selection state
+      const previewNode = document.querySelector('#kmsPreviewPlaceholder .preview-layout');
+      const cards = Array.from(document.querySelectorAll('#kmsStudioPlaceholder .studio-card'));
+      const currentTitle = selectedPaneTitle ? selectedPaneTitle.textContent.trim() : '';
+      const studioCard = cards.find((card) => {
+        const cardTitle = card.querySelector('.studio-card-title')?.textContent.trim() || '';
+        return cardTitle && cardTitle !== currentTitle;
+      }) || cards[0];
+      if (!previewNode || !studioCard) {
+        setTestResult('test-3-4', 'skip', 'No preview or studio card is available in this harness');
+      } else {
+        const selectedTitleBefore = selectedPaneTitle ? selectedPaneTitle.textContent.trim() : '';
+        studioCard.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const previewNodeAfter = document.querySelector('#kmsPreviewPlaceholder .preview-layout');
+        const selectedTitleAfter = selectedPaneTitle ? selectedPaneTitle.textContent.trim() : '';
+        const cardTitle = studioCard.querySelector('.studio-card-title')?.textContent.trim() || '';
+        const previewStable = previewNodeAfter === previewNode;
+        const selectionUpdated = selectedTitleAfter.length > 0 && selectedTitleAfter !== selectedTitleBefore && selectedTitleAfter === cardTitle;
+        const selectionOk = previewStable && selectionUpdated;
+        setTestResult('test-3-4', selectionOk ? 'pass' : 'fail',
+          selectionOk ? 'Pane click left the preview node intact and updated the selected pane only' : 'Pane click replaced the preview node or did not update selected-pane state');
+      }
 
       log('✓ Cross-section interaction test complete', 'success');
     }
@@ -803,7 +859,7 @@
 
       test1FullPageLoad();
       test2ServiceLayoutFlow();
-      test3CrossSectionInteraction();
+      await test3CrossSectionInteraction();
       test4ResponsiveLayout();
       test5PerformanceMetrics();
       await test6StabilityTest();

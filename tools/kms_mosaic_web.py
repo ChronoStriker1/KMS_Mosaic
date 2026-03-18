@@ -1237,8 +1237,8 @@ HTML = r"""<!doctype html>
       transition: border-color 120ms ease, box-shadow 120ms ease;
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
-      gap: 10px;
+      justify-content: flex-start;
+      gap: 8px;
       padding: 10px;
       user-select: none;
     }
@@ -1284,8 +1284,7 @@ HTML = r"""<!doctype html>
       transform: translateY(0);
       pointer-events: auto;
     }
-    .studio-size-group,
-    .studio-action-group {
+    .studio-size-group {
       display: flex;
       align-items: center;
       gap: 6px;
@@ -1338,7 +1337,6 @@ HTML = r"""<!doctype html>
     .studio-card-body {
       display: grid;
       gap: 5px;
-      align-self: end;
       min-width: 0;
     }
     .studio-split-btn {
@@ -3170,7 +3168,7 @@ HTML = r"""<!doctype html>
         const heightValue = effectiveStudioSizeValue(rect.h);
         const widthActive = !!resizeCtx?.colAncestor;
         const heightActive = !!resizeCtx?.rowAncestor;
-        const handleMarkup = selectedRole === role ? studioResizeHandleMarkup(resizeCtx) : "";
+        const handleMarkup = studioResizeHandleMarkup(resizeCtx);
         const card = document.createElement("div");
         card.draggable = true;
         card.tabIndex = 0;
@@ -3181,20 +3179,13 @@ HTML = r"""<!doctype html>
         card.style.width = `${displayRect.w}%`;
         card.style.height = `${displayRect.h}%`;
         const paneType = role === 0 ? "mpv" : (state.pane_types?.[role - 1] || "terminal");
-        const summary = role === 0
-          ? `${(state.video_paths || []).length} queued video${(state.video_paths || []).length === 1 ? "" : "s"}`
-          : (paneType === "mpv"
-              ? `${(state.pane_video_paths?.[role - 1] || []).length} queued video${(state.pane_video_paths?.[role - 1] || []).length === 1 ? "" : "s"}`
-              : (state.pane_commands?.[role - 1] || "No command"));
+        card.dataset.studioRole = String(role);
         card.innerHTML = `
           <div class="studio-top">
+            <span class="studio-card-title">${roleTitle(role)}</span>
             <span class="studio-tag">${paneType === "mpv" ? "mpv" : "shell"}</span>
           </div>
           <div class="studio-card-body">
-            <div class="studio-card-title">${roleTitle(role)}</div>
-            <div class="studio-card-meta">${summary}</div>
-          </div>
-          <div class="studio-card-controls">
             <div class="studio-size-group">
               <label class="studio-size-chip" data-active="${widthActive ? "true" : "false"}" title="${widthActive ? "Adjusts the nearest vertical split." : "This pane has no vertical split ancestor to resize."}">
                 <span>W</span>
@@ -3205,27 +3196,20 @@ HTML = r"""<!doctype html>
                 <input type="number" class="studio-size-input" value="${heightValue}" min="${STUDIO_SIZE_MIN}" max="${STUDIO_SIZE_MAX}" data-role="${role}" data-axis="h" step="1" ${heightActive ? "" : "disabled"}>
               </label>
             </div>
-            <div class="studio-action-group">
-              <button type="button" class="studio-split-btn" data-studio-split="col">Split V</button>
-              <button type="button" class="studio-split-btn" data-studio-split="row">Split H</button>
-              <button type="button" class="studio-remove-btn" data-studio-remove="true">Remove</button>
-            </div>
           </div>
           ${handleMarkup}
         `;
         card.addEventListener("click", () => {
           selectRole(role);
-          renderPlaylistEditor();
-          renderStudioBoard();
           renderStudioInspector();
+          syncStudioBoardSelectionState();
         });
         card.addEventListener("keydown", (event) => {
           if (event.key !== "Enter" && event.key !== " ") return;
           event.preventDefault();
           selectRole(role);
-          renderPlaylistEditor();
-          renderStudioBoard();
           renderStudioInspector();
+          syncStudioBoardSelectionState();
         });
         card.addEventListener("dragstart", (event) => {
           draggedStudioRole = role;
@@ -3269,38 +3253,6 @@ HTML = r"""<!doctype html>
           renderStudioBoard();
           renderStudioInspector();
           setStatus(`Swapped ${roleTitle(sourceRole)} with ${roleTitle(role)}.`, false);
-        });
-        card.querySelectorAll("[data-studio-split]").forEach((button) => {
-          button.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            selectRole(role);
-            if (!splitSelectedRole(button.dataset.studioSplit)) {
-              setStatus("Could not split the selected pane.", true);
-              return;
-            }
-            setStatus(button.dataset.studioSplit === "col" ? "Split the selected pane vertically." : "Split the selected pane horizontally.", false);
-          });
-        });
-        card.querySelectorAll("[data-studio-remove]").forEach((button) => {
-          button.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            const tree = ensureSplitTreeModel();
-            if (!tree) {
-              setStatus("Could not remove pane.", true);
-              return;
-            }
-            const allRoles = [];
-            splitTreeCollectRoles(tree, allRoles);
-            if (allRoles.length <= 1) {
-              setStatus("Cannot remove the last pane. At least one pane must remain.", true);
-              return;
-            }
-            selectRole(role);
-            removeSelectedPane();
-            setStatus("Removed the selected pane.", false);
-          });
         });
         card.querySelectorAll(".studio-size-input").forEach((input) => {
           input.addEventListener("change", (event) => {
@@ -3355,6 +3307,15 @@ HTML = r"""<!doctype html>
           });
         });
         studioBoard.appendChild(card);
+      });
+      syncStudioBoardSelectionState();
+    }
+
+    function syncStudioBoardSelectionState() {
+      if (!studioBoard) return;
+      studioBoard.querySelectorAll(".studio-card").forEach((card) => {
+        const role = Number(card.dataset.studioRole);
+        card.classList.toggle("selected", role === selectedRole);
       });
     }
 
