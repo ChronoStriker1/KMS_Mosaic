@@ -262,6 +262,16 @@
       </div>
       <div id="test-3-4-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
+        <div class="test-name">Selected Pane always shows Pane Type and switches queue/command controls by pane type</div>
+        <div id="test-3-4c" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-3-4c-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
+        <div class="test-name">Remove Pane is hidden only when one pane remains</div>
+        <div id="test-3-4d" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-3-4d-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
         <div class="test-name">Visibility changes apply immediately before the save cycle completes</div>
         <div id="test-3-5" class="test-status status-pending">PENDING</div>
       </div>
@@ -604,7 +614,7 @@
       log('Testing: Cross-section interaction...', 'info');
 
       if (!pluginPageMounted()) {
-        ['test-3-1', 'test-3-2', 'test-3-3', 'test-3-4'].forEach((id) => {
+        ['test-3-1', 'test-3-2', 'test-3-3', 'test-3-4', 'test-3-4c', 'test-3-4d'].forEach((id) => {
           setTestResult(id, 'skip', pluginPageSkipMessage);
         });
         log('Plugin page shell is not mounted in this harness; cross-section checks were skipped.', 'warn');
@@ -671,6 +681,120 @@
         const selectionOk = previewStable && selectionUpdated;
         setTestResult('test-3-4', selectionOk ? 'pass' : 'fail',
           selectionOk ? 'Pane click left the preview layout, preview video node, and stream object intact while updating Selected Pane' : 'Pane click replaced preview state or did not update selected-pane state');
+      }
+
+      // Test 3.4c/3.4d: Selected Pane uses one inspector path with pane-type-specific controls
+      const canProbeSelectedPane = typeof window.fillForm === 'function' &&
+        typeof window.selectRole === 'function' &&
+        typeof window.renderStudioBoard === 'function' &&
+        typeof window.renderStudioInspector === 'function';
+      if (!canProbeSelectedPane) {
+        setTestResult('test-3-4c', 'skip', 'Selected Pane probe helpers are not exposed on this page build.');
+        setTestResult('test-3-4d', 'skip', 'Selected Pane probe helpers are not exposed on this page build.');
+      } else {
+        const stateResponse = await fetch('/api/state');
+        const statePayload = await stateResponse.json();
+        const restoreState = JSON.parse(JSON.stringify(statePayload.state || {}));
+        const restorePath = statePayload.config_path || 'integration-test.conf';
+        const restoreRaw = statePayload.raw_config || '';
+        const renderProbeState = async (probeState, selectedRole) => {
+          window.fillForm(JSON.parse(JSON.stringify(probeState)), restorePath, restoreRaw);
+          window.selectRole(selectedRole);
+          window.renderStudioBoard();
+          window.renderStudioInspector();
+          if (typeof window.renderPlaylistEditor === 'function') window.renderPlaylistEditor();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        };
+        try {
+          const multiPaneProbe = {
+            connector: '',
+            mode: '',
+            rotation: 0,
+            font_size: 18,
+            right_frac: 33,
+            video_frac: 0,
+            pane_split: 50,
+            split_tree: 'col:50(0,1)',
+            pane_count: 2,
+            layout: 'stack',
+            roles: '',
+            fs_cycle_sec: 5,
+            visibility_mode: 'neither',
+            pane_types: ['mpv', 'terminal'],
+            pane_type_raw: ['', ''],
+            pane_type_settings: [{}, {}],
+            pane_commands: ['', 'htop'],
+            pane_playlists: ['', ''],
+            pane_playlist_extended: ['', ''],
+            pane_playlist_fifos: ['', ''],
+            pane_mpv_outs: ['', ''],
+            pane_video_rotate: ['', ''],
+            pane_panscan: ['1.25', ''],
+            pane_video_paths: [['/media/demo.mp4'], []],
+            pane_mpv_opts: [['mute=yes'], []],
+            video_paths: [],
+            playlist: '',
+            playlist_extended: '',
+            playlist_fifo: '',
+            mpv_out: '',
+            video_rotate: '',
+            panscan: '',
+            flags: { no_video: false, no_panes: false, smooth: false, loop_file: false, loop_playlist: false, shuffle: false, atomic: false, atomic_nonblock: false, gl_finish: false, no_osd: false },
+            mpv_opts: [],
+            focus_pane: -1,
+            fullscreen_pane: -1,
+            selected_pane: 0,
+            extra_lines: '',
+          };
+          await renderProbeState(multiPaneProbe, 0);
+          const paneTypeLabels = Array.from(document.querySelectorAll('#kmsSelectedPanePlaceholder label, #kmsSelectedPanePanel label')).map((node) => node.textContent.trim());
+          const mpvPaneTypeOk = paneTypeLabels.some((text) => text.startsWith('Pane Type')) &&
+            !!document.getElementById('inspectorPanePanscan') &&
+            !!document.querySelector('#kmsSelectedPanePlaceholder #playlistEditor, #kmsSelectedPanePanel #playlistEditor') &&
+            !!document.querySelector('#kmsSelectedPanePlaceholder [data-selected-pane-remove], #kmsSelectedPanePanel [data-selected-pane-remove]');
+
+          await renderProbeState(multiPaneProbe, 1);
+          const terminalPaneTypeOk = Array.from(document.querySelectorAll('#kmsSelectedPanePlaceholder label, #kmsSelectedPanePanel label'))
+            .some((node) => node.textContent.trim().startsWith('Pane Type')) &&
+            !!document.getElementById('inspectorPaneCommand') &&
+            !document.querySelector('#kmsSelectedPanePlaceholder #playlistEditor, #kmsSelectedPanePanel #playlistEditor');
+
+          setTestResult('test-3-4c', mpvPaneTypeOk && terminalPaneTypeOk ? 'pass' : 'fail',
+            mpvPaneTypeOk && terminalPaneTypeOk
+              ? 'Selected Pane keeps Pane Type visible and swaps between mpv queue controls and terminal command controls'
+              : 'Selected Pane did not keep Pane Type visible or failed to swap queue/command controls by pane type');
+
+          const singlePaneProbe = {
+            ...multiPaneProbe,
+            pane_count: 1,
+            split_tree: '',
+            pane_types: ['mpv'],
+            pane_type_raw: [''],
+            pane_type_settings: [{}],
+            pane_commands: [''],
+            pane_playlists: [''],
+            pane_playlist_extended: [''],
+            pane_playlist_fifos: [''],
+            pane_mpv_outs: [''],
+            pane_video_rotate: [''],
+            pane_panscan: ['1.25'],
+            pane_video_paths: [['/media/demo.mp4']],
+            pane_mpv_opts: [['mute=yes']],
+            selected_pane: 0,
+          };
+          await renderProbeState(singlePaneProbe, 0);
+          const removeSingle = document.querySelector('#kmsSelectedPanePlaceholder [data-selected-pane-remove], #kmsSelectedPanePanel [data-selected-pane-remove]');
+          await renderProbeState(multiPaneProbe, 0);
+          const removeMulti = document.querySelector('#kmsSelectedPanePlaceholder [data-selected-pane-remove], #kmsSelectedPanePanel [data-selected-pane-remove]');
+          const removeVisibilityOk = !removeSingle && !!removeMulti;
+          setTestResult('test-3-4d', removeVisibilityOk ? 'pass' : 'fail',
+            removeVisibilityOk
+              ? 'Remove Pane stays hidden for a single pane and reappears once more than one pane exists'
+              : 'Remove Pane visibility is not tied strictly to pane_count === 1');
+        } finally {
+          window.fillForm(restoreState, restorePath, restoreRaw);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
       }
 
       // Test 3.5: Visibility changes apply immediately before the save cycle completes

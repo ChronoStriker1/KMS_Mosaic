@@ -2406,11 +2406,8 @@ HTML = r"""<!doctype html>
     }
 
     function roleName(role) {
-      if (role === 0) return "Pane C";
-      if (role === 1) return "Pane A";
-      if (role === 2) return "Pane B";
-      if (role <= 26) return `Pane ${String.fromCharCode(64 + role + 1)}`;
-      return `Pane ${role}`;
+      if (role >= 0 && role < 26) return `Pane ${String.fromCharCode(65 + role)}`;
+      return `Pane ${role + 1}`;
     }
 
     function visibilityModeForState(nextState = state) {
@@ -2667,28 +2664,6 @@ HTML = r"""<!doctype html>
       });
     }
 
-    function syncMainInspectorMpvOpts() {
-      const audioEl = document.getElementById("inspectorMainAudioMode");
-      const muteEl = document.getElementById("inspectorMainMuteMode");
-      const loopEl = document.getElementById("inspectorMainLoopFile");
-      const panscanEl = document.getElementById("inspectorMainPanscan");
-      const shadersEl = document.getElementById("inspectorMainShaders");
-      const otherEl = document.getElementById("inspectorMainMpvOpts");
-      if (!audioEl || !muteEl || !loopEl || !panscanEl || !shadersEl || !otherEl) return;
-      state.pane_mpv_opts[0] = buildMpvOptsFromParts({
-        audioMode: audioEl.value,
-        muteMode: muteEl.value,
-        loopFile: loopEl.value,
-        shadersText: shadersEl.value,
-        otherText: otherEl.value,
-      });
-      state.pane_panscan[0] = panscanEl.value;
-      const mpvAudioEl = document.getElementById("mpvAudioMode");
-      const mpvShadersEl = document.getElementById("mpvShaders");
-      if (mpvAudioEl) mpvAudioEl.value = audioEl.value;
-      if (mpvShadersEl) mpvShadersEl.value = shadersEl.value;
-    }
-
     function syncInspectorPaneMpvOpts(paneIndex) {
       if (!state || paneIndex < 0) return;
       const audioEl = document.getElementById("inspectorPaneAudioMode");
@@ -2780,24 +2755,6 @@ HTML = r"""<!doctype html>
           role: selectedRole,
           note: `${roleTitle(selectedRole)} is a terminal pane. Switch it to mpv to edit a queue.`,
           apply() {}
-        };
-      }
-      if (selectedRole === 0) {
-        const noteParts = [`This queue controls ${roleTitle(0)}.`];
-        const mainMpvOpts = Array.isArray(state.pane_mpv_opts?.[0]) ? state.pane_mpv_opts[0].slice() : [];
-        if (mainMpvOpts.length) noteParts.push(`${mainMpvOpts.length} pane-local mpv option${mainMpvOpts.length === 1 ? "" : "s"}.`);
-        return {
-          emptyMessage: "No videos queued yet. Add one below or open Bulk Add Videos.",
-          paths: Array.isArray(state.pane_video_paths?.[0]) ? state.pane_video_paths[0].slice() : [],
-          editable: true,
-          paneType,
-          role: selectedRole,
-          note: noteParts.join(" "),
-          apply(paths) {
-            state.pane_video_paths[0] = paths.slice();
-            const queueField = selectedPaneQueueField();
-            if (queueField) queueField.value = state.pane_video_paths[0].join("\n");
-          }
         };
       }
       const paneIndex = selectedRole;
@@ -4083,111 +4040,10 @@ HTML = r"""<!doctype html>
       }
 
       const layoutActions = selectedPaneLayoutActionsMarkup(selectedRole);
-
-      if (selectedRole === 0) {
-        const mainMpvGroups = parseMpvOptionGroups(state.pane_mpv_opts?.[0] || []);
-        const mainPanscan = String(state.pane_panscan?.[0] || "");
-        studioInspector.innerHTML = `
-          <div class="selected-pane-section">
-            <h2 class="section-title">Pane Behavior</h2>
-            <label>Audio Output
-              <select id="inspectorMainAudioMode">
-                <option value="">Default</option>
-                <option value="no-audio"${mainMpvGroups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
-              </select>
-            </label>
-            <label>Mute
-              <select id="inspectorMainMuteMode">
-                <option value="">Default</option>
-                <option value="yes"${mainMpvGroups.muteMode === "yes" ? " selected" : ""}>Muted</option>
-                <option value="no"${mainMpvGroups.muteMode === "no" ? " selected" : ""}>Unmuted</option>
-              </select>
-            </label>
-            <label>Loop Current File
-              <select id="inspectorMainLoopFile">
-                <option value="">Default</option>
-                <option value="no"${mainMpvGroups.loopFile === "no" ? " selected" : ""}>Off</option>
-                <option value="yes"${mainMpvGroups.loopFile === "yes" ? " selected" : ""}>On</option>
-                <option value="inf"${mainMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
-              </select>
-            </label>
-            <label>Panscan
-              <input id="inspectorMainPanscan" type="number" step="0.01" placeholder="0.00" value="${mainPanscan.replace(/"/g, "&quot;")}">
-            </label>
-            <label>Shader Stack
-              <textarea id="inspectorMainShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${mainMpvGroups.shaders.join("\n")}</textarea>
-            </label>
-            <label>Additional mpv Options
-              <textarea id="inspectorMainMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${mainMpvGroups.other.join("\n")}</textarea>
-            </label>
-          </div>
-          ${selectedPaneSizeSectionMarkup(selectedRole)}
-          ${layoutActions}
-          ${selectedPaneQueueSectionMarkup()}
-        `;
-        [
-          "inspectorMainAudioMode",
-          "inspectorMainMuteMode",
-          "inspectorMainLoopFile",
-          "inspectorMainPanscan",
-          "inspectorMainShaders",
-          "inspectorMainMpvOpts"
-        ].forEach((id) => {
-          document.getElementById(id).addEventListener("input", () => {
-            syncMainInspectorMpvOpts();
-            renderStudioBoard();
-            renderPlaylistEditor();
-          });
-          document.getElementById(id).addEventListener("change", () => {
-            syncMainInspectorMpvOpts();
-            renderStudioBoard();
-            renderPlaylistEditor();
-          });
-        });
-        const addQueueButton = selectedPaneAddQueueButton();
-        if (addQueueButton) {
-          addQueueButton.addEventListener("click", () => {
-            addQueueItem();
-            setStatus("Added a new queue entry.", false);
-          });
-        }
-        bindStudioSizeInputs(studioInspector);
-        bindSelectedPaneLayoutActions(selectedRole);
-        syncMainInspectorMpvOpts();
-        renderPlaylistEditor();
-        dispatchSelectedPaneState();
-        return;
-      }
-
       const paneIndex = selectedRole;
       const paneType = state.pane_types?.[paneIndex] || "terminal";
       const value = state.pane_commands?.[paneIndex] || "";
       if (paneType === "mpv") {
-        if (pendingNewPaneIndexes.has(paneIndex)) {
-          studioInspector.innerHTML = `
-            <div class="selected-pane-section">
-              <h2 class="section-title">Pane Behavior</h2>
-              <label>Pane Type
-                <select id="inspectorPaneType">
-                  <option value="terminal">terminal</option>
-                  <option value="mpv" selected>mpv</option>
-                </select>
-              </label>
-              <p class="muted-note">This new mpv pane has been placed in the layout, but its playlist and mpv options stay hidden until you save and let the page reload from the persisted config.</p>
-            </div>
-            ${selectedPaneSizeSectionMarkup(selectedRole)}
-            ${layoutActions}
-          `;
-          document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
-            state.pane_types[paneIndex] = event.target.value;
-            renderStudioBoard();
-            renderStudioInspector();
-          });
-          bindStudioSizeInputs(studioInspector);
-          bindSelectedPaneLayoutActions(selectedRole);
-          dispatchSelectedPaneState();
-          return;
-        }
         const paneMpvGroups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
         const panePanscan = String(state.pane_panscan?.[paneIndex] || "");
         studioInspector.innerHTML = `
@@ -4642,13 +4498,14 @@ HTML = r"""<!doctype html>
 
     function selectedPaneLayoutActionsMarkup(role) {
       if (!Number.isFinite(role) || role < 0) return "";
+      const canRemove = Number(state?.pane_count || 0) > 1;
       return `
         <div class="selected-pane-section">
           <h2 class="section-title">Layout Actions</h2>
           <div class="actions tight">
             <button type="button" class="secondary studio-split-btn" data-selected-pane-split="col">Split Vertically</button>
             <button type="button" class="secondary studio-split-btn" data-selected-pane-split="row">Split Horizontally</button>
-            ${role > 0 ? '<button type="button" class="secondary studio-remove-btn" data-selected-pane-remove="true">Remove Pane</button>' : ''}
+            ${canRemove ? '<button type="button" class="secondary studio-remove-btn" data-selected-pane-remove="true">Remove Pane</button>' : ""}
           </div>
         </div>
       `;
@@ -4711,7 +4568,7 @@ HTML = r"""<!doctype html>
     }
 
     function removeSelectedPane() {
-      if (!state || selectedRole < 0 || Number(state.pane_count || 0) <= 1) return false;
+      if (!state || selectedRole < 0 || Number(state.pane_count || 0) === 1) return false;
       const tree = ensureSplitTreeModel();
       const paneIndex = selectedRole;
       const role = selectedRole;
