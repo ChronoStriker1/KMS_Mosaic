@@ -513,6 +513,46 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertIn("if (paneCount <= 1) return { leaf: true, role: 0 };", preset_tree_text)
         self.assertNotIn("first: balancedTreeForRoles(paneRoles, true), second: { leaf: true, role: 0 }", preset_tree_text.split("if (paneCount <= 1) return { leaf: true, role: 0 };", 1)[0])
 
+    def test_selection_metadata_round_trips_and_browser_reload_prefers_saved_selected_pane(self) -> None:
+        state = kms_mosaic_web.empty_state()
+        state["pane_count"] = 2
+        state["pane_types"] = ["mpv", "terminal"]
+        state["pane_commands"] = ["", "htop"]
+        state["pane_video_paths"] = [["/media/main.mp4"], []]
+        state["selected_pane"] = 1
+        state["focus_pane"] = 0
+        state["fullscreen_pane"] = 1
+
+        text = kms_mosaic_web.build_config_text(state)
+        reparsed = kms_mosaic_web.parse_config_text(text)
+
+        self.assertIn('"selected_pane":1', text)
+        self.assertIn('"focus_pane":0', text)
+        self.assertIn('"fullscreen_pane":1', text)
+        self.assertEqual(reparsed["selected_pane"], 1)
+        self.assertEqual(reparsed["focus_pane"], 0)
+        self.assertEqual(reparsed["fullscreen_pane"], 1)
+
+        html = kms_mosaic_web.HTML
+        select_role = re.search(
+            r"function selectRole\(role\) \{.*?\n    function parseRolesString",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(select_role)
+        select_role_text = select_role.group(0)
+        self.assertIn("if (state) state.selected_pane = selectedRole;", select_role_text)
+
+        fill_form = re.search(
+            r"function fillForm\(nextState, configPath, nextRawConfig\) \{.*?\n    async function loadState",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(fill_form)
+        fill_form_text = fill_form.group(0)
+        self.assertIn("const parsedSelection = Number(state?.selected_pane);", fill_form_text)
+        self.assertIn("selectedRole = Number.isFinite(parsedSelection) ? parsedSelection : restoreSelectedRole(state, previousSelection);", fill_form_text)
+
 
 if __name__ == "__main__":
     unittest.main()

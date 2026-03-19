@@ -3641,6 +3641,7 @@ HTML = r"""<!doctype html>
         selectedRole = Number(role);
       }
       ensureSelectedRole();
+      if (state) state.selected_pane = selectedRole;
     }
 
     function parseRolesString(nextState) {
@@ -5056,8 +5057,14 @@ HTML = r"""<!doctype html>
       pendingNewPaneIndexes = new Set();
       ensurePaneCommands(state);
       state.splitTreeModel = parseSplitTreeSpec(state.split_tree || "");
-      selectedRole = restoreSelectedRole(state, previousSelection);
+      const parsedSelection = Number(state?.selected_pane);
+      selectedRole = Number.isFinite(parsedSelection) ? parsedSelection : restoreSelectedRole(state, previousSelection);
       ensureSelectedRole();
+      if (selectedRole < 0) {
+        selectedRole = restoreSelectedRole(state, previousSelection);
+        ensureSelectedRole();
+      }
+      state.selected_pane = selectedRole;
       document.getElementById("configPath").textContent = `Config: ${configPath}`;
       const modeEl = document.getElementById("mode");
       const rotationEl = document.getElementById("rotation");
