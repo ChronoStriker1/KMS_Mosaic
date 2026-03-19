@@ -41,6 +41,8 @@ DEFAULT_PANE_COMMANDS = [
     "btop --utf-force",
     "tail -F /var/log/syslog -n 500",
 ]
+KNOWN_PANE_TYPES = {"terminal", "mpv"}
+WEB_STATE_PREFIX = "# kms_mosaic_web_state "
 
 
 def default_config_path() -> str:
@@ -95,6 +97,8 @@ def empty_state() -> dict[str, Any]:
         "fs_cycle_sec": 5,
         "visibility_mode": "neither",
         "pane_types": ["terminal", "terminal"],
+        "pane_type_raw": ["", ""],
+        "pane_type_settings": [{}, {}],
         "pane_commands": DEFAULT_PANE_COMMANDS.copy(),
         "pane_playlists": ["", ""],
         "pane_playlist_extended": ["", ""],
@@ -124,6 +128,9 @@ def empty_state() -> dict[str, Any]:
             "no_osd": False,
         },
         "mpv_opts": [],
+        "focus_pane": -1,
+        "fullscreen_pane": -1,
+        "selected_pane": -1,
         "extra_lines": "",
     }
 
@@ -141,6 +148,11 @@ def ensure_panes(state: dict[str, Any]) -> None:
     state["pane_count"] = pane_count
     pane_commands = list(state.get("pane_commands", []))
     pane_types = list(state.get("pane_types", []))
+    pane_type_raw = [str(value or "") for value in state.get("pane_type_raw", [])]
+    pane_type_settings = [
+        dict(value) if isinstance(value, dict) else {}
+        for value in state.get("pane_type_settings", [])
+    ]
     pane_playlists = list(state.get("pane_playlists", []))
     pane_playlist_extended = list(state.get("pane_playlist_extended", []))
     pane_playlist_fifos = list(state.get("pane_playlist_fifos", []))
@@ -153,6 +165,10 @@ def ensure_panes(state: dict[str, Any]) -> None:
         pane_commands.append(DEFAULT_PANE_COMMANDS[0] if len(pane_commands) == 0 else "")
     while len(pane_types) < pane_count:
         pane_types.append("terminal")
+    while len(pane_type_raw) < pane_count:
+        pane_type_raw.append("")
+    while len(pane_type_settings) < pane_count:
+        pane_type_settings.append({})
     while len(pane_playlists) < pane_count:
         pane_playlists.append("")
     while len(pane_playlist_extended) < pane_count:
@@ -171,6 +187,8 @@ def ensure_panes(state: dict[str, Any]) -> None:
         pane_mpv_opts.append([])
     state["pane_commands"] = pane_commands[:pane_count]
     state["pane_types"] = pane_types[:pane_count]
+    state["pane_type_raw"] = pane_type_raw[:pane_count]
+    state["pane_type_settings"] = pane_type_settings[:pane_count]
     state["pane_playlists"] = pane_playlists[:pane_count]
     state["pane_playlist_extended"] = pane_playlist_extended[:pane_count]
     state["pane_playlist_fifos"] = pane_playlist_fifos[:pane_count]
@@ -181,15 +199,362 @@ def ensure_panes(state: dict[str, Any]) -> None:
     state["pane_mpv_opts"] = pane_mpv_opts[:pane_count]
 
 
+def _safe_int(value: Any, default: int = -1) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_saved_pane(value: Any, pane_count: int) -> int:
+    pane = _safe_int(value, -1)
+    return pane if 0 <= pane < pane_count else -1
+
+
+def _parse_web_state_comment(stripped_line: str) -> dict[str, Any] | None:
+    if not stripped_line.startswith(WEB_STATE_PREFIX):
+        return None
+    payload = stripped_line[len(WEB_STATE_PREFIX):].strip()
+    if not payload:
+        return {}
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _pane_type_payload(state: dict[str, Any], index: int) -> dict[str, Any]:
+    return {
+        "type": state["pane_types"][index],
+        "raw": state["pane_type_raw"][index],
+        "settings": dict(state["pane_type_settings"][index]),
+        "command": state["pane_commands"][index],
+        "playlist": state["pane_playlists"][index],
+        "playlist_extended": state["pane_playlist_extended"][index],
+        "playlist_fifo": state["pane_playlist_fifos"][index],
+        "mpv_out": state["pane_mpv_outs"][index],
+        "video_rotate": state["pane_video_rotate"][index],
+        "panscan": state["pane_panscan"][index],
+        "video_paths": list(state["pane_video_paths"][index]),
+        "mpv_opts": list(state["pane_mpv_opts"][index]),
+    }
+
+
+def _write_pane_payload(state: dict[str, Any], index: int, payload: dict[str, Any]) -> None:
+    state["pane_types"][index] = str(payload.get("type") or "terminal")
+    state["pane_type_raw"][index] = str(payload.get("raw") or "")
+    state["pane_type_settings"][index] = dict(payload.get("settings") or {})
+    state["pane_commands"][index] = str(payload.get("command") or "")
+    state["pane_playlists"][index] = str(payload.get("playlist") or "")
+    state["pane_playlist_extended"][index] = str(payload.get("playlist_extended") or "")
+    state["pane_playlist_fifos"][index] = str(payload.get("playlist_fifo") or "")
+    state["pane_mpv_outs"][index] = str(payload.get("mpv_out") or "")
+    state["pane_video_rotate"][index] = str(payload.get("video_rotate") or "")
+    state["pane_panscan"][index] = str(payload.get("panscan") or "")
+    state["pane_video_paths"][index] = list(payload.get("video_paths") or [])
+    state["pane_mpv_opts"][index] = list(payload.get("mpv_opts") or [])
+
+
+def _normalize_pane_type(pane_type: Any) -> tuple[str, str]:
+    raw_type = str(pane_type or "").strip()
+    if not raw_type:
+        return "terminal", ""
+    if raw_type in KNOWN_PANE_TYPES:
+        return raw_type, ""
+    return "terminal", raw_type
+
+
+def _translate_roles_string(roles: str, pane_count: int) -> str:
+    text = str(roles or "").strip()
+    if not text:
+        return ""
+    translated: list[str] = []
+    used: set[int] = set()
+    for char in text:
+        role = -1
+        if char in ("C", "c"):
+            role = 0
+        elif char in ("A", "a"):
+            role = 1
+        elif char in ("B", "b"):
+            role = 2
+        elif char in ("D", "d"):
+            role = 3
+        elif char in ("E", "e"):
+            role = 4
+        elif char.isdigit():
+            role = int(char)
+        if role < 0 or role >= pane_count or role in used:
+            continue
+        translated.append(str(role))
+        used.add(role)
+    if len(translated) != pane_count:
+        return "".join(str(role) for role in range(pane_count))
+    return "".join(translated)
+
+
+def _split_tree_skip_ws(spec: str, index: int) -> int:
+    while index < len(spec) and spec[index].isspace():
+        index += 1
+    return index
+
+
+def _parse_split_tree_node(spec: str, start_index: int) -> tuple[dict[str, Any], int] | None:
+    index = _split_tree_skip_ws(spec, start_index)
+    if index >= len(spec):
+        return None
+    if spec[index].isdigit():
+        end = index + 1
+        while end < len(spec) and spec[end].isdigit():
+            end += 1
+        return ({"leaf": True, "role": int(spec[index:end])}, end)
+    kind = None
+    if spec.startswith("row", index):
+        kind = "row"
+        index += 3
+    elif spec.startswith("col", index):
+        kind = "col"
+        index += 3
+    else:
+        return None
+    index = _split_tree_skip_ws(spec, index)
+    if index >= len(spec) or spec[index] != ":":
+        return None
+    index += 1
+    index = _split_tree_skip_ws(spec, index)
+    pct_end = index
+    while pct_end < len(spec) and spec[pct_end].isdigit():
+        pct_end += 1
+    if pct_end == index:
+        return None
+    pct = int(spec[index:pct_end])
+    index = _split_tree_skip_ws(spec, pct_end)
+    if index >= len(spec) or spec[index] != "(":
+        return None
+    left = _parse_split_tree_node(spec, index + 1)
+    if left is None:
+        return None
+    index = _split_tree_skip_ws(spec, left[1])
+    if index >= len(spec) or spec[index] != ",":
+        return None
+    right = _parse_split_tree_node(spec, index + 1)
+    if right is None:
+        return None
+    index = _split_tree_skip_ws(spec, right[1])
+    if index >= len(spec) or spec[index] != ")":
+        return None
+    return ({
+        "leaf": False,
+        "kind": kind,
+        "pct": pct,
+        "first": left[0],
+        "second": right[0],
+    }, index + 1)
+
+
+def _parse_split_tree_spec(spec: str) -> dict[str, Any] | None:
+    text = str(spec or "").strip()
+    if not text:
+        return None
+    parsed = _parse_split_tree_node(text, 0)
+    if parsed is None:
+        return None
+    end = _split_tree_skip_ws(text, parsed[1])
+    return parsed[0] if end == len(text) else None
+
+
+def _split_tree_collect_roles(node: dict[str, Any] | None, out: list[int]) -> None:
+    if not node:
+        return
+    if node.get("leaf"):
+        out.append(int(node.get("role", -1)))
+        return
+    _split_tree_collect_roles(node.get("first"), out)
+    _split_tree_collect_roles(node.get("second"), out)
+
+
+def _serialize_split_tree(node: dict[str, Any] | None) -> str:
+    if not node:
+        return ""
+    if node.get("leaf"):
+        return str(int(node.get("role", 0)))
+    return (
+        f"{node.get('kind', 'col')}:{int(node.get('pct', 50))}"
+        f"({_serialize_split_tree(node.get('first'))},{_serialize_split_tree(node.get('second'))})"
+    )
+
+
+def _balanced_split_tree(roles: list[int], prefer_rows: bool = False) -> dict[str, Any] | None:
+    if not roles:
+        return None
+    if len(roles) == 1:
+        return {"leaf": True, "role": roles[0]}
+    mid = (len(roles) + 1) // 2
+    return {
+        "leaf": False,
+        "kind": "row" if prefer_rows else "col",
+        "pct": 50,
+        "first": _balanced_split_tree(roles[:mid], not prefer_rows),
+        "second": _balanced_split_tree(roles[mid:], not prefer_rows),
+    }
+
+
+def _safe_split_tree_spec(pane_count: int) -> str:
+    roles = list(range(max(1, pane_count)))
+    if len(roles) == 1:
+        return "0"
+    if len(roles) == 2:
+        return "col:50(0,1)"
+    return _serialize_split_tree({
+        "leaf": False,
+        "kind": "col",
+        "pct": 50,
+        "first": {"leaf": True, "role": 0},
+        "second": _balanced_split_tree(roles[1:], False),
+    })
+
+
+def _normalize_split_tree_spec(spec: str, pane_count: int) -> str:
+    text = str(spec or "").strip()
+    if not text:
+        return ""
+    parsed = _parse_split_tree_spec(text)
+    if parsed is None:
+        return _safe_split_tree_spec(pane_count)
+    roles: list[int] = []
+    _split_tree_collect_roles(parsed, roles)
+    if len(roles) != pane_count or sorted(roles) != list(range(pane_count)):
+        return _safe_split_tree_spec(pane_count)
+    return _serialize_split_tree(parsed)
+
+
+def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) -> dict[str, Any]:
+    ensure_panes(state)
+    root_media_present = any([
+        bool(state.get("video_paths")),
+        bool(str(state.get("playlist", "")).strip()),
+        bool(str(state.get("playlist_extended", "")).strip()),
+        bool(str(state.get("playlist_fifo", "")).strip()),
+        bool(str(state.get("mpv_out", "")).strip()),
+        bool(str(state.get("video_rotate", "")).strip()),
+        bool(str(state.get("panscan", "")).strip()),
+        bool(state.get("mpv_opts")),
+    ])
+    roles_text = str(state.get("roles", "")).strip()
+    legacy_hint = any(char in roles_text for char in "CcAaBbDdEe")
+    if not legacy_hint:
+        split_roles: list[int] = []
+        _split_tree_collect_roles(_parse_split_tree_spec(str(state.get("split_tree", ""))), split_roles)
+        legacy_hint = bool(split_roles) and len(split_roles) == int(state.get("pane_count", 2)) + 1
+    legacy_mode = root_media_present or legacy_hint or any(
+        key in web_state for key in ("selected_role", "focused_role", "fullscreen_role")
+    )
+
+    normalized = empty_state()
+    for key in (
+        "connector", "mode", "rotation", "font_size", "right_frac", "video_frac",
+        "pane_split", "layout", "fs_cycle_sec", "extra_lines",
+    ):
+        normalized[key] = state.get(key, normalized.get(key))
+    normalized["flags"] = dict(state.get("flags", {}))
+
+    source_pane_count = max(1, int(state.get("pane_count", 2)))
+    total_panes = source_pane_count + 1 if legacy_mode else source_pane_count
+    max_saved_role = max(
+        _safe_int(web_state.get("selected_pane", web_state.get("selected_role")), -1),
+        _safe_int(web_state.get("focus_pane", web_state.get("focused_role")), -1),
+        _safe_int(web_state.get("fullscreen_pane", web_state.get("fullscreen_role")), -1),
+    )
+    if max_saved_role >= 0:
+        total_panes = max(total_panes, max_saved_role + 1)
+    normalized["pane_count"] = max(1, total_panes)
+    ensure_panes(normalized)
+
+    source_payloads = [_pane_type_payload(state, index) for index in range(source_pane_count)]
+    if legacy_mode:
+        pane_zero = {
+            "type": "mpv",
+            "raw": "",
+            "settings": {},
+            "command": "",
+            "playlist": str(state.get("playlist", "") or ""),
+            "playlist_extended": str(state.get("playlist_extended", "") or ""),
+            "playlist_fifo": str(state.get("playlist_fifo", "") or ""),
+            "mpv_out": str(state.get("mpv_out", "") or ""),
+            "video_rotate": str(state.get("video_rotate", "") or ""),
+            "panscan": str(state.get("panscan", "") or ""),
+            "video_paths": list(state.get("video_paths", []) or []),
+            "mpv_opts": list(state.get("mpv_opts", []) or []),
+        }
+        _write_pane_payload(normalized, 0, pane_zero)
+        normalized["pane_commands"][0] = ""
+        for index, payload in enumerate(source_payloads, start=1):
+            _write_pane_payload(normalized, index, payload)
+    else:
+        for index, payload in enumerate(source_payloads):
+            _write_pane_payload(normalized, index, payload)
+
+    metadata_types = web_state.get("pane_types")
+    metadata_settings = web_state.get("pane_type_settings")
+    for index in range(normalized["pane_count"]):
+        candidate_type = None
+        if isinstance(metadata_types, list) and index < len(metadata_types):
+            candidate_type = metadata_types[index]
+        else:
+            candidate_type = normalized["pane_types"][index]
+        pane_type, raw_type = _normalize_pane_type(candidate_type)
+        normalized["pane_types"][index] = pane_type
+        normalized["pane_type_raw"][index] = raw_type
+        if isinstance(metadata_settings, dict):
+            normalized["pane_type_settings"][index] = dict(metadata_settings.get(str(index), {}) or {})
+        elif isinstance(metadata_settings, list) and index < len(metadata_settings):
+            normalized["pane_type_settings"][index] = dict(metadata_settings[index] or {})
+
+    normalized["split_tree"] = _normalize_split_tree_spec(
+        str(state.get("split_tree", "")),
+        normalized["pane_count"],
+    )
+    normalized["roles"] = _translate_roles_string(roles_text, normalized["pane_count"])
+    normalized["focus_pane"] = _normalize_saved_pane(
+        web_state.get("focus_pane", web_state.get("focused_role")),
+        normalized["pane_count"],
+    )
+    normalized["fullscreen_pane"] = _normalize_saved_pane(
+        web_state.get("fullscreen_pane", web_state.get("fullscreen_role")),
+        normalized["pane_count"],
+    )
+    normalized["selected_pane"] = _normalize_saved_pane(
+        web_state.get("selected_pane", web_state.get("selected_role")),
+        normalized["pane_count"],
+    )
+
+    normalized["video_paths"] = []
+    normalized["playlist"] = ""
+    normalized["playlist_extended"] = ""
+    normalized["playlist_fifo"] = ""
+    normalized["mpv_out"] = ""
+    normalized["video_rotate"] = ""
+    normalized["panscan"] = ""
+    normalized["mpv_opts"] = []
+    normalized["visibility_mode"] = visibility_mode_from_flags(normalized.get("flags", {}))
+    return normalized
+
+
 def parse_config_text(text: str) -> dict[str, Any]:
     state = empty_state()
     extra_lines: list[str] = []
+    web_state: dict[str, Any] = {}
 
     lines = text.splitlines()
     for raw_line in lines:
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
             if stripped:
+                parsed_web_state = _parse_web_state_comment(stripped)
+                if parsed_web_state is not None:
+                    web_state.update(parsed_web_state)
+                    continue
                 extra_lines.append(raw_line)
             continue
         try:
@@ -389,13 +754,11 @@ def parse_config_text(text: str) -> dict[str, Any]:
         if keep_line:
             extra_lines.append(raw_line)
 
-    ensure_panes(state)
     state["extra_lines"] = "\n".join(extra_lines).strip()
-    state["visibility_mode"] = visibility_mode_from_flags(state.get("flags", {}))
-    return state
+    return _normalize_loaded_state(state, web_state)
 
 
-def serialize_config(state: dict[str, Any]) -> str:
+def build_config_text(state: dict[str, Any]) -> str:
     ensure_panes(state)
     lines: list[str] = []
 
@@ -410,6 +773,25 @@ def serialize_config(state: dict[str, Any]) -> str:
             return
         lines.append(f"{name} {shlex.quote(str(value))}")
 
+    def pane_has_media(index: int) -> bool:
+        if str(pane_playlists[index]).strip():
+            return True
+        if str(pane_playlist_extended[index]).strip():
+            return True
+        if str(pane_playlist_fifos[index]).strip():
+            return True
+        if str(pane_mpv_outs[index]).strip():
+            return True
+        if str(pane_video_rotate[index]).strip():
+            return True
+        if str(pane_panscan[index]).strip():
+            return True
+        if pane_video_paths[index]:
+            return True
+        if pane_mpv_opts[index]:
+            return True
+        return False
+
     add_opt("--connector", state.get("connector", ""))
     add_opt("--mode", state.get("mode", ""))
     add_opt("--rotate", state.get("rotation", 0) or "")
@@ -421,7 +803,7 @@ def serialize_config(state: dict[str, Any]) -> str:
     add_opt("--pane-split", state.get("pane_split", 50))
     add_opt("--split-tree", state.get("split_tree", ""))
     add_opt("--layout", state.get("layout", "stack"))
-    roles = str(state.get("roles", "")).strip()
+    roles = _translate_roles_string(str(state.get("roles", "")).strip(), int(state.get("pane_count", 2)))
     if roles:
         add_opt("--roles", roles)
     add_opt("--fs-cycle-sec", state.get("fs_cycle_sec", 5))
@@ -432,6 +814,7 @@ def serialize_config(state: dict[str, Any]) -> str:
 
     pane_commands = list(state.get("pane_commands", []))
     pane_types = list(state.get("pane_types", []))
+    pane_type_raw = [str(value or "") for value in state.get("pane_type_raw", [])]
     pane_playlists = list(state.get("pane_playlists", []))
     pane_playlist_extended = list(state.get("pane_playlist_extended", []))
     pane_playlist_fifos = list(state.get("pane_playlist_fifos", []))
@@ -442,7 +825,8 @@ def serialize_config(state: dict[str, Any]) -> str:
     pane_mpv_opts = [list(opts) for opts in state.get("pane_mpv_opts", [])]
     for idx, cmd in enumerate(pane_commands):
         pane_type = pane_types[idx] if idx < len(pane_types) else "terminal"
-        if pane_type == "mpv":
+        raw_type = pane_type_raw[idx] if idx < len(pane_type_raw) else ""
+        if pane_type == "mpv" or (raw_type and pane_has_media(idx)):
             lines.append(f"--pane-media {idx + 1}")
             playlist = pane_playlists[idx] if idx < len(pane_playlists) else ""
             playlist_ext = pane_playlist_extended[idx] if idx < len(pane_playlist_extended) else ""
@@ -498,25 +882,48 @@ def serialize_config(state: dict[str, Any]) -> str:
         add_flag("--atomic", bool(flags.get("atomic")))
     add_flag("--gl-finish", bool(flags.get("gl_finish")))
 
-    for opt in state.get("mpv_opts", []):
-        if str(opt).strip():
-            add_opt("--mpv-opt", opt)
-    add_opt("--playlist", state.get("playlist", ""))
-    add_opt("--playlist-extended", state.get("playlist_extended", ""))
-    add_opt("--playlist-fifo", state.get("playlist_fifo", ""))
-    add_opt("--mpv-out", state.get("mpv_out", ""))
-    add_opt("--video-rotate", state.get("video_rotate", ""))
-    add_opt("--panscan", state.get("panscan", ""))
-    for video_path in state.get("video_paths", []):
-        if str(video_path).strip():
-            add_opt("--video", video_path)
-
     extra_lines = str(state.get("extra_lines", "")).strip()
     if extra_lines:
         lines.append("")
         lines.extend(extra_lines.splitlines())
 
+    metadata: dict[str, Any] = {}
+    pane_count = int(state.get("pane_count", 2))
+    selected_pane = _normalize_saved_pane(state.get("selected_pane"), pane_count)
+    focus_pane = _normalize_saved_pane(state.get("focus_pane"), pane_count)
+    fullscreen_pane = _normalize_saved_pane(state.get("fullscreen_pane"), pane_count)
+    if selected_pane >= 0:
+        metadata["selected_pane"] = selected_pane
+    if focus_pane >= 0:
+        metadata["focus_pane"] = focus_pane
+    if fullscreen_pane >= 0:
+        metadata["fullscreen_pane"] = fullscreen_pane
+    raw_types = [str(value or "") for value in state.get("pane_type_raw", [])[:pane_count]]
+    if any(raw_types):
+        effective_types = []
+        for index in range(pane_count):
+            raw_type = raw_types[index] if index < len(raw_types) else ""
+            pane_type = state["pane_types"][index] if index < len(state["pane_types"]) else "terminal"
+            effective_types.append(raw_type or pane_type or "terminal")
+        metadata["pane_types"] = effective_types
+    pane_type_settings = [
+        dict(value) if isinstance(value, dict) else {}
+        for value in state.get("pane_type_settings", [])[:pane_count]
+    ]
+    if any(pane_type_settings):
+        metadata["pane_type_settings"] = {
+            str(index): value
+            for index, value in enumerate(pane_type_settings)
+            if value
+        }
+    if metadata:
+        lines.append(f"{WEB_STATE_PREFIX}{json.dumps(metadata, sort_keys=True, separators=(',', ':'))}")
+
     return "\n".join(lines).strip() + "\n"
+
+
+def serialize_config(state: dict[str, Any]) -> str:
+    return build_config_text(state)
 
 
 @dataclass
@@ -1294,11 +1701,12 @@ HTML = r"""<!doctype html>
       transform: translateY(0);
       pointer-events: auto;
     }
-    .studio-size-group {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
+    .selected-pane-size-group {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 12px;
+      align-items: start;
+      min-width: 0;
     }
     .studio-size-chip {
       display: inline-flex;
@@ -1335,6 +1743,33 @@ HTML = r"""<!doctype html>
       border-color: rgba(181,83,47,0.5);
       background: #fff;
     }
+    .selected-pane-size-label {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .selected-pane-size-field {
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .selected-pane-size-field[data-active="false"] {
+      opacity: 0.62;
+    }
+    .selected-pane-size-group .studio-size-input {
+      width: 100%;
+      min-width: 0;
+      padding: 6px 8px;
+      font-size: 13px;
+      text-align: left;
+      border-radius: 4px;
+      box-sizing: border-box;
+    }
+    @media (max-width: 680px) {
+      .selected-pane-size-group {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
     .studio-tag {
       display: inline-flex;
       align-items: center;
@@ -1343,11 +1778,6 @@ HTML = r"""<!doctype html>
       border-radius: 5px;
       background: rgba(255,255,255,0.08);
       backdrop-filter: blur(6px);
-    }
-    .studio-card-body {
-      display: grid;
-      gap: 5px;
-      min-width: 0;
     }
     .studio-split-btn {
       border: 1px solid rgba(255,255,255,0.14);
@@ -1396,34 +1826,38 @@ HTML = r"""<!doctype html>
       background: rgba(255,240,200,0.84);
       box-shadow: 0 0 0 1px rgba(26,15,10,0.22);
     }
-    .studio-resize-handle[data-axis="w"] {
+    .studio-resize-handle[data-edge="left"],
+    .studio-resize-handle[data-edge="right"] {
       top: 10px;
       bottom: 10px;
       width: 18px;
       cursor: ew-resize;
     }
-    .studio-resize-handle[data-axis="w"]::before {
+    .studio-resize-handle[data-edge="left"]::before,
+    .studio-resize-handle[data-edge="right"]::before {
       top: 16px;
       bottom: 16px;
       left: 8px;
       width: 2px;
     }
-    .studio-resize-handle[data-axis="w"][data-edge="left"] { left: -9px; }
-    .studio-resize-handle[data-axis="w"][data-edge="right"] { right: -9px; }
-    .studio-resize-handle[data-axis="h"] {
+    .studio-resize-handle[data-edge="left"] { left: -9px; }
+    .studio-resize-handle[data-edge="right"] { right: -9px; }
+    .studio-resize-handle[data-edge="top"],
+    .studio-resize-handle[data-edge="bottom"] {
       left: 10px;
       right: 10px;
       height: 18px;
       cursor: ns-resize;
     }
-    .studio-resize-handle[data-axis="h"]::before {
+    .studio-resize-handle[data-edge="top"]::before,
+    .studio-resize-handle[data-edge="bottom"]::before {
       left: 16px;
       right: 16px;
       top: 8px;
       height: 2px;
     }
-    .studio-resize-handle[data-axis="h"][data-edge="top"] { top: -9px; }
-    .studio-resize-handle[data-axis="h"][data-edge="bottom"] { bottom: -9px; }
+    .studio-resize-handle[data-edge="top"] { top: -9px; }
+    .studio-resize-handle[data-edge="bottom"] { bottom: -9px; }
     .studio-resize-handle[data-mode="corner"] {
       width: 20px;
       height: 20px;
@@ -1471,6 +1905,7 @@ HTML = r"""<!doctype html>
       display: grid;
       gap: 10px;
       padding-bottom: 2px;
+      min-width: 0;
     }
     .selected-pane-section + .selected-pane-section {
       padding-top: 12px;
@@ -1572,33 +2007,34 @@ HTML = r"""<!doctype html>
       grid-template-columns: auto minmax(0, 1fr);
     }
     .playlist-media-cell {
-      width: auto;
+      width: 156px;
       display: flex;
+      justify-content: center;
+      align-items: center;
       align-self: start;
       min-width: 0;
     }
-    .playlist-duration {
-      position: absolute;
-      bottom: 5px;
-      right: 6px;
-      padding: 1px 5px 2px;
-      border-radius: 4px;
-      background: rgba(0,0,0,0.60);
-      color: rgba(255,255,255,0.90);
+    .playlist-duration-chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 30px;
+      padding: 0 8px;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--line);
+      color: var(--muted);
       font-family: "Menlo", "Consolas", monospace;
-      font-size: 9px;
+      font-size: 10px;
       letter-spacing: 0.06em;
       text-transform: uppercase;
-      z-index: 2;
-      pointer-events: none;
-      backdrop-filter: blur(4px);
     }
-    .playlist-duration:empty { display: none; }
+    .playlist-duration-chip:empty { display: none; }
     .playlist-thumb {
-      height: 72px;
+      height: auto;
       width: auto;
-      min-height: 72px;
-      max-height: 72px;
+      min-height: 88px;
+      margin-inline: auto;
       border-radius: 8px;
       overflow: hidden;
       background:
@@ -1642,15 +2078,39 @@ HTML = r"""<!doctype html>
       font-size: 14px;
       opacity: 0.5;
     }
-    .playlist-path { width: 100%; margin-top: 1px; }
+    .playlist-path {
+      width: 100%;
+      margin-top: 1px;
+      min-width: 0;
+      box-sizing: border-box;
+    }
     .playlist-controls {
       display: grid;
       gap: 6px;
       min-width: 0;
       align-content: start;
     }
-    .playlist-controls-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-    .playlist-controls-row .playlist-mini-btn { margin-top: 0; }
+    .playlist-controls-row {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 6px;
+      align-items: center;
+      min-width: 0;
+    }
+    .playlist-inline-group {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      flex: 0 0 auto;
+      min-width: 0;
+    }
+    .playlist-controls-row .playlist-mini-btn {
+      margin-top: 0;
+      margin-bottom: 0;
+      align-self: center;
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
     .playlist-thumb-media.quarter-turn { padding: 0; }
     .playlist-index {
       position: absolute;
@@ -1670,53 +2130,44 @@ HTML = r"""<!doctype html>
       pointer-events: none;
       backdrop-filter: blur(4px);
     }
-    .playlist-row input { min-width: 0; }
+    .playlist-row input {
+      min-width: 0;
+      box-sizing: border-box;
+    }
     .playlist-repeat {
       text-align: center;
       font-family: "Menlo", "Consolas", monospace;
       height: 30px;
-      padding: 6px 8px;
+      width: 5ch !important;
+      min-width: 5ch !important;
+      max-width: 5ch !important;
+      flex: 0 0 5ch;
+      padding: 6px 4px;
     }
-    .playlist-repeat-wrap {
-      display: grid;
-      gap: 3px;
+    .playlist-repeat-label {
+      display: inline-flex;
       align-items: center;
-      justify-items: center;
+      flex: 0 0 auto;
       color: var(--muted);
       font-size: 9px;
       letter-spacing: 0.12em;
       text-transform: uppercase;
       font-family: "Menlo", "Consolas", monospace;
-      width: 72px;
+      white-space: nowrap;
+      line-height: 30px;
     }
-    .playlist-item.portrait-thumb .playlist-controls-row {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      align-items: stretch;
-    }
-    .playlist-item.portrait-thumb .playlist-repeat-wrap {
-      width: 100%;
-      justify-items: stretch;
-      grid-column: 1 / -1;
-    }
-    .playlist-item.portrait-thumb .playlist-repeat {
-      width: 100%;
-    }
-    .playlist-repeat-wrap span { display: block; line-height: 9px; }
     .playlist-mini-btn {
       padding: 5px 8px;
       border-radius: 6px;
       background: var(--surface-high);
       border: 1px solid var(--line);
       color: var(--ink);
-      height: 28px;
+      height: 30px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      margin-top: 10px;
-    }
-    .playlist-controls-row {
-      align-items: end;
+      margin-top: 0;
+      margin-bottom: 0;
     }
     .playlist-mini-btn.danger { color: var(--danger); }
     .playlist-bulk {
@@ -1796,8 +2247,9 @@ HTML = r"""<!doctype html>
       .queue-editor-target { white-space: normal; }
       .playlist-row { grid-template-columns: auto 1fr; }
       .playlist-item.portrait-thumb .playlist-row { grid-template-columns: auto 1fr; }
-      .playlist-media-cell, .playlist-thumb { width: 100%; }
-      .playlist-item.portrait-thumb .playlist-thumb { width: 100%; }
+      .playlist-media-cell { width: 100%; }
+      .playlist-thumb { margin-inline: auto; }
+      .playlist-controls-row { flex-wrap: wrap; }
     }
   </style>
 </head>
@@ -2218,9 +2670,10 @@ HTML = r"""<!doctype html>
       const audioEl = document.getElementById("inspectorMainAudioMode");
       const muteEl = document.getElementById("inspectorMainMuteMode");
       const loopEl = document.getElementById("inspectorMainLoopFile");
+      const panscanEl = document.getElementById("inspectorMainPanscan");
       const shadersEl = document.getElementById("inspectorMainShaders");
       const otherEl = document.getElementById("inspectorMainMpvOpts");
-      if (!audioEl || !muteEl || !loopEl || !shadersEl || !otherEl) return;
+      if (!audioEl || !muteEl || !loopEl || !panscanEl || !shadersEl || !otherEl) return;
       state.mpv_opts = buildMpvOptsFromParts({
         audioMode: audioEl.value,
         muteMode: muteEl.value,
@@ -2228,6 +2681,7 @@ HTML = r"""<!doctype html>
         shadersText: shadersEl.value,
         otherText: otherEl.value,
       });
+      state.panscan = panscanEl.value;
       const mpvAudioEl = document.getElementById("mpvAudioMode");
       const mpvShadersEl = document.getElementById("mpvShaders");
       if (mpvAudioEl) mpvAudioEl.value = audioEl.value;
@@ -2239,9 +2693,10 @@ HTML = r"""<!doctype html>
       const audioEl = document.getElementById("inspectorPaneAudioMode");
       const muteEl = document.getElementById("inspectorPaneMuteMode");
       const loopEl = document.getElementById("inspectorPaneLoopFile");
+      const panscanEl = document.getElementById("inspectorPanePanscan");
       const shadersEl = document.getElementById("inspectorPaneShaders");
       const otherEl = document.getElementById("inspectorPaneMpvOpts");
-      if (!audioEl || !muteEl || !loopEl || !shadersEl || !otherEl) return;
+      if (!audioEl || !muteEl || !loopEl || !panscanEl || !shadersEl || !otherEl) return;
       state.pane_mpv_opts[paneIndex] = buildMpvOptsFromParts({
         audioMode: audioEl.value,
         muteMode: muteEl.value,
@@ -2249,6 +2704,7 @@ HTML = r"""<!doctype html>
         shadersText: shadersEl.value,
         otherText: otherEl.value,
       });
+      state.pane_panscan[paneIndex] = panscanEl.value;
     }
 
     function roleType(role) {
@@ -2365,15 +2821,36 @@ HTML = r"""<!doctype html>
       };
     }
 
+    function isRemoteMediaUrl(path) {
+      return /^https?:\/\//i.test(String(path || "").trim());
+    }
+
+    function remoteMediaPathInfo(path) {
+      const value = String(path || "").trim();
+      if (!value) return "";
+      if (!isRemoteMediaUrl(value)) return value;
+      try {
+        const parsed = new URL(value);
+        const params = [];
+        parsed.searchParams.forEach((paramValue, key) => {
+          params.push(key, paramValue);
+        });
+        return `${parsed.pathname} ${params.join(" ")}`.trim();
+      } catch (_) {
+        return value;
+      }
+    }
+
     function mediaUrl(path) {
       const value = String(path || "").trim();
       if (!value) return "";
+      if (isRemoteMediaUrl(value)) return value;
       return `/api/media?path=${encodeURIComponent(value)}`;
     }
 
     function playlistThumbCacheKey(path, metrics) {
       return [
-        "kmsmosaic-thumb-v1",
+        "kmsmosaic-thumb-v2",
         String(path || "").trim(),
         String(metrics.rotation || 0),
         String(metrics.aspectRatio || ""),
@@ -2386,8 +2863,15 @@ HTML = r"""<!doctype html>
         const raw = localStorage.getItem(playlistThumbCacheKey(path, metrics));
         if (!raw) return null;
         const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed.src !== "string" || !parsed.src) return null;
-        return parsed;
+        if (!parsed || typeof parsed !== "object") return null;
+        const src = typeof parsed.src === "string" ? parsed.src : "";
+        const duration = Number.isFinite(parsed.duration) && parsed.duration > 0 ? parsed.duration : null;
+        if (!src && duration == null) return null;
+        return {
+          src,
+          duration,
+          savedAt: Number(parsed.savedAt || 0) || 0,
+        };
       } catch (_) {
         return null;
       }
@@ -2407,11 +2891,18 @@ HTML = r"""<!doctype html>
     }
 
     function isLikelyImagePath(path) {
-      return /\.(avif|bmp|gif|jpe?g|png|webp)$/i.test(String(path || ""));
+      const value = String(path || "").trim();
+      if (!value) return false;
+      const probe = isRemoteMediaUrl(value) ? remoteMediaPathInfo(value) : value;
+      return /\.(avif|bmp|gif|jpe?g|png|webp)(?:$|[^a-z0-9])/i.test(probe);
     }
 
     function isLikelyVideoPath(path) {
-      return /\.(m4v|mkv|mov|mp4|mpeg|mpg|ts|webm)$/i.test(String(path || ""));
+      const value = String(path || "").trim();
+      if (!value) return false;
+      const probe = isRemoteMediaUrl(value) ? remoteMediaPathInfo(value) : value;
+      if (/\.(m4v|mkv|mov|mp4|mpeg|mpg|ts|webm)(?:$|[^a-z0-9])/i.test(probe)) return true;
+      return isRemoteMediaUrl(value) && !isLikelyImagePath(value);
     }
 
     function targetPlaylistMetrics(role = (selectedRole >= 0 ? selectedRole : 0)) {
@@ -2432,8 +2923,8 @@ HTML = r"""<!doctype html>
         ? String(state?.panscan || "").trim()
         : String(state?.pane_panscan?.[paneIndex] || "").trim();
       const panscan = Number.parseFloat(panscanValue || "0");
-      const thumbHeight = 72;
-      const thumbWidth = Math.round(Math.min(156, Math.max(56, thumbHeight * (physW / Math.max(1, physH)))));
+      const thumbHeight = 88;
+      const thumbWidth = Math.round(Math.min(156, Math.max(84, thumbHeight * (physW / Math.max(1, physH)))));
       return {
         rotation,
         aspectRatio: `${physW} / ${physH}`,
@@ -2469,7 +2960,7 @@ HTML = r"""<!doctype html>
         if (cached?.src) {
           return `<div class="playlist-thumb-media${quarterTurn ? " quarter-turn" : ""}"><img src="${cached.src}" alt="Preview for queue item ${index + 1}" loading="lazy"${mediaStyle} /></div>`;
         }
-        return `<div class="playlist-thumb-media${quarterTurn ? " quarter-turn" : ""}"><video data-preview-video="${index}" data-preview-path="${value.replace(/"/g, "&quot;")}" data-preview-src="${src}#t=5" muted playsinline preload="metadata"${mediaStyle}></video></div>`;
+        return `<div class="playlist-thumb-media${quarterTurn ? " quarter-turn" : ""}"><video data-preview-video="${index}" data-preview-path="${value.replace(/"/g, "&quot;")}" data-preview-src="${src}" muted playsinline preload="metadata"${mediaStyle}></video></div>`;
       }
       return "";
     }
@@ -2846,6 +3337,16 @@ HTML = r"""<!doctype html>
       return clampStudioPercent(value, value);
     }
 
+    function logicalResizeEdgeForSplit(kind, branchArea, area) {
+      if (!branchArea || !area) return null;
+      if (kind === "col") {
+        const branchOnLeft = (branchArea.x + (branchArea.w / 2)) < (area.x + (area.w / 2));
+        return branchOnLeft ? "right" : "left";
+      }
+      const branchOnTop = (branchArea.y + (branchArea.h / 2)) < (area.y + (area.h / 2));
+      return branchOnTop ? "bottom" : "top";
+    }
+
     function decorateSplitTreeAncestor(entry, areaMap) {
       if (!entry) return null;
       const area = areaMap?.[entry.path];
@@ -2854,9 +3355,7 @@ HTML = r"""<!doctype html>
       const displayArea = transformStudioPaneRect(area);
       const displayBranch = transformStudioPaneRect(branchArea);
       const total = normalizedRotationDegrees();
-      const logicalEdge = entry.node.kind === "col"
-        ? ((branchArea.x + (branchArea.w / 2)) < (area.x + (area.w / 2)) ? "left" : "right")
-        : ((branchArea.y + (branchArea.h / 2)) < (area.y + (area.h / 2)) ? "top" : "bottom");
+      const logicalEdge = logicalResizeEdgeForSplit(entry.node.kind, branchArea, area);
       const edge = displayEdgeForLogicalEdge(logicalEdge, total);
       return {
         ...entry,
@@ -2900,6 +3399,55 @@ HTML = r"""<!doctype html>
       return effectiveStudioSizeValue(rectAxisLength(ctx?.rect, axis));
     }
 
+    function studioSizeInputMarkup(role, axis, active, value) {
+      const axisLabel = axis === "h" ? "Height" : "Width";
+      const title = active
+        ? (axis === "w"
+            ? "Adjusts the nearest vertical split."
+            : "Adjusts the nearest horizontal split.")
+        : (axis === "w"
+            ? "This pane has no vertical split ancestor to resize."
+            : "This pane has no horizontal split ancestor to resize.");
+      return `<label class="studio-size-chip" data-active="${active ? "true" : "false"}" title="${title}">
+        <span>${axisLabel}</span>
+        <input type="number" class="studio-size-input" value="${value}" min="${STUDIO_SIZE_MIN}" max="${STUDIO_SIZE_MAX}" data-role="${role}" data-axis="${axis}" step="1" ${active ? "" : "disabled"}>
+      </label>`;
+    }
+
+    function selectedPaneSizeInputMarkup(role, axis, label, active, value) {
+      const title = active
+        ? (axis === "w"
+            ? "Adjusts the nearest vertical split."
+            : "Adjusts the nearest horizontal split.")
+        : (axis === "w"
+            ? "This pane has no vertical split ancestor to resize."
+            : "This pane has no horizontal split ancestor to resize.");
+      return `
+        <div class="selected-pane-size-field" data-active="${active ? "true" : "false"}" title="${title}">
+          <div class="selected-pane-size-label">${label}</div>
+          <input type="number" class="studio-size-input" value="${value}" min="${STUDIO_SIZE_MIN}" max="${STUDIO_SIZE_MAX}" data-role="${role}" data-axis="${axis}" step="1" ${active ? "" : "disabled"}>
+        </div>
+      `;
+    }
+
+    function selectedPaneSizeSectionMarkup(role) {
+      const ctx = splitTreeResizeContext(state, role);
+      const rect = ctx?.rect || visibilityLayoutForState(state)?.rects?.[role];
+      const widthValue = effectiveStudioSizeValue(rect?.w || 0);
+      const heightValue = effectiveStudioSizeValue(rect?.h || 0);
+      const widthActive = !!ctx?.colAncestor;
+      const heightActive = !!ctx?.rowAncestor;
+      return `
+        <div class="selected-pane-section">
+          <h2 class="section-title">Pane Size</h2>
+          <div class="selected-pane-size-group">
+            ${selectedPaneSizeInputMarkup(role, "w", "Width", widthActive, widthValue)}
+            ${selectedPaneSizeInputMarkup(role, "h", "Height", heightActive, heightValue)}
+          </div>
+        </div>
+      `;
+    }
+
     function resizePaneAxis(role, axis, requestedSize) {
       if (!state) return { ok: false, value: effectiveStudioSizeValue(requestedSize) };
       const tree = ensureSplitTreeModel();
@@ -2934,6 +3482,52 @@ HTML = r"""<!doctype html>
       state.splitTreeModel = tree;
       syncSplitTreeState();
       return { ok: true, value: currentStudioInputValue(role, axis) };
+    }
+
+    function bindStudioSizeInputs(scope) {
+      scope?.querySelectorAll(".studio-size-input").forEach((input) => {
+        input.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+        input.addEventListener("input", (event) => {
+          event.stopPropagation();
+        });
+        input.addEventListener("change", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (input.disabled) return;
+          const role = parseInt(input.dataset.role || "", 10);
+          if (!Number.isFinite(role)) return;
+          selectRole(role);
+          const axis = input.dataset.axis === "h" ? "h" : "w";
+          const parsed = parseInt(input.value, 10);
+          const result = resizePaneAxis(role, axis, parsed);
+          if (!result.ok) {
+            input.value = String(result.value);
+            renderPlaylistEditor();
+            renderStudioBoard();
+            renderStudioInspector();
+            setStatus(
+              result.reason === "invalid"
+                ? `Use an integer from ${STUDIO_SIZE_MIN} to ${STUDIO_SIZE_MAX}.`
+                : (axis === "w"
+                    ? `${roleTitle(role)} width follows the current split tree. Choose a pane edge with a vertical split to resize it.`
+                    : `${roleTitle(role)} height follows the current split tree. Choose a pane edge with a horizontal split to resize it.`),
+              true
+            );
+            return;
+          }
+          renderPlaylistEditor();
+          renderStudioBoard();
+          renderStudioInspector();
+          setStatus(
+            axis === "w"
+              ? `Updated ${roleTitle(role)} width to ${result.value}%.`
+              : `Updated ${roleTitle(role)} height to ${result.value}%.`,
+            false
+          );
+        });
+      });
     }
 
     function paneIdentityForRole(nextState, role) {
@@ -3148,16 +3742,25 @@ HTML = r"""<!doctype html>
       studioBoard.style.aspectRatio = (total === 90 || total === 270) ? "9 / 16" : "16 / 9";
     }
 
-    function studioResizeCursor(mode, corner = "") {
+    function normalizeStudioResizeCorner(edgeA, edgeB) {
+      const vertical = [edgeA, edgeB].find((edge) => edge === "top" || edge === "bottom");
+      const horizontal = [edgeA, edgeB].find((edge) => edge === "left" || edge === "right");
+      if (!vertical || !horizontal) return null;
+      return `${vertical}-${horizontal}`;
+    }
+
+    function studioResizeCursor(mode, corner = "", edge = "") {
       if (mode === "corner") {
         return corner === "top-right" || corner === "bottom-left" ? "nesw-resize" : "nwse-resize";
       }
+      if (edge === "top" || edge === "bottom") return "ns-resize";
+      if (edge === "left" || edge === "right") return "ew-resize";
       return mode === "h" ? "ns-resize" : "ew-resize";
     }
 
     function studioResizeCornerName(ctx) {
       if (!ctx?.colAncestor || !ctx?.rowAncestor) return null;
-      return `${ctx.rowAncestor.edge}-${ctx.colAncestor.edge}`;
+      return normalizeStudioResizeCorner(ctx.rowAncestor.edge, ctx.colAncestor.edge);
     }
 
     function studioResizeHandleMarkup(ctx) {
@@ -3227,7 +3830,7 @@ HTML = r"""<!doctype html>
       window.removeEventListener("pointercancel", stopStudioResizeDrag);
     }
 
-    function startStudioResizeDrag(event, role, mode) {
+    function startStudioResizeDrag(event, role, mode, edge = "", corner = "") {
       if (!state) return;
       const ctx = splitTreeResizeContext(state, role);
       if (!ctx) return;
@@ -3236,9 +3839,9 @@ HTML = r"""<!doctype html>
       }
       selectRole(role);
       studioResizeDrag = { role, mode };
-      const corner = studioResizeCornerName(ctx) || "";
+      const resolvedCorner = corner || studioResizeCornerName(ctx) || "";
       studioBoard?.classList.add("resizing");
-      if (studioBoard) studioBoard.style.cursor = studioResizeCursor(mode, corner);
+      if (studioBoard) studioBoard.style.cursor = studioResizeCursor(mode, resolvedCorner, edge);
       window.addEventListener("pointermove", applyStudioResizeDrag);
       window.addEventListener("pointerup", stopStudioResizeDrag);
       window.addEventListener("pointercancel", stopStudioResizeDrag);
@@ -3258,10 +3861,6 @@ HTML = r"""<!doctype html>
         if (!rect || rect.w <= 0 || rect.h <= 0) return;
         const displayRect = transformStudioPaneRect(rect);
         const resizeCtx = splitTreeResizeContext(state, role);
-        const widthValue = effectiveStudioSizeValue(rect.w);
-        const heightValue = effectiveStudioSizeValue(rect.h);
-        const widthActive = !!resizeCtx?.colAncestor;
-        const heightActive = !!resizeCtx?.rowAncestor;
         const handleMarkup = selectedRole === role ? studioResizeHandleMarkup(resizeCtx) : "";
         const card = document.createElement("div");
         card.draggable = true;
@@ -3279,31 +3878,19 @@ HTML = r"""<!doctype html>
             <span class="studio-card-title">${roleTitle(role)}</span>
             <span class="studio-tag">${paneType === "mpv" ? "mpv" : "shell"}</span>
           </div>
-          <div class="studio-card-body">
-            <div class="studio-size-group">
-              <label class="studio-size-chip" data-active="${widthActive ? "true" : "false"}" title="${widthActive ? "Adjusts the nearest vertical split." : "This pane has no vertical split ancestor to resize."}">
-                <span>W</span>
-                <input type="number" class="studio-size-input" value="${widthValue}" min="${STUDIO_SIZE_MIN}" max="${STUDIO_SIZE_MAX}" data-role="${role}" data-axis="w" step="1" ${widthActive ? "" : "disabled"}>
-              </label>
-              <label class="studio-size-chip" data-active="${heightActive ? "true" : "false"}" title="${heightActive ? "Adjusts the nearest horizontal split." : "This pane has no horizontal split ancestor to resize."}">
-                <span>H</span>
-                <input type="number" class="studio-size-input" value="${heightValue}" min="${STUDIO_SIZE_MIN}" max="${STUDIO_SIZE_MAX}" data-role="${role}" data-axis="h" step="1" ${heightActive ? "" : "disabled"}>
-              </label>
-            </div>
-          </div>
           ${handleMarkup}
         `;
         card.addEventListener("click", () => {
           selectRole(role);
           renderStudioInspector();
-          syncStudioBoardSelectionState();
+          renderStudioBoard();
         });
         card.addEventListener("keydown", (event) => {
           if (event.key !== "Enter" && event.key !== " ") return;
           event.preventDefault();
           selectRole(role);
           renderStudioInspector();
-          syncStudioBoardSelectionState();
+          renderStudioBoard();
         });
         card.addEventListener("dragstart", (event) => {
           draggedStudioRole = role;
@@ -3348,52 +3935,17 @@ HTML = r"""<!doctype html>
           renderStudioInspector();
           setStatus(`Swapped ${roleTitle(sourceRole)} with ${roleTitle(role)}.`, false);
         });
-        card.querySelectorAll(".studio-size-input").forEach((input) => {
-          input.addEventListener("change", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            if (input.disabled) return;
-            selectRole(role);
-            const axis = input.dataset.axis === "h" ? "h" : "w";
-            const parsed = parseInt(input.value, 10);
-            const result = resizePaneAxis(role, axis, parsed);
-            if (!result.ok) {
-              input.value = String(result.value);
-              renderPlaylistEditor();
-              renderStudioBoard();
-              renderStudioInspector();
-              setStatus(
-                result.reason === "invalid"
-                  ? `Use an integer from ${STUDIO_SIZE_MIN} to ${STUDIO_SIZE_MAX}.`
-                  : (axis === "w"
-                      ? `${roleTitle(role)} width follows the current split tree. Choose a pane edge with a vertical split to resize it.`
-                      : `${roleTitle(role)} height follows the current split tree. Choose a pane edge with a horizontal split to resize it.`),
-                true
-              );
-              return;
-            }
-            renderPlaylistEditor();
-            renderStudioBoard();
-            renderStudioInspector();
-            setStatus(
-              axis === "w"
-                ? `Updated ${roleTitle(role)} width to ${result.value}%.`
-                : `Updated ${roleTitle(role)} height to ${result.value}%.`,
-              false
-            );
-          });
-          input.addEventListener("click", (event) => {
-            event.stopPropagation();
-          });
-          input.addEventListener("input", (event) => {
-            event.stopPropagation();
-          });
-        });
         card.querySelectorAll("[data-studio-resize]").forEach((handle) => {
           handle.addEventListener("pointerdown", (event) => {
             event.preventDefault();
             event.stopPropagation();
-            startStudioResizeDrag(event, role, handle.dataset.studioResize || "w");
+            startStudioResizeDrag(
+              event,
+              role,
+              handle.dataset.studioResize || "w",
+              handle.dataset.edge || "",
+              handle.dataset.corner || ""
+            );
           });
           handle.addEventListener("click", (event) => {
             event.preventDefault();
@@ -3520,6 +4072,7 @@ HTML = r"""<!doctype html>
 
       if (selectedRole === 0) {
         const mainMpvGroups = parseMpvOptionGroups(state.mpv_opts || []);
+        const mainPanscan = String(state.panscan || "");
         studioInspector.innerHTML = `
           <div class="selected-pane-section">
             <h2 class="section-title">Pane Behavior</h2>
@@ -3544,6 +4097,9 @@ HTML = r"""<!doctype html>
                 <option value="inf"${mainMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
               </select>
             </label>
+            <label>Panscan
+              <input id="inspectorMainPanscan" type="number" step="0.01" placeholder="0.00" value="${mainPanscan.replace(/"/g, "&quot;")}">
+            </label>
             <label>Shader Stack
               <textarea id="inspectorMainShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${mainMpvGroups.shaders.join("\n")}</textarea>
             </label>
@@ -3551,6 +4107,7 @@ HTML = r"""<!doctype html>
               <textarea id="inspectorMainMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${mainMpvGroups.other.join("\n")}</textarea>
             </label>
           </div>
+          ${selectedPaneSizeSectionMarkup(selectedRole)}
           ${layoutActions}
           ${selectedPaneQueueSectionMarkup()}
         `;
@@ -3558,6 +4115,7 @@ HTML = r"""<!doctype html>
           "inspectorMainAudioMode",
           "inspectorMainMuteMode",
           "inspectorMainLoopFile",
+          "inspectorMainPanscan",
           "inspectorMainShaders",
           "inspectorMainMpvOpts"
         ].forEach((id) => {
@@ -3579,6 +4137,7 @@ HTML = r"""<!doctype html>
             setStatus("Added a new queue entry.", false);
           });
         }
+        bindStudioSizeInputs(studioInspector);
         bindSelectedPaneLayoutActions(selectedRole);
         syncMainInspectorMpvOpts();
         renderPlaylistEditor();
@@ -3602,6 +4161,7 @@ HTML = r"""<!doctype html>
               </label>
               <p class="muted-note">This new mpv pane has been placed in the layout, but its playlist and mpv options stay hidden until you save and let the page reload from the persisted config.</p>
             </div>
+            ${selectedPaneSizeSectionMarkup(selectedRole)}
             ${layoutActions}
           `;
           document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
@@ -3609,11 +4169,13 @@ HTML = r"""<!doctype html>
             renderStudioBoard();
             renderStudioInspector();
           });
+          bindStudioSizeInputs(studioInspector);
           bindSelectedPaneLayoutActions(selectedRole);
           dispatchSelectedPaneState();
           return;
         }
         const paneMpvGroups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
+        const panePanscan = String(state.pane_panscan?.[paneIndex] || "");
         studioInspector.innerHTML = `
           <div class="selected-pane-section">
             <h2 class="section-title">Pane Behavior</h2>
@@ -3644,6 +4206,9 @@ HTML = r"""<!doctype html>
                 <option value="inf"${paneMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
               </select>
             </label>
+            <label>Panscan
+              <input id="inspectorPanePanscan" type="number" step="0.01" placeholder="0.00" value="${panePanscan.replace(/"/g, "&quot;")}">
+            </label>
             <label>Shader Stack
               <textarea id="inspectorPaneShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${paneMpvGroups.shaders.join("\n")}</textarea>
             </label>
@@ -3651,6 +4216,7 @@ HTML = r"""<!doctype html>
               <textarea id="inspectorPaneMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${paneMpvGroups.other.join("\n")}</textarea>
             </label>
           </div>
+          ${selectedPaneSizeSectionMarkup(selectedRole)}
           ${layoutActions}
           ${selectedPaneQueueSectionMarkup()}
         `;
@@ -3663,6 +4229,7 @@ HTML = r"""<!doctype html>
           "inspectorPaneAudioMode",
           "inspectorPaneMuteMode",
           "inspectorPaneLoopFile",
+          "inspectorPanePanscan",
           "inspectorPaneShaders",
           "inspectorPaneMpvOpts",
         ].forEach((id) => {
@@ -3684,6 +4251,7 @@ HTML = r"""<!doctype html>
             setStatus("Added a new queue entry.", false);
           });
         }
+        bindStudioSizeInputs(studioInspector);
         bindSelectedPaneLayoutActions(selectedRole);
         syncInspectorPaneMpvOpts(paneIndex);
         renderPlaylistEditor();
@@ -3705,6 +4273,7 @@ HTML = r"""<!doctype html>
           </label>
           <p class="muted-note">This pane currently spawns a shell command. Switch it to mpv here if you want a dedicated video pane instead.</p>
         </div>
+        ${selectedPaneSizeSectionMarkup(selectedRole)}
         ${layoutActions}
       `;
       document.getElementById("inspectorPaneType").addEventListener("change", (event) => {
@@ -3716,6 +4285,7 @@ HTML = r"""<!doctype html>
         state.pane_commands[paneIndex] = event.target.value;
         renderStudioBoard();
       });
+      bindStudioSizeInputs(studioInspector);
       bindSelectedPaneLayoutActions(selectedRole);
       dispatchSelectedPaneState();
     }
@@ -3750,6 +4320,8 @@ HTML = r"""<!doctype html>
       list.className = "playlist-list";
       groups.forEach((group, index) => {
         const thumb = playlistThumbMarkup(group.path, index, thumbMetrics);
+        const cachedThumb = readCachedPlaylistThumb(group.path, thumbMetrics);
+        const durationText = cachedThumb?.duration ? formatMediaDuration(cachedThumb.duration) : "";
         const item = document.createElement("div");
         item.className = `playlist-item${thumbMetrics.isPortrait ? " portrait-thumb" : ""}${index % 2 === 1 ? " alt" : ""}`;
         item.draggable = true;
@@ -3762,13 +4334,12 @@ HTML = r"""<!doctype html>
             </div>
           </div>`;
         const controls = `
-            <label class="playlist-repeat-wrap" title="How many times this video repeats in a row">
-              <span>Repeat</span>
+            <span class="playlist-duration-chip">${durationText}</span>
+            <div class="playlist-inline-group">
+              <span class="playlist-repeat-label" title="How many times this video repeats in a row">Repeat</span>
               <input class="playlist-repeat" type="number" min="1" step="1" data-video-group-repeat="${index}" value="${group.count}" title="Repeat count" />
-            </label>
-            <button class="playlist-mini-btn" data-video-group-up="${index}">Up</button>
-            <button class="playlist-mini-btn" data-video-group-down="${index}">Down</button>
-            <button class="playlist-mini-btn danger" data-video-group-remove="${index}">Remove</button>`;
+              <button class="playlist-mini-btn danger" data-video-group-remove="${index}">Remove</button>
+            </div>`;
         const pathInput = `<input class="playlist-path" type="text" data-video-group-index="${index}" value="${group.path.replace(/"/g, "&quot;")}" placeholder="/path/to/video.mp4" />`;
         item.innerHTML = `
           <div class="playlist-row">
@@ -3817,12 +4388,6 @@ HTML = r"""<!doctype html>
           updateQueueGroup(idx, { count: event.target.value });
         });
       });
-      playlistEditor.querySelectorAll("[data-video-group-up]").forEach((button) => {
-        button.addEventListener("click", () => moveQueueGroupTo(Number(button.dataset.videoGroupUp), Math.max(0, Number(button.dataset.videoGroupUp) - 1)));
-      });
-      playlistEditor.querySelectorAll("[data-video-group-down]").forEach((button) => {
-        button.addEventListener("click", () => moveQueueGroupTo(Number(button.dataset.videoGroupDown), Math.min(groups.length - 1, Number(button.dataset.videoGroupDown) + 1)));
-      });
       playlistEditor.querySelectorAll("[data-video-group-remove]").forEach((button) => {
         button.addEventListener("click", () => removeQueueGroup(Number(button.dataset.videoGroupRemove)));
       });
@@ -3857,11 +4422,15 @@ HTML = r"""<!doctype html>
           }
           if (isVideo) {
             media = document.createElement("video");
-            media.src = `${src}#t=5`;
+            media.src = src;
             media.muted = true;
             media.autoplay = true;
             media.loop = true;
             media.playsInline = true;
+            media.preload = "auto";
+            media.setAttribute("muted", "");
+            media.setAttribute("autoplay", "");
+            media.setAttribute("playsinline", "");
           } else {
             media = document.createElement("img");
             media.src = src;
@@ -3877,6 +4446,24 @@ HTML = r"""<!doctype html>
           };
           if (media instanceof HTMLVideoElement) {
             media.addEventListener("loadedmetadata", updateOverlayToNativeSize, { once: true });
+            media.addEventListener("loadedmetadata", () => {
+              if (!Number.isFinite(media.duration) || media.duration <= 0) return;
+              const target = Math.min(5, Math.max(0.1, media.duration / 3));
+              try {
+                media.currentTime = target;
+              } catch (_) {
+                // ignore seek failure and fall back to current frame
+              }
+            }, { once: true });
+            media.addEventListener("seeked", () => {
+              media.play().catch(() => {});
+            }, { once: true });
+            media.addEventListener("loadeddata", () => {
+              media.play().catch(() => {});
+            }, { once: true });
+            media.addEventListener("canplay", () => {
+              media.play().catch(() => {});
+            }, { once: true });
           } else {
             media.addEventListener("load", updateOverlayToNativeSize, { once: true });
           }
@@ -3894,6 +4481,13 @@ HTML = r"""<!doctype html>
       });
       playlistEditor.querySelectorAll("video[data-preview-video]").forEach((video) => {
         const seekToPreview = () => {
+          const path = video.dataset.previewPath || "";
+          const durationChip = video.closest(".playlist-item")?.querySelector(".playlist-duration-chip");
+          if (Number.isFinite(video.duration) && video.duration > 0) {
+            writeCachedPlaylistThumb(path, thumbMetrics, "", video.duration);
+            if (durationChip) durationChip.textContent = formatMediaDuration(video.duration);
+          }
+          video.closest(".playlist-thumb")?.classList.remove("empty");
           if (!Number.isFinite(video.duration) || video.duration <= 0) return;
           try {
             video.currentTime = Math.min(5, Math.max(0.1, video.duration / 3));
