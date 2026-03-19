@@ -163,28 +163,28 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 3px rgba(0,0,0,.06);
   }
   .kms-visibility-group {
-    display: grid;
-    gap: 6px;
     grid-column: 5 / span 2;
     grid-row: 1;
     align-self: start;
   }
   .kms-visibility-head {
     display: flex;
-    align-items: baseline;
+    align-items: flex-start;
     gap: 10px;
     flex-wrap: wrap;
   }
   .kms-visibility-label {
     font-weight: 700;
     color: #2c3136;
-    font-size: 14px;
+    font-size: inherit;
+    line-height: 1.2;
   }
   .kms-visibility-options {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     flex-wrap: wrap;
+    margin-top: 2px;
   }
   .kms-visibility-options button {
     min-width: 104px;
@@ -855,7 +855,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
           <input id="kmsConfigPath" name="CONFIG_PATH" type="text" value="<?php echo htmlspecialchars($config_path); ?>">
         </div>
 
-        <div class="kms-visibility-group" id="kmsVisibilityGroup">
+        <div class="kms-field kms-visibility-group" id="kmsVisibilityGroup">
           <div class="kms-visibility-head">
             <div class="kms-visibility-label">Visibility Mode</div>
           </div>
