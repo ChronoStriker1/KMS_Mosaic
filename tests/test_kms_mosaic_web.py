@@ -55,23 +55,24 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         )
         self.assertIsNotNone(queue_ctx)
         queue_ctx_text = queue_ctx.group(0)
-        self.assertIn("state.pane_mpv_opts?.[0]", queue_ctx_text)
-        self.assertIn("state.pane_video_paths?.[0]", queue_ctx_text)
         self.assertIn("const paneIndex = selectedRole;", queue_ctx_text)
+        self.assertIn("state.pane_mpv_opts?.[paneIndex]", queue_ctx_text)
+        self.assertIn("state.pane_video_paths?.[paneIndex]", queue_ctx_text)
         self.assertNotIn("const paneIndex = selectedRole - 1;", queue_ctx_text)
+        self.assertNotIn("if (selectedRole === 0)", queue_ctx_text)
         self.assertNotIn("state.video_paths = paths.slice()", queue_ctx_text)
 
-        sync_main = re.search(
-            r"function syncMainInspectorMpvOpts\(\) \{.*?\n    function syncInspectorPaneMpvOpts",
+        sync_pane = re.search(
+            r"function syncInspectorPaneMpvOpts\(paneIndex\) \{.*?\n    function roleType",
             html,
             re.S,
         )
-        self.assertIsNotNone(sync_main)
-        sync_main_text = sync_main.group(0)
-        self.assertIn("state.pane_mpv_opts[0] = buildMpvOptsFromParts", sync_main_text)
-        self.assertIn("state.pane_panscan[0] = panscanEl.value", sync_main_text)
-        self.assertNotIn("state.mpv_opts =", sync_main_text)
-        self.assertNotIn("state.panscan =", sync_main_text)
+        self.assertIsNotNone(sync_pane)
+        sync_pane_text = sync_pane.group(0)
+        self.assertIn("state.pane_mpv_opts[paneIndex] = buildMpvOptsFromParts", sync_pane_text)
+        self.assertIn("state.pane_panscan[paneIndex] = panscanEl.value", sync_pane_text)
+        self.assertNotIn("state.mpv_opts =", sync_pane_text)
+        self.assertNotIn("state.panscan =", sync_pane_text)
 
         inspector = re.search(
             r"function renderStudioInspector\(\) \{.*?\n    function renderPlaylistEditor",
@@ -80,12 +81,15 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         )
         self.assertIsNotNone(inspector)
         inspector_text = inspector.group(0)
-        self.assertIn("parseMpvOptionGroups(state.pane_mpv_opts?.[0] || [])", inspector_text)
-        self.assertIn("String(state.pane_panscan?.[0] || \"\")", inspector_text)
         self.assertIn("const paneIndex = selectedRole;", inspector_text)
-        self.assertNotIn("const paneIndex = selectedRole - 1;", inspector_text)
+        self.assertIn("const paneType = state.pane_types?.[paneIndex] || \"terminal\";", inspector_text)
+        self.assertIn("parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || [])", inspector_text)
+        self.assertIn("String(state.pane_panscan?.[paneIndex] || \"\")", inspector_text)
+        self.assertIn("const paneIndex = selectedRole;", inspector_text)
+        self.assertNotIn("if (selectedRole === 0)", inspector_text)
         self.assertNotIn("parseMpvOptionGroups(state.mpv_opts || [])", inspector_text)
         self.assertNotIn("String(state.panscan || \"\")", inspector_text)
+        self.assertIn("<label>Pane Type", inspector_text)
 
         fill_form = re.search(
             r"function fillForm\(nextState, configPath, nextRawConfig\) \{.*?\n    async function loadState",
@@ -97,6 +101,16 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertIn("const queueCtx = queueEditorContext();", fill_form_text)
         self.assertIn("queueField.value = (queueCtx?.paths || []).join(\"\\n\");", fill_form_text)
         self.assertNotIn("queueField.value = (state.video_paths || []).join(\"\\n\")", fill_form_text)
+
+        role_name = re.search(
+            r"function roleName\(role\) \{.*?\n    function visibilityModeForState",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(role_name)
+        role_name_text = role_name.group(0)
+        self.assertNotIn('return "Pane C";', role_name_text)
+        self.assertIn('return `Pane ${String.fromCharCode(65 + role)}`;', role_name_text)
 
     def test_browser_role_helpers_use_unified_pane_indexing(self) -> None:
         html = kms_mosaic_web.HTML
@@ -209,14 +223,26 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertIn("const newRole = Number(state.pane_count || 0);", split_remove_text)
         self.assertIn("state.pane_count = newRole + 1;", split_remove_text)
         self.assertIn("pendingNewPaneIndexes.add(newRole);", split_remove_text)
-        self.assertIn("if (!state || selectedRole < 0 || Number(state.pane_count || 0) <= 1) return false;", split_remove_text)
+        self.assertIn("if (!state || selectedRole < 0 || Number(state.pane_count || 0) === 1) return false;", split_remove_text)
         self.assertIn("const paneIndex = selectedRole;", split_remove_text)
         self.assertIn("for (let i = role + 1; i < state.pane_count; i += 1)", split_remove_text)
         self.assertNotIn("const newRole = Number(state.pane_count || 0) + 1;", split_remove_text)
         self.assertNotIn("pendingNewPaneIndexes.add(newRole - 1);", split_remove_text)
+        self.assertNotIn("Number(state.pane_count || 0) <= 1", split_remove_text)
         self.assertNotIn("if (!state || selectedRole <= 0) return false;", split_remove_text)
         self.assertNotIn("const paneIndex = selectedRole - 1;", split_remove_text)
         self.assertNotIn("for (let i = role + 1; i <= state.pane_count; i += 1)", split_remove_text)
+
+        layout_actions = re.search(
+            r"function selectedPaneLayoutActionsMarkup\(role\) \{.*?\n    function bindSelectedPaneLayoutActions",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(layout_actions)
+        layout_actions_text = layout_actions.group(0)
+        self.assertIn("const canRemove = Number(state?.pane_count || 0) > 1;", layout_actions_text)
+        self.assertIn('${canRemove ? \'<button type=\"button\" class=\"secondary studio-remove-btn\" data-selected-pane-remove=\"true\">Remove Pane</button>\' : ""}', layout_actions_text)
+        self.assertNotIn("role > 0", layout_actions_text)
 
     def test_unified_browser_helpers_use_pane_scoped_identity_rotation_and_tree_validation(self) -> None:
         html = kms_mosaic_web.HTML
