@@ -553,6 +553,26 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertIn("const parsedSelection = Number(state?.selected_pane);", fill_form_text)
         self.assertIn("selectedRole = Number.isFinite(parsedSelection) ? parsedSelection : restoreSelectedRole(state, previousSelection);", fill_form_text)
 
+    def test_pane_media_parser_clears_seeded_terminal_commands(self) -> None:
+        text = textwrap.dedent(
+            """
+            --pane-count 2
+            --pane-media 1
+            --pane-video 1 /media/main.mp4
+            --pane-playlist 2 /media/playlist.m3u
+            --pane-mpv-opt 2 mute=yes
+            """
+        ).strip()
+
+        parsed = kms_mosaic_web.parse_config_text(text)
+
+        self.assertEqual(parsed["pane_count"], 2)
+        self.assertEqual(parsed["pane_types"][:2], ["mpv", "mpv"])
+        self.assertEqual(parsed["pane_commands"][:2], ["", ""])
+        self.assertEqual(parsed["pane_video_paths"][0], ["/media/main.mp4"])
+        self.assertEqual(parsed["pane_playlists"][1], "/media/playlist.m3u")
+        self.assertEqual(parsed["pane_mpv_opts"][1], ["mute=yes"])
+
 
 if __name__ == "__main__":
     unittest.main()

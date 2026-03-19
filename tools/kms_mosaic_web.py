@@ -260,6 +260,13 @@ def _write_pane_payload(state: dict[str, Any], index: int, payload: dict[str, An
     state["pane_mpv_opts"][index] = list(payload.get("mpv_opts") or [])
 
 
+def _ensure_pane_media_slot(state: dict[str, Any], pane_index: int) -> None:
+    state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
+    ensure_panes(state)
+    state["pane_types"][pane_index] = "mpv"
+    state["pane_commands"][pane_index] = ""
+
+
 def _normalize_pane_type(pane_type: Any) -> tuple[str, str]:
     raw_type = str(pane_type or "").strip()
     if not raw_type:
@@ -637,64 +644,46 @@ def parse_config_text(text: str) -> dict[str, Any]:
                 i += 3
             elif tok == "--pane-media" and nxt is not None:
                 pane_index = max(0, int(nxt) - 1)
-                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
-                ensure_panes(state)
-                state["pane_types"][pane_index] = "mpv"
+                _ensure_pane_media_slot(state, pane_index)
                 i += 2
             elif tok == "--pane-playlist" and i + 2 < len(tokens):
                 pane_index = max(0, int(tokens[i + 1]) - 1)
-                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
-                ensure_panes(state)
-                state["pane_types"][pane_index] = "mpv"
+                _ensure_pane_media_slot(state, pane_index)
                 state["pane_playlists"][pane_index] = tokens[i + 2]
                 i += 3
             elif tok == "--pane-playlist-extended" and i + 2 < len(tokens):
                 pane_index = max(0, int(tokens[i + 1]) - 1)
-                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
-                ensure_panes(state)
-                state["pane_types"][pane_index] = "mpv"
+                _ensure_pane_media_slot(state, pane_index)
                 state["pane_playlist_extended"][pane_index] = tokens[i + 2]
                 i += 3
             elif tok == "--pane-playlist-fifo" and i + 2 < len(tokens):
                 pane_index = max(0, int(tokens[i + 1]) - 1)
-                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
-                ensure_panes(state)
-                state["pane_types"][pane_index] = "mpv"
+                _ensure_pane_media_slot(state, pane_index)
                 state["pane_playlist_fifos"][pane_index] = tokens[i + 2]
                 i += 3
             elif tok == "--pane-mpv-out" and i + 2 < len(tokens):
                 pane_index = max(0, int(tokens[i + 1]) - 1)
-                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
-                ensure_panes(state)
-                state["pane_types"][pane_index] = "mpv"
+                _ensure_pane_media_slot(state, pane_index)
                 state["pane_mpv_outs"][pane_index] = tokens[i + 2]
                 i += 3
             elif tok == "--pane-video-rotate" and i + 2 < len(tokens):
                 pane_index = max(0, int(tokens[i + 1]) - 1)
-                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
-                ensure_panes(state)
-                state["pane_types"][pane_index] = "mpv"
+                _ensure_pane_media_slot(state, pane_index)
                 state["pane_video_rotate"][pane_index] = tokens[i + 2]
                 i += 3
             elif tok == "--pane-panscan" and i + 2 < len(tokens):
                 pane_index = max(0, int(tokens[i + 1]) - 1)
-                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
-                ensure_panes(state)
-                state["pane_types"][pane_index] = "mpv"
+                _ensure_pane_media_slot(state, pane_index)
                 state["pane_panscan"][pane_index] = tokens[i + 2]
                 i += 3
             elif tok == "--pane-video" and i + 2 < len(tokens):
                 pane_index = max(0, int(tokens[i + 1]) - 1)
-                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
-                ensure_panes(state)
-                state["pane_types"][pane_index] = "mpv"
+                _ensure_pane_media_slot(state, pane_index)
                 state["pane_video_paths"][pane_index].append(tokens[i + 2])
                 i += 3
             elif tok == "--pane-mpv-opt" and i + 2 < len(tokens):
                 pane_index = max(0, int(tokens[i + 1]) - 1)
-                state["pane_count"] = max(int(state["pane_count"]), pane_index + 1)
-                ensure_panes(state)
-                state["pane_types"][pane_index] = "mpv"
+                _ensure_pane_media_slot(state, pane_index)
                 state["pane_mpv_opts"][pane_index].append(tokens[i + 2])
                 i += 3
             elif tok == "--layout" and nxt is not None:
