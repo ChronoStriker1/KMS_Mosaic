@@ -1,5 +1,6 @@
 import sys
 import textwrap
+import re
 import unittest
 from pathlib import Path
 
@@ -19,6 +20,55 @@ REMOTE_VIDEO_URL = (
 
 
 class KmsMosaicWebConfigTests(unittest.TestCase):
+    def test_role_zero_ui_paths_use_unified_pane_zero_fields(self) -> None:
+        html = kms_mosaic_web.HTML
+
+        queue_ctx = re.search(
+            r"function queueEditorContext\(\) \{.*?\n    function isRemoteMediaUrl",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(queue_ctx)
+        queue_ctx_text = queue_ctx.group(0)
+        self.assertIn("state.pane_mpv_opts?.[0]", queue_ctx_text)
+        self.assertIn("state.pane_video_paths?.[0]", queue_ctx_text)
+        self.assertNotIn("state.video_paths = paths.slice()", queue_ctx_text)
+
+        sync_main = re.search(
+            r"function syncMainInspectorMpvOpts\(\) \{.*?\n    function syncInspectorPaneMpvOpts",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(sync_main)
+        sync_main_text = sync_main.group(0)
+        self.assertIn("state.pane_mpv_opts[0] = buildMpvOptsFromParts", sync_main_text)
+        self.assertIn("state.pane_panscan[0] = panscanEl.value", sync_main_text)
+        self.assertNotIn("state.mpv_opts =", sync_main_text)
+        self.assertNotIn("state.panscan =", sync_main_text)
+
+        inspector = re.search(
+            r"function renderStudioInspector\(\) \{.*?\n    function renderPlaylistEditor",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(inspector)
+        inspector_text = inspector.group(0)
+        self.assertIn("parseMpvOptionGroups(state.pane_mpv_opts?.[0] || [])", inspector_text)
+        self.assertIn("String(state.pane_panscan?.[0] || \"\")", inspector_text)
+        self.assertNotIn("parseMpvOptionGroups(state.mpv_opts || [])", inspector_text)
+        self.assertNotIn("String(state.panscan || \"\")", inspector_text)
+
+        fill_form = re.search(
+            r"function fillForm\(nextState, configPath, nextRawConfig\) \{.*?\n    async function loadState",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(fill_form)
+        fill_form_text = fill_form.group(0)
+        self.assertIn("const queueCtx = queueEditorContext();", fill_form_text)
+        self.assertIn("queueField.value = (queueCtx?.paths || []).join(\"\\n\");", fill_form_text)
+        self.assertNotIn("queueField.value = (state.video_paths || []).join(\"\\n\")", fill_form_text)
+
     def test_parse_legacy_config_converts_global_media_slot_into_pane_zero(self) -> None:
         text = textwrap.dedent(
             """
@@ -160,6 +210,22 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertEqual(reparsed["pane_type_settings"][0], {"station": "lofi", "volume": "11"})
         self.assertEqual(reparsed["pane_video_paths"][0], ["/media/main.mp4"])
         self.assertEqual(reparsed["pane_mpv_opts"][0], ["audio=no"])
+
+    def test_malformed_pane_type_settings_metadata_is_ignored_safely(self) -> None:
+        text = textwrap.dedent(
+            """
+            --pane-count 1
+            --video /media/main.mp4
+            # kms_mosaic_web_state {"pane_types":["jukebox","terminal"],"pane_type_settings":{"0":"bad","1":["still","bad"]}}
+            """
+        ).strip()
+
+        parsed = kms_mosaic_web.parse_config_text(text)
+
+        self.assertEqual(parsed["pane_count"], 2)
+        self.assertEqual(parsed["pane_type_raw"][:2], ["jukebox", ""])
+        self.assertEqual(parsed["pane_type_settings"][:2], [{}, {}])
+        self.assertEqual(parsed["pane_video_paths"][0], ["/media/main.mp4"])
 
 
 if __name__ == "__main__":
