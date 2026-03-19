@@ -57,6 +57,8 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         queue_ctx_text = queue_ctx.group(0)
         self.assertIn("state.pane_mpv_opts?.[0]", queue_ctx_text)
         self.assertIn("state.pane_video_paths?.[0]", queue_ctx_text)
+        self.assertIn("const paneIndex = selectedRole;", queue_ctx_text)
+        self.assertNotIn("const paneIndex = selectedRole - 1;", queue_ctx_text)
         self.assertNotIn("state.video_paths = paths.slice()", queue_ctx_text)
 
         sync_main = re.search(
@@ -80,6 +82,8 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         inspector_text = inspector.group(0)
         self.assertIn("parseMpvOptionGroups(state.pane_mpv_opts?.[0] || [])", inspector_text)
         self.assertIn("String(state.pane_panscan?.[0] || \"\")", inspector_text)
+        self.assertIn("const paneIndex = selectedRole;", inspector_text)
+        self.assertNotIn("const paneIndex = selectedRole - 1;", inspector_text)
         self.assertNotIn("parseMpvOptionGroups(state.mpv_opts || [])", inspector_text)
         self.assertNotIn("String(state.panscan || \"\")", inspector_text)
 
@@ -169,6 +173,50 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         board_text = board.group(0)
         self.assertIn("const paneType = state.pane_types?.[role] || \"terminal\";", board_text)
         self.assertNotIn("role === 0 ? \"mpv\" : (state.pane_types?.[role - 1] || \"terminal\")", board_text)
+
+    def test_split_and_restore_helpers_use_zero_based_role_bounds(self) -> None:
+        html = kms_mosaic_web.HTML
+
+        restore_selected = re.search(
+            r"function restoreSelectedRole\(nextState, snapshot\) \{.*?\n    function ensureSelectedRole",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(restore_selected)
+        restore_text = restore_selected.group(0)
+        self.assertIn("for (let role = 0; role < Number(nextState.pane_count || 0); role += 1)", restore_text)
+        self.assertIn("snapshot.role >= 0", restore_text)
+        self.assertNotIn("for (let role = 1; role <= Number(nextState.pane_count || 0); role += 1)", restore_text)
+        self.assertNotIn("snapshot.role > 0", restore_text)
+
+        ensure_selected = re.search(
+            r"function ensureSelectedRole\(\) \{.*?\n    function selectedPaneType",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(ensure_selected)
+        ensure_text = ensure_selected.group(0)
+        self.assertIn("const maxRole = Math.max(-1, Number(state?.pane_count || 0) - 1);", ensure_text)
+        self.assertNotIn("const maxRole = Math.max(0, Number(state?.pane_count || 0));", ensure_text)
+
+        split_remove = re.search(
+            r"function splitSelectedRole\(kind\) \{.*?\n    function waitForIceGatheringComplete",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(split_remove)
+        split_remove_text = split_remove.group(0)
+        self.assertIn("const newRole = Number(state.pane_count || 0);", split_remove_text)
+        self.assertIn("state.pane_count = newRole + 1;", split_remove_text)
+        self.assertIn("pendingNewPaneIndexes.add(newRole);", split_remove_text)
+        self.assertIn("if (!state || selectedRole < 0 || Number(state.pane_count || 0) <= 1) return false;", split_remove_text)
+        self.assertIn("const paneIndex = selectedRole;", split_remove_text)
+        self.assertIn("for (let i = role + 1; i < state.pane_count; i += 1)", split_remove_text)
+        self.assertNotIn("const newRole = Number(state.pane_count || 0) + 1;", split_remove_text)
+        self.assertNotIn("pendingNewPaneIndexes.add(newRole - 1);", split_remove_text)
+        self.assertNotIn("if (!state || selectedRole <= 0) return false;", split_remove_text)
+        self.assertNotIn("const paneIndex = selectedRole - 1;", split_remove_text)
+        self.assertNotIn("for (let i = role + 1; i <= state.pane_count; i += 1)", split_remove_text)
 
     def test_parse_legacy_config_converts_global_media_slot_into_pane_zero(self) -> None:
         text = textwrap.dedent(

@@ -2800,7 +2800,7 @@ HTML = r"""<!doctype html>
           }
         };
       }
-      const paneIndex = selectedRole - 1;
+      const paneIndex = selectedRole;
       const playlistPath = state.pane_playlists?.[paneIndex] || "";
       const paneMpvOpts = Array.isArray(state.pane_mpv_opts?.[paneIndex]) ? state.pane_mpv_opts[paneIndex].slice() : [];
       const noteParts = [`This queue controls ${roleTitle(selectedRole)}.`];
@@ -3571,7 +3571,7 @@ HTML = r"""<!doctype html>
       if (!nextState || !snapshot?.identity) return -1;
       if (snapshot.identity.kind === "main") return 0;
       const matchingRoles = [];
-      for (let role = 1; role <= Number(nextState.pane_count || 0); role += 1) {
+      for (let role = 0; role < Number(nextState.pane_count || 0); role += 1) {
         if (paneIdentityEquals(paneIdentityForRole(nextState, role), snapshot.identity)) {
           matchingRoles.push(role);
         }
@@ -3588,14 +3588,14 @@ HTML = r"""<!doctype html>
           narrowedRoles = [roleAtPath];
         }
       }
-      if (narrowedRoles.length > 1 && snapshot.role > 0 && narrowedRoles.includes(snapshot.role)) {
+      if (narrowedRoles.length > 1 && snapshot.role >= 0 && narrowedRoles.includes(snapshot.role)) {
         narrowedRoles = [snapshot.role];
       }
       return narrowedRoles.length === 1 ? narrowedRoles[0] : -1;
     }
 
     function ensureSelectedRole() {
-      const maxRole = Math.max(0, Number(state?.pane_count || 0));
+      const maxRole = Math.max(-1, Number(state?.pane_count || 0) - 1);
       if (!Number.isFinite(selectedRole)) selectedRole = -1;
       if (selectedRole < -1) selectedRole = -1;
       if (selectedRole > maxRole) selectedRole = -1;
@@ -4141,7 +4141,7 @@ HTML = r"""<!doctype html>
         return;
       }
 
-      const paneIndex = selectedRole - 1;
+      const paneIndex = selectedRole;
       const paneType = state.pane_types?.[paneIndex] || "terminal";
       const value = state.pane_commands?.[paneIndex] || "";
       if (paneType === "mpv") {
@@ -4659,8 +4659,8 @@ HTML = r"""<!doctype html>
       if (!state) return false;
       const tree = ensureSplitTreeModel();
       const targetRole = selectedRole;
-      const newRole = Number(state.pane_count || 0) + 1;
-      state.pane_count = newRole;
+      const newRole = Number(state.pane_count || 0);
+      state.pane_count = newRole + 1;
       ensurePaneCommands(state);
       while (state.pane_commands.length < state.pane_count) state.pane_commands.push("");
       while (state.pane_types.length < state.pane_count) state.pane_types.push("terminal");
@@ -4669,7 +4669,7 @@ HTML = r"""<!doctype html>
       while (state.pane_playlist_fifos.length < state.pane_count) state.pane_playlist_fifos.push("");
       while (state.pane_video_paths.length < state.pane_count) state.pane_video_paths.push([]);
       while (state.pane_mpv_opts.length < state.pane_count) state.pane_mpv_opts.push([]);
-      pendingNewPaneIndexes.add(newRole - 1);
+      pendingNewPaneIndexes.add(newRole);
       const changed = splitTreeReplaceLeaf(tree, targetRole, (leaf) => ({
         leaf: false,
         kind,
@@ -4686,7 +4686,7 @@ HTML = r"""<!doctype html>
         state.pane_playlist_fifos.pop();
         state.pane_video_paths.pop();
         state.pane_mpv_opts.pop();
-        pendingNewPaneIndexes.delete(newRole - 1);
+        pendingNewPaneIndexes.delete(newRole);
         return false;
       }
       state.splitTreeModel = tree;
@@ -4706,12 +4706,12 @@ HTML = r"""<!doctype html>
     }
 
     function removeSelectedPane() {
-      if (!state || selectedRole <= 0) return false;
+      if (!state || selectedRole < 0 || Number(state.pane_count || 0) <= 1) return false;
       const tree = ensureSplitTreeModel();
-      const paneIndex = selectedRole - 1;
+      const paneIndex = selectedRole;
       const role = selectedRole;
       if (!splitTreeCollapseRole(tree, role)) return false;
-      for (let i = role + 1; i <= state.pane_count; i += 1) {
+      for (let i = role + 1; i < state.pane_count; i += 1) {
         splitTreeReplaceLeaf(tree, i, () => ({ leaf: true, role: i - 1 }));
       }
       state.pane_commands.splice(paneIndex, 1);
