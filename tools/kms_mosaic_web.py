@@ -3438,8 +3438,8 @@ HTML = r"""<!doctype html>
       const viewportPadding = 12;
       const maxWidth = Math.max(1, window.innerWidth - viewportPadding * 2);
       const maxHeight = Math.max(1, window.innerHeight - viewportPadding * 2);
-      const preferredWidth = Math.round(Math.max(220, rect.width * 2.4));
-      const preferredHeight = Math.round(Math.max(180, rect.height * 2.4));
+      const preferredWidth = Math.round(Math.max(240, rect.width * 2));
+      const preferredHeight = Math.round(Math.max(160, rect.height * 2));
       return {
         width: Math.min(preferredWidth, maxWidth),
         height: Math.min(preferredHeight, maxHeight),
@@ -3809,7 +3809,7 @@ HTML = r"""<!doctype html>
             overlay.style.display = "none";
             overlay.style.borderRadius = "12px";
             overlay.style.overflow = "hidden";
-            overlay.style.background = "rgba(8,8,10,0.96)";
+            overlay.style.background = "transparent";
             overlay.style.boxShadow = "0 18px 40px rgba(0,0,0,0.42)";
             overlay.style.maxWidth = "calc(100vw - 24px)";
             overlay.style.maxHeight = "calc(100vh - 24px)";
@@ -3851,8 +3851,8 @@ HTML = r"""<!doctype html>
           media.style.width = "100%";
           media.style.height = "100%";
           media.style.display = "block";
-          media.style.objectFit = "contain";
-          media.style.background = "#000";
+          media.style.objectFit = "cover";
+          media.style.background = "transparent";
           overlay.appendChild(media);
           overlay.style.display = "block";
         });
