@@ -224,11 +224,15 @@ def _parse_web_state_comment(stripped_line: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _safe_metadata_mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _pane_type_payload(state: dict[str, Any], index: int) -> dict[str, Any]:
     return {
         "type": state["pane_types"][index],
         "raw": state["pane_type_raw"][index],
-        "settings": dict(state["pane_type_settings"][index]),
+        "settings": _safe_metadata_mapping(state["pane_type_settings"][index]),
         "command": state["pane_commands"][index],
         "playlist": state["pane_playlists"][index],
         "playlist_extended": state["pane_playlist_extended"][index],
@@ -244,7 +248,7 @@ def _pane_type_payload(state: dict[str, Any], index: int) -> dict[str, Any]:
 def _write_pane_payload(state: dict[str, Any], index: int, payload: dict[str, Any]) -> None:
     state["pane_types"][index] = str(payload.get("type") or "terminal")
     state["pane_type_raw"][index] = str(payload.get("raw") or "")
-    state["pane_type_settings"][index] = dict(payload.get("settings") or {})
+    state["pane_type_settings"][index] = _safe_metadata_mapping(payload.get("settings"))
     state["pane_commands"][index] = str(payload.get("command") or "")
     state["pane_playlists"][index] = str(payload.get("playlist") or "")
     state["pane_playlist_extended"][index] = str(payload.get("playlist_extended") or "")
@@ -507,9 +511,9 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
         normalized["pane_types"][index] = pane_type
         normalized["pane_type_raw"][index] = raw_type
         if isinstance(metadata_settings, dict):
-            normalized["pane_type_settings"][index] = dict(metadata_settings.get(str(index), {}) or {})
+            normalized["pane_type_settings"][index] = _safe_metadata_mapping(metadata_settings.get(str(index)))
         elif isinstance(metadata_settings, list) and index < len(metadata_settings):
-            normalized["pane_type_settings"][index] = dict(metadata_settings[index] or {})
+            normalized["pane_type_settings"][index] = _safe_metadata_mapping(metadata_settings[index])
 
     normalized["split_tree"] = _normalize_split_tree_spec(
         str(state.get("split_tree", "")),
@@ -2674,14 +2678,14 @@ HTML = r"""<!doctype html>
       const shadersEl = document.getElementById("inspectorMainShaders");
       const otherEl = document.getElementById("inspectorMainMpvOpts");
       if (!audioEl || !muteEl || !loopEl || !panscanEl || !shadersEl || !otherEl) return;
-      state.mpv_opts = buildMpvOptsFromParts({
+      state.pane_mpv_opts[0] = buildMpvOptsFromParts({
         audioMode: audioEl.value,
         muteMode: muteEl.value,
         loopFile: loopEl.value,
         shadersText: shadersEl.value,
         otherText: otherEl.value,
       });
-      state.panscan = panscanEl.value;
+      state.pane_panscan[0] = panscanEl.value;
       const mpvAudioEl = document.getElementById("mpvAudioMode");
       const mpvShadersEl = document.getElementById("mpvShaders");
       if (mpvAudioEl) mpvAudioEl.value = audioEl.value;
@@ -2784,19 +2788,19 @@ HTML = r"""<!doctype html>
       }
       if (selectedRole === 0) {
         const noteParts = [`This queue controls ${roleTitle(0)}.`];
-        const mainMpvOpts = Array.isArray(state.mpv_opts) ? state.mpv_opts.slice() : [];
-        if (mainMpvOpts.length) noteParts.push(`${mainMpvOpts.length} global mpv option${mainMpvOpts.length === 1 ? "" : "s"}.`);
+        const mainMpvOpts = Array.isArray(state.pane_mpv_opts?.[0]) ? state.pane_mpv_opts[0].slice() : [];
+        if (mainMpvOpts.length) noteParts.push(`${mainMpvOpts.length} pane-local mpv option${mainMpvOpts.length === 1 ? "" : "s"}.`);
         return {
           emptyMessage: "No videos queued yet. Add one below or open Bulk Add Videos.",
-          paths: Array.isArray(state.video_paths) ? state.video_paths.slice() : [],
+          paths: Array.isArray(state.pane_video_paths?.[0]) ? state.pane_video_paths[0].slice() : [],
           editable: true,
           paneType,
           role: selectedRole,
           note: noteParts.join(" "),
           apply(paths) {
-            state.video_paths = paths.slice();
+            state.pane_video_paths[0] = paths.slice();
             const queueField = selectedPaneQueueField();
-            if (queueField) queueField.value = state.video_paths.join("\n");
+            if (queueField) queueField.value = state.pane_video_paths[0].join("\n");
           }
         };
       }
@@ -4071,8 +4075,8 @@ HTML = r"""<!doctype html>
       const layoutActions = selectedPaneLayoutActionsMarkup(selectedRole);
 
       if (selectedRole === 0) {
-        const mainMpvGroups = parseMpvOptionGroups(state.mpv_opts || []);
-        const mainPanscan = String(state.panscan || "");
+        const mainMpvGroups = parseMpvOptionGroups(state.pane_mpv_opts?.[0] || []);
+        const mainPanscan = String(state.pane_panscan?.[0] || "");
         studioInspector.innerHTML = `
           <div class="selected-pane-section">
             <h2 class="section-title">Pane Behavior</h2>
@@ -5066,7 +5070,8 @@ HTML = r"""<!doctype html>
       if (rolesEl) rolesEl.value = state.roles || "";
       if (fsCycleEl) fsCycleEl.value = String(state.fs_cycle_sec || 5);
       const queueField = selectedPaneQueueField();
-      if (queueField) queueField.value = (state.video_paths || []).join("\n");
+      const queueCtx = queueEditorContext();
+      if (queueField) queueField.value = (queueCtx?.paths || []).join("\n");
       document.getElementById("flagNoVideo").checked = !!state.flags.no_video;
       document.getElementById("flagNoPanes").checked = !!state.flags.no_panes;
       document.getElementById("flagSmooth").checked = !!state.flags.smooth;
