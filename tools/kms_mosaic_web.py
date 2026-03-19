@@ -1357,6 +1357,9 @@ HTML = r"""<!doctype html>
       border-radius: 6px;
       font-size: 10px;
       font-family: "Menlo", "Consolas", monospace;
+      white-space: normal;
+      line-height: 1.2;
+      text-align: center;
     }
     .studio-remove-btn {
       border: 1px solid rgba(186, 59, 42, 0.30);
@@ -4003,8 +4006,8 @@ HTML = r"""<!doctype html>
         <div class="selected-pane-section">
           <h2 class="section-title">Layout Actions</h2>
           <div class="actions tight">
-            <button type="button" class="secondary studio-split-btn" data-selected-pane-split="col">Split V</button>
-            <button type="button" class="secondary studio-split-btn" data-selected-pane-split="row">Split H</button>
+            <button type="button" class="secondary studio-split-btn" data-selected-pane-split="col">Split Vertically</button>
+            <button type="button" class="secondary studio-split-btn" data-selected-pane-split="row">Split Horizontally</button>
             ${role > 0 ? '<button type="button" class="secondary studio-remove-btn" data-selected-pane-remove="true">Remove Pane</button>' : ''}
           </div>
         </div>
