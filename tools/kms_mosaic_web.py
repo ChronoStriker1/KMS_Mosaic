@@ -1564,12 +1564,12 @@ HTML = r"""<!doctype html>
     .playlist-item.drag-over { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(181,83,47,0.14); }
     .playlist-row {
       display: grid;
-      grid-template-columns: minmax(0, 138px) minmax(0, 1fr);
+      grid-template-columns: auto minmax(0, 1fr);
       gap: 8px 10px;
       align-items: start;
     }
     .playlist-item.portrait-thumb .playlist-row {
-      grid-template-columns: minmax(0, 124px) minmax(0, 1fr);
+      grid-template-columns: auto minmax(0, 1fr);
     }
     .playlist-media-cell {
       width: auto;
@@ -1596,7 +1596,7 @@ HTML = r"""<!doctype html>
     .playlist-duration:empty { display: none; }
     .playlist-thumb {
       height: 72px;
-      width: 100%;
+      width: auto;
       min-height: 72px;
       max-height: 72px;
       border-radius: 8px;
@@ -1609,7 +1609,6 @@ HTML = r"""<!doctype html>
       flex-shrink: 0;
     }
     .playlist-item.portrait-thumb .playlist-thumb {
-      width: 92px;
       margin-inline: auto;
     }
     .playlist-thumb-media {
@@ -2433,11 +2432,15 @@ HTML = r"""<!doctype html>
         ? String(state?.panscan || "").trim()
         : String(state?.pane_panscan?.[paneIndex] || "").trim();
       const panscan = Number.parseFloat(panscanValue || "0");
+      const thumbHeight = 72;
+      const thumbWidth = Math.round(Math.min(156, Math.max(56, thumbHeight * (physW / Math.max(1, physH)))));
       return {
         rotation,
         aspectRatio: `${physW} / ${physH}`,
         cover: Number.isFinite(panscan) && panscan > 0,
         isPortrait: physH > physW,
+        thumbHeight,
+        thumbWidth,
       };
     }
 
@@ -3438,6 +3441,15 @@ HTML = r"""<!doctype html>
       const viewportPadding = 12;
       const maxWidth = Math.max(1, window.innerWidth - viewportPadding * 2);
       const maxHeight = Math.max(1, window.innerHeight - viewportPadding * 2);
+      const mediaWidth = Number(rect?.mediaWidth || 0);
+      const mediaHeight = Number(rect?.mediaHeight || 0);
+      if (mediaWidth > 0 && mediaHeight > 0) {
+        const scale = Math.min(1, maxWidth / mediaWidth, maxHeight / mediaHeight);
+        return {
+          width: Math.max(1, Math.round(mediaWidth * scale)),
+          height: Math.max(1, Math.round(mediaHeight * scale)),
+        };
+      }
       const preferredWidth = Math.round(Math.max(240, rect.width * 2));
       const preferredHeight = Math.round(Math.max(160, rect.height * 2));
       return {
@@ -3476,6 +3488,22 @@ HTML = r"""<!doctype html>
       fallback.textContent = message || "Preview unavailable";
       overlay.appendChild(fallback);
       overlay.style.display = "block";
+    }
+
+    function updatePlaylistHoverOverlay(overlay, thumb, mediaWidth = 0, mediaHeight = 0) {
+      if (!overlay || !thumb) return;
+      const rect = thumb.getBoundingClientRect();
+      const size = playlistHoverOverlayBounds({
+        width: rect.width,
+        height: rect.height,
+        mediaWidth,
+        mediaHeight,
+      });
+      const position = playlistHoverOverlayPosition(rect, size.width, size.height);
+      overlay.style.width = `${size.width}px`;
+      overlay.style.height = `${size.height}px`;
+      overlay.style.left = `${position.left}px`;
+      overlay.style.top = `${position.top}px`;
     }
 
     function renderStudioInspector() {
@@ -3728,7 +3756,7 @@ HTML = r"""<!doctype html>
         item.dataset.videoDragIndex = String(index);
         const thumbCell = `
           <div class="playlist-media-cell">
-            <div class="playlist-thumb${thumb ? "" : " empty"}${thumbMetrics.cover ? " cover" : ""}" style="aspect-ratio: ${thumbMetrics.aspectRatio};" data-hover-src="${mediaUrl(group.path).replace(/"/g, "&quot;")}" data-hover-path="${group.path.replace(/"/g, "&quot;")}" data-hover-video="${isLikelyVideoPath(group.path) ? "1" : "0"}">
+            <div class="playlist-thumb${thumb ? "" : " empty"}${thumbMetrics.cover ? " cover" : ""}" style="aspect-ratio: ${thumbMetrics.aspectRatio}; width: ${thumbMetrics.thumbWidth}px; height: ${thumbMetrics.thumbHeight}px;" data-hover-src="${mediaUrl(group.path).replace(/"/g, "&quot;")}" data-hover-path="${group.path.replace(/"/g, "&quot;")}" data-hover-video="${isLikelyVideoPath(group.path) ? "1" : "0"}">
               <div class="playlist-index">${index + 1}</div>
               ${thumb}
             </div>
@@ -3820,13 +3848,7 @@ HTML = r"""<!doctype html>
           overlay.innerHTML = "";
           const src = thumb.dataset.hoverSrc || "";
           const isVideo = thumb.dataset.hoverVideo === "1";
-          const rect = thumb.getBoundingClientRect();
-          const size = playlistHoverOverlayBounds(rect);
-          const position = playlistHoverOverlayPosition(rect, size.width, size.height);
-          overlay.style.width = `${size.width}px`;
-          overlay.style.height = `${size.height}px`;
-          overlay.style.left = `${position.left}px`;
-          overlay.style.top = `${position.top}px`;
+          updatePlaylistHoverOverlay(overlay, thumb);
           let media;
           if (!src) {
             playlistHoverOverlayFallback(overlay, "Preview unavailable");
@@ -3848,10 +3870,20 @@ HTML = r"""<!doctype html>
           media.addEventListener("error", () => {
             playlistHoverOverlayFallback(overlay, "Preview unavailable");
           }, { once: true });
+          const updateOverlayToNativeSize = () => {
+            const mediaWidth = media instanceof HTMLVideoElement ? media.videoWidth : media.naturalWidth;
+            const mediaHeight = media instanceof HTMLVideoElement ? media.videoHeight : media.naturalHeight;
+            if (mediaWidth > 0 && mediaHeight > 0) updatePlaylistHoverOverlay(overlay, thumb, mediaWidth, mediaHeight);
+          };
+          if (media instanceof HTMLVideoElement) {
+            media.addEventListener("loadedmetadata", updateOverlayToNativeSize, { once: true });
+          } else {
+            media.addEventListener("load", updateOverlayToNativeSize, { once: true });
+          }
           media.style.width = "100%";
           media.style.height = "100%";
           media.style.display = "block";
-          media.style.objectFit = "cover";
+          media.style.objectFit = "contain";
           media.style.background = "transparent";
           overlay.appendChild(media);
           overlay.style.display = "block";
