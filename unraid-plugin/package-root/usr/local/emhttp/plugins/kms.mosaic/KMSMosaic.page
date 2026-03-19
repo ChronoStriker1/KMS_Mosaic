@@ -240,6 +240,11 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     flex: 1;
     min-height: 0;
   }
+  .kms-workspace-panel[data-kms-workspace="preview"] .kms-panel-body,
+  .kms-workspace-panel[data-kms-workspace="studio"] .kms-panel-body {
+    padding-left: 0;
+    padding-right: 0;
+  }
   .kms-live-body,
   .kms-layout-body,
   .kms-selected-pane-body {
