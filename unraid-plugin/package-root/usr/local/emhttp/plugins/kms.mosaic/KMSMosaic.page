@@ -70,7 +70,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   .kms-service-grid {
     display: grid;
     gap: 12px 16px;
-    grid-template-columns: repeat(4, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     align-items: end;
   }
   .kms-service-meta {
@@ -82,12 +82,9 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     display: grid;
     gap: 6px;
   }
-  .kms-field.kms-field-wide {
-    grid-column: span 2;
-  }
   .kms-field.kms-field-apply {
+    grid-column: -2 / -1;
     justify-self: end;
-    min-width: 180px;
   }
   .kms-field label {
     font-weight: 700;
@@ -165,7 +162,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   .kms-visibility-group {
     display: grid;
     gap: 8px;
-    grid-column: span 3;
+    grid-column: 1 / -2;
   }
   .kms-visibility-label {
     font-weight: 700;
@@ -752,14 +749,12 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   }
   @media (max-width: 1200px) {
     .kms-service-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
-    .kms-field.kms-field-wide,
     .kms-visibility-group,
     .kms-field.kms-field-apply {
       grid-column: 1 / -1;
     }
     .kms-field.kms-field-apply {
       justify-self: stretch;
-      min-width: 0;
     }
     .kms-panel-body { padding: 14px; }
     #kmsStudioPlaceholder .studio-grid { grid-template-columns: 1fr; }
@@ -838,7 +833,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
           <input id="kmsWebPort" name="WEB_PORT" type="text" value="<?php echo htmlspecialchars($web_port); ?>">
         </div>
 
-        <div class="kms-field kms-field-wide">
+        <div class="kms-field">
           <label for="kmsConfigPath">Config path</label>
           <input id="kmsConfigPath" name="CONFIG_PATH" type="text" value="<?php echo htmlspecialchars($config_path); ?>">
         </div>
