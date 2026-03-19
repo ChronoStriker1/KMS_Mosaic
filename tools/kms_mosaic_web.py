@@ -451,9 +451,7 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
         split_roles: list[int] = []
         _split_tree_collect_roles(_parse_split_tree_spec(str(state.get("split_tree", ""))), split_roles)
         legacy_hint = bool(split_roles) and len(split_roles) == int(state.get("pane_count", 2)) + 1
-    legacy_mode = root_media_present or legacy_hint or any(
-        key in web_state for key in ("selected_role", "focused_role", "fullscreen_role")
-    )
+    legacy_mode = root_media_present or legacy_hint
 
     normalized = empty_state()
     for key in (
@@ -2441,7 +2439,7 @@ HTML = r"""<!doctype html>
 
     function visibilityModeHidesRole(nextState, role) {
       const mode = visibilityModeForState(nextState);
-      const paneType = role === 0 ? "mpv" : (nextState?.pane_types?.[role - 1] || "terminal");
+      const paneType = nextState?.pane_types?.[role] || "terminal";
       if (mode === "no-video") return paneType === "mpv";
       if (mode === "no-terminal") return paneType === "terminal";
       return false;
@@ -2449,9 +2447,8 @@ HTML = r"""<!doctype html>
 
     function visibleStudioRoles(nextState = state) {
       const paneCount = Math.max(1, Number(nextState?.pane_count || 2));
-      const roleCount = 1 + paneCount;
       const roles = [];
-      for (let role = 0; role < roleCount; role += 1) {
+      for (let role = 0; role < paneCount; role += 1) {
         if (!visibilityModeHidesRole(nextState, role)) roles.push(role);
       }
       return roles;
@@ -2568,7 +2565,7 @@ HTML = r"""<!doctype html>
     }
 
     function visibilityLayoutForState(nextState = state) {
-      const roleCount = 1 + Math.max(1, Number(nextState?.pane_count || 2));
+      const roleCount = Math.max(1, Number(nextState?.pane_count || 2));
       const allRoles = Array.from({ length: roleCount }, (_, role) => role);
       const visibleRoles = allRoles.filter((role) => !visibilityModeHidesRole(nextState, role));
       const rects = Array.from({ length: roleCount }, () => ({ x: 0, y: 0, w: 0, h: 0 }));
@@ -2712,8 +2709,7 @@ HTML = r"""<!doctype html>
     }
 
     function roleType(role) {
-      if (role === 0) return "video";
-      return state?.pane_types?.[role - 1] === "mpv" ? "video" : "terminal";
+      return state?.pane_types?.[role] === "mpv" ? "video" : "terminal";
     }
 
     function selectedPaneQueueField() {
@@ -2922,10 +2918,7 @@ HTML = r"""<!doctype html>
       const boardPortrait = displayRotation === 90 || displayRotation === 270;
       const physW = pw * (boardPortrait ? 9 : 16);
       const physH = ph * (boardPortrait ? 16 : 9);
-      const paneIndex = role - 1;
-      const panscanValue = role === 0
-        ? String(state?.panscan || "").trim()
-        : String(state?.pane_panscan?.[paneIndex] || "").trim();
+      const panscanValue = String(state?.pane_panscan?.[role] || "").trim();
       const panscan = Number.parseFloat(panscanValue || "0");
       const thumbHeight = 88;
       const thumbWidth = Math.round(Math.min(156, Math.max(84, thumbHeight * (physW / Math.max(1, physH)))));
@@ -3154,7 +3147,7 @@ HTML = r"""<!doctype html>
 
     function presetTreeFromState(nextState) {
       const paneCount = Math.max(1, Number(nextState?.pane_count || 2));
-      const roles = Array.from({ length: paneCount + 1 }, (_, i) => i);
+      const roles = Array.from({ length: paneCount }, (_, i) => i);
       const paneRoles = roles.slice(1);
       const layout = nextState?.layout || "stack";
       const colPct = Math.max(20, Math.min(80, 100 - Number(nextState?.right_frac || 33)));
@@ -3610,8 +3603,7 @@ HTML = r"""<!doctype html>
 
     function selectedPaneType() {
       if (!state || selectedRole < 0) return "none";
-      if (selectedRole === 0) return "mpv";
-      return state.pane_types?.[selectedRole - 1] || "terminal";
+      return state.pane_types?.[selectedRole] || "terminal";
     }
 
     function selectRole(role) {
@@ -3624,7 +3616,7 @@ HTML = r"""<!doctype html>
     }
 
     function parseRolesString(nextState) {
-      const roleCount = 1 + Math.max(1, Number(nextState.pane_count || 2));
+      const roleCount = Math.max(1, Number(nextState.pane_count || 2));
       const perm = Array.from({ length: roleCount }, (_, index) => index);
       const used = Array(roleCount).fill(false);
       let slot = 0;
@@ -3875,7 +3867,7 @@ HTML = r"""<!doctype html>
         card.style.top = `${displayRect.y}%`;
         card.style.width = `${displayRect.w}%`;
         card.style.height = `${displayRect.h}%`;
-        const paneType = role === 0 ? "mpv" : (state.pane_types?.[role - 1] || "terminal");
+        const paneType = state.pane_types?.[role] || "terminal";
         card.dataset.studioRole = String(role);
         card.innerHTML = `
           <div class="studio-top">
