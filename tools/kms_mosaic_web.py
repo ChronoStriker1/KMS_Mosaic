@@ -447,10 +447,6 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
     ])
     roles_text = str(state.get("roles", "")).strip()
     legacy_hint = any(char in roles_text for char in "CcAaBbDdEe")
-    if not legacy_hint:
-        split_roles: list[int] = []
-        _split_tree_collect_roles(_parse_split_tree_spec(str(state.get("split_tree", ""))), split_roles)
-        legacy_hint = bool(split_roles) and len(split_roles) == int(state.get("pane_count", 2)) + 1
     legacy_mode = root_media_present or legacy_hint
 
     normalized = empty_state()
@@ -463,13 +459,6 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
 
     source_pane_count = max(1, int(state.get("pane_count", 2)))
     total_panes = source_pane_count + 1 if legacy_mode else source_pane_count
-    max_saved_role = max(
-        _safe_int(web_state.get("selected_pane", web_state.get("selected_role")), -1),
-        _safe_int(web_state.get("focus_pane", web_state.get("focused_role")), -1),
-        _safe_int(web_state.get("fullscreen_pane", web_state.get("fullscreen_role")), -1),
-    )
-    if max_saved_role >= 0:
-        total_panes = max(total_panes, max_saved_role + 1)
     normalized["pane_count"] = max(1, total_panes)
     ensure_panes(normalized)
 

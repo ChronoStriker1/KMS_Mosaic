@@ -445,6 +445,44 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertEqual(parsed["pane_type_settings"][:2], [{}, {}])
         self.assertEqual(parsed["pane_video_paths"][0], ["/media/main.mp4"])
 
+    def test_stale_extra_split_tree_leaves_do_not_force_legacy_mode(self) -> None:
+        text = textwrap.dedent(
+            """
+            --pane-count 2
+            --pane-media 1
+            --pane-video 1 /media/main.mp4
+            --pane 2 htop
+            --split-tree 'col:50(0,row:50(1,2))'
+            """
+        ).strip()
+
+        parsed = kms_mosaic_web.parse_config_text(text)
+
+        self.assertEqual(parsed["pane_count"], 2)
+        self.assertEqual(parsed["pane_types"][:2], ["mpv", "terminal"])
+        self.assertEqual(parsed["pane_video_paths"][0], ["/media/main.mp4"])
+        self.assertEqual(parsed["pane_commands"][1], "htop")
+        self.assertEqual(parsed["split_tree"], "col:50(0,1)")
+
+    def test_stale_saved_selection_metadata_does_not_allocate_phantom_panes(self) -> None:
+        text = textwrap.dedent(
+            """
+            --pane-count 1
+            --pane-media 1
+            --pane-video 1 /media/main.mp4
+            # kms_mosaic_web_state {"selected_pane":9,"focus_pane":8,"fullscreen_pane":7,"selected_role":6,"focused_role":5,"fullscreen_role":4}
+            """
+        ).strip()
+
+        parsed = kms_mosaic_web.parse_config_text(text)
+
+        self.assertEqual(parsed["pane_count"], 1)
+        self.assertEqual(parsed["pane_types"][:1], ["mpv"])
+        self.assertEqual(parsed["pane_video_paths"][0], ["/media/main.mp4"])
+        self.assertEqual(parsed["selected_pane"], -1)
+        self.assertEqual(parsed["focus_pane"], -1)
+        self.assertEqual(parsed["fullscreen_pane"], -1)
+
 
 if __name__ == "__main__":
     unittest.main()
