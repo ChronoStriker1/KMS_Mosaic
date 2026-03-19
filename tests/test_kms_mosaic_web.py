@@ -483,6 +483,36 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertEqual(parsed["focus_pane"], -1)
         self.assertEqual(parsed["fullscreen_pane"], -1)
 
+    def test_legacy_split_tree_only_config_still_converts_to_unified_pane_zero(self) -> None:
+        text = textwrap.dedent(
+            """
+            --pane-count 2
+            --pane-a htop
+            --pane-b 'tail -f /tmp/app.log'
+            --split-tree 'col:50(0,row:50(1,2))'
+            """
+        ).strip()
+
+        parsed = kms_mosaic_web.parse_config_text(text)
+
+        self.assertEqual(parsed["pane_count"], 3)
+        self.assertEqual(parsed["pane_types"][:3], ["mpv", "terminal", "terminal"])
+        self.assertEqual(parsed["pane_commands"][:3], ["", "htop", "tail -f /tmp/app.log"])
+        self.assertEqual(parsed["split_tree"], "col:50(0,row:50(1,2))")
+
+    def test_preset_tree_handles_one_pane_layouts_with_single_leaf(self) -> None:
+        html = kms_mosaic_web.HTML
+
+        preset_tree = re.search(
+            r"function presetTreeFromState\(nextState\) \{.*?\n    function ensureSplitTreeModel",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(preset_tree)
+        preset_tree_text = preset_tree.group(0)
+        self.assertIn("if (paneCount <= 1) return { leaf: true, role: 0 };", preset_tree_text)
+        self.assertNotIn("first: balancedTreeForRoles(paneRoles, true), second: { leaf: true, role: 0 }", preset_tree_text.split("if (paneCount <= 1) return { leaf: true, role: 0 };", 1)[0])
+
 
 if __name__ == "__main__":
     unittest.main()

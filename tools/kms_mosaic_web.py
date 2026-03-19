@@ -433,6 +433,19 @@ def _normalize_split_tree_spec(spec: str, pane_count: int) -> str:
     return _serialize_split_tree(parsed)
 
 
+def _payload_has_media(payload: dict[str, Any]) -> bool:
+    return any([
+        bool(str(payload.get("playlist", "")).strip()),
+        bool(str(payload.get("playlist_extended", "")).strip()),
+        bool(str(payload.get("playlist_fifo", "")).strip()),
+        bool(str(payload.get("mpv_out", "")).strip()),
+        bool(str(payload.get("video_rotate", "")).strip()),
+        bool(str(payload.get("panscan", "")).strip()),
+        bool(payload.get("video_paths")),
+        bool(payload.get("mpv_opts")),
+    ])
+
+
 def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) -> dict[str, Any]:
     ensure_panes(state)
     root_media_present = any([
@@ -447,7 +460,18 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
     ])
     roles_text = str(state.get("roles", "")).strip()
     legacy_hint = any(char in roles_text for char in "CcAaBbDdEe")
-    legacy_mode = root_media_present or legacy_hint
+    source_pane_count = max(1, int(state.get("pane_count", 2)))
+    source_payloads = [_pane_type_payload(state, index) for index in range(source_pane_count)]
+    split_roles: list[int] = []
+    _split_tree_collect_roles(_parse_split_tree_spec(str(state.get("split_tree", ""))), split_roles)
+    split_tree_legacy_hint = (
+        not root_media_present
+        and not legacy_hint
+        and len(split_roles) == source_pane_count + 1
+        and sorted(split_roles) == list(range(source_pane_count + 1))
+        and not _payload_has_media(source_payloads[0])
+    )
+    legacy_mode = root_media_present or legacy_hint or split_tree_legacy_hint
 
     normalized = empty_state()
     for key in (
@@ -457,12 +481,10 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
         normalized[key] = state.get(key, normalized.get(key))
     normalized["flags"] = dict(state.get("flags", {}))
 
-    source_pane_count = max(1, int(state.get("pane_count", 2)))
     total_panes = source_pane_count + 1 if legacy_mode else source_pane_count
     normalized["pane_count"] = max(1, total_panes)
     ensure_panes(normalized)
 
-    source_payloads = [_pane_type_payload(state, index) for index in range(source_pane_count)]
     if legacy_mode:
         pane_zero = {
             "type": "mpv",
@@ -3152,6 +3174,7 @@ HTML = r"""<!doctype html>
 
     function presetTreeFromState(nextState) {
       const paneCount = Math.max(1, Number(nextState?.pane_count || 2));
+      if (paneCount <= 1) return { leaf: true, role: 0 };
       const roles = Array.from({ length: paneCount }, (_, i) => i);
       const paneRoles = roles.slice(1);
       const layout = nextState?.layout || "stack";
