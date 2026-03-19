@@ -208,12 +208,18 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     display: grid;
     gap: 18px;
     align-items: stretch;
+    justify-items: stretch;
     grid-template-columns: minmax(0, 1fr);
   }
   .kms-workspace-panel {
     min-width: 0;
     display: flex;
     flex-direction: column;
+  }
+  .kms-workspace-panel[data-kms-workspace="preview"],
+  .kms-workspace-panel[data-kms-workspace="studio"] {
+    width: min(100%, 1100px);
+    justify-self: center;
   }
   .kms-workspace-panel .kms-panel-body {
     flex: 1;
