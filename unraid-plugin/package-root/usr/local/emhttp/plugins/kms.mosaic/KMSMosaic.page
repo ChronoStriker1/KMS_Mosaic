@@ -164,10 +164,16 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   }
   .kms-visibility-group {
     display: grid;
-    gap: 8px;
+    gap: 6px;
     grid-column: 5 / span 2;
     grid-row: 1;
     align-self: start;
+  }
+  .kms-visibility-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
   }
   .kms-visibility-label {
     font-weight: 700;
@@ -845,13 +851,14 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
         </div>
 
         <div class="kms-visibility-group" id="kmsVisibilityGroup">
-          <div class="kms-visibility-label">Visibility Mode</div>
+          <div class="kms-visibility-head">
+            <div class="kms-visibility-label">Visibility Mode</div>
+          </div>
           <div class="kms-visibility-options" id="kmsVisibilityButtons">
             <button type="button" class="secondary" id="kmsVisibilityNeitherBtn" onclick="kmsSetVisibilityMode('neither')">Neither</button>
             <button type="button" class="secondary" id="kmsVisibilityNoVideoBtn" onclick="kmsSetVisibilityMode('no-video')">No Video</button>
             <button type="button" class="secondary" id="kmsVisibilityNoPanesBtn" onclick="kmsSetVisibilityMode('no-terminal')">No Terminal</button>
           </div>
-          <div class="kms-visibility-note">Saves immediately. Only one of these modes can be active at a time.</div>
         </div>
 
         <div class="kms-field kms-field-apply">
@@ -1145,7 +1152,7 @@ function kmsEmbeddedOverrides() {
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
+      justify-content: flex-start;
       min-height: 0;
       flex: 1;
       height: 100%;
@@ -1155,6 +1162,7 @@ function kmsEmbeddedOverrides() {
       width: min(100%, 1100px);
       height: auto;
       margin: 0 auto;
+      align-self: center;
     }
     #kmsPreviewPlaceholder .preview-wrap {
       display: block !important;
@@ -1167,7 +1175,7 @@ function kmsEmbeddedOverrides() {
       background: linear-gradient(180deg, #1a1714, #0c0b09) !important;
       border: none !important;
       box-shadow: none !important;
-      margin: 0 !important;
+      margin: 0 auto !important;
       padding: 0 !important;
     }
     #kmsPreviewPlaceholder .preview-layout.portrait .preview-wrap {
@@ -1208,7 +1216,7 @@ function kmsEmbeddedOverrides() {
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: center;
+      justify-content: flex-start;
       flex: 1;
       height: 100%;
     }
@@ -1219,6 +1227,8 @@ function kmsEmbeddedOverrides() {
       height: 100%;
       flex: 1;
       width: min(100%, 1100px);
+      margin: 0 auto;
+      align-self: center;
     }
     #kmsStudioPlaceholder .actions {
       display: none !important;
@@ -1238,12 +1248,14 @@ function kmsEmbeddedOverrides() {
       flex: 1;
       min-height: 0 !important;
       max-height: 100% !important;
+      width: 100%;
       border-radius: 0;
       background: linear-gradient(180deg, #f7f3ee, #ede8e1);
       border: 1px solid rgba(0,0,0,.10);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.55);
       overflow: hidden;
       order: 1 !important;
+      margin: 0 auto;
     }
     #kmsStudioPlaceholder .studio-board::before {
       content: '';
@@ -1297,6 +1309,9 @@ function kmsEmbeddedOverrides() {
       padding: 2px 6px;
       font-size: 11px;
       color: inherit;
+      white-space: normal;
+      line-height: 1.2;
+      text-align: center;
     }
     #kmsStudioPlaceholder .studio-inspector {
       background: #fbfbfc;
