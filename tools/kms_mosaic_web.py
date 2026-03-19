@@ -3012,9 +3012,20 @@ HTML = r"""<!doctype html>
       nextState.pane_count = count;
       nextState.pane_commands = Array.isArray(nextState.pane_commands) ? nextState.pane_commands.slice(0, count) : [];
       nextState.pane_types = Array.isArray(nextState.pane_types) ? nextState.pane_types.slice(0, count) : [];
+      nextState.pane_type_raw = Array.isArray(nextState.pane_type_raw) ? nextState.pane_type_raw.slice(0, count) : [];
+      nextState.pane_type_settings = Array.isArray(nextState.pane_type_settings)
+        ? nextState.pane_type_settings.slice(0, count).map((value) => (
+            value && typeof value === "object" && !Array.isArray(value)
+              ? { ...value }
+              : {}
+          ))
+        : [];
       nextState.pane_playlists = Array.isArray(nextState.pane_playlists) ? nextState.pane_playlists.slice(0, count) : [];
       nextState.pane_playlist_extended = Array.isArray(nextState.pane_playlist_extended) ? nextState.pane_playlist_extended.slice(0, count) : [];
       nextState.pane_playlist_fifos = Array.isArray(nextState.pane_playlist_fifos) ? nextState.pane_playlist_fifos.slice(0, count) : [];
+      nextState.pane_mpv_outs = Array.isArray(nextState.pane_mpv_outs) ? nextState.pane_mpv_outs.slice(0, count) : [];
+      nextState.pane_video_rotate = Array.isArray(nextState.pane_video_rotate) ? nextState.pane_video_rotate.slice(0, count) : [];
+      nextState.pane_panscan = Array.isArray(nextState.pane_panscan) ? nextState.pane_panscan.slice(0, count) : [];
       nextState.pane_video_paths = Array.isArray(nextState.pane_video_paths)
         ? nextState.pane_video_paths.slice(0, count).map(paths => Array.isArray(paths) ? paths.slice() : [])
         : [];
@@ -3023,9 +3034,14 @@ HTML = r"""<!doctype html>
         : [];
       while (nextState.pane_commands.length < count) nextState.pane_commands.push("");
       while (nextState.pane_types.length < count) nextState.pane_types.push("terminal");
+      while (nextState.pane_type_raw.length < count) nextState.pane_type_raw.push("");
+      while (nextState.pane_type_settings.length < count) nextState.pane_type_settings.push({});
       while (nextState.pane_playlists.length < count) nextState.pane_playlists.push("");
       while (nextState.pane_playlist_extended.length < count) nextState.pane_playlist_extended.push("");
       while (nextState.pane_playlist_fifos.length < count) nextState.pane_playlist_fifos.push("");
+      while (nextState.pane_mpv_outs.length < count) nextState.pane_mpv_outs.push("");
+      while (nextState.pane_video_rotate.length < count) nextState.pane_video_rotate.push("");
+      while (nextState.pane_panscan.length < count) nextState.pane_panscan.push("");
       while (nextState.pane_video_paths.length < count) nextState.pane_video_paths.push([]);
       while (nextState.pane_mpv_opts.length < count) nextState.pane_mpv_opts.push([]);
     }
@@ -3529,16 +3545,16 @@ HTML = r"""<!doctype html>
 
     function paneIdentityForRole(nextState, role) {
       if (!nextState || role < 0) return null;
-      if (role === 0) {
-        return {
-          kind: "main",
-          paneType: "mpv",
-        };
-      }
-      const paneIndex = role - 1;
+      const paneIndex = role;
       const paneType = nextState.pane_types?.[paneIndex] || "terminal";
       return {
         kind: "pane",
+        rawType: String(nextState.pane_type_raw?.[paneIndex] || ""),
+        typeSettings: (
+          nextState.pane_type_settings?.[paneIndex]
+          && typeof nextState.pane_type_settings[paneIndex] === "object"
+          && !Array.isArray(nextState.pane_type_settings[paneIndex])
+        ) ? { ...nextState.pane_type_settings[paneIndex] } : {},
         paneType,
         command: String(nextState.pane_commands?.[paneIndex] || ""),
         playlist: String(nextState.pane_playlists?.[paneIndex] || ""),
@@ -4662,13 +4678,6 @@ HTML = r"""<!doctype html>
       const newRole = Number(state.pane_count || 0);
       state.pane_count = newRole + 1;
       ensurePaneCommands(state);
-      while (state.pane_commands.length < state.pane_count) state.pane_commands.push("");
-      while (state.pane_types.length < state.pane_count) state.pane_types.push("terminal");
-      while (state.pane_playlists.length < state.pane_count) state.pane_playlists.push("");
-      while (state.pane_playlist_extended.length < state.pane_count) state.pane_playlist_extended.push("");
-      while (state.pane_playlist_fifos.length < state.pane_count) state.pane_playlist_fifos.push("");
-      while (state.pane_video_paths.length < state.pane_count) state.pane_video_paths.push([]);
-      while (state.pane_mpv_opts.length < state.pane_count) state.pane_mpv_opts.push([]);
       pendingNewPaneIndexes.add(newRole);
       const changed = splitTreeReplaceLeaf(tree, targetRole, (leaf) => ({
         leaf: false,
@@ -4678,14 +4687,8 @@ HTML = r"""<!doctype html>
         second: { leaf: true, role: newRole }
       }));
       if (!changed) {
-        state.pane_count -= 1;
-        state.pane_commands.pop();
-        state.pane_types.pop();
-        state.pane_playlists.pop();
-        state.pane_playlist_extended.pop();
-        state.pane_playlist_fifos.pop();
-        state.pane_video_paths.pop();
-        state.pane_mpv_opts.pop();
+        state.pane_count = newRole;
+        ensurePaneCommands(state);
         pendingNewPaneIndexes.delete(newRole);
         return false;
       }
@@ -4716,15 +4719,21 @@ HTML = r"""<!doctype html>
       }
       state.pane_commands.splice(paneIndex, 1);
       state.pane_types.splice(paneIndex, 1);
+      state.pane_type_raw.splice(paneIndex, 1);
+      state.pane_type_settings.splice(paneIndex, 1);
       state.pane_playlists.splice(paneIndex, 1);
       state.pane_playlist_extended.splice(paneIndex, 1);
       state.pane_playlist_fifos.splice(paneIndex, 1);
+      state.pane_mpv_outs.splice(paneIndex, 1);
+      state.pane_video_rotate.splice(paneIndex, 1);
+      state.pane_panscan.splice(paneIndex, 1);
       state.pane_video_paths.splice(paneIndex, 1);
       state.pane_mpv_opts.splice(paneIndex, 1);
       pendingNewPaneIndexes = new Set(Array.from(pendingNewPaneIndexes)
         .filter((index) => index !== paneIndex)
         .map((index) => index > paneIndex ? index - 1 : index));
       state.pane_count = Math.max(1, state.pane_count - 1);
+      ensurePaneCommands(state);
       state.splitTreeModel = tree;
       syncSplitTreeState();
       const paneCountInput = document.getElementById("paneCount");
@@ -4891,11 +4900,7 @@ HTML = r"""<!doctype html>
     }
 
     function configuredVideoRotationDegrees(role = (selectedRole >= 0 ? selectedRole : 0)) {
-      let rawValue = state?.video_rotate || "0";
-      if (Number(role) > 0) {
-        const paneIndex = Number(role) - 1;
-        rawValue = state?.pane_video_rotate?.[paneIndex] || "0";
-      }
+      const rawValue = state?.pane_video_rotate?.[Number(role)] || "0";
       const raw = parseInt(String(rawValue || "0"), 10);
       if (!Number.isFinite(raw)) return 0;
       let total = raw % 360;
@@ -5019,7 +5024,8 @@ HTML = r"""<!doctype html>
       ensurePaneCommands(state);
       const treeRoles = [];
       splitTreeCollectRoles(normalizeSplitTreeState(), treeRoles);
-      if (treeRoles.length && (treeRoles.length !== state.pane_count + 1 || Math.max(...treeRoles) !== state.pane_count)) {
+      const normalizedTreeRoles = Array.from(new Set(treeRoles.map((role) => Number(role)).filter(Number.isFinite))).sort((a, b) => a - b);
+      if (treeRoles.length && (normalizedTreeRoles.length !== state.pane_count || normalizedTreeRoles.some((role, index) => role !== index))) {
         state.splitTreeModel = presetTreeFromState(state);
         syncSplitTreeState();
       }

@@ -218,6 +218,75 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertNotIn("const paneIndex = selectedRole - 1;", split_remove_text)
         self.assertNotIn("for (let i = role + 1; i <= state.pane_count; i += 1)", split_remove_text)
 
+    def test_unified_browser_helpers_use_pane_scoped_identity_rotation_and_tree_validation(self) -> None:
+        html = kms_mosaic_web.HTML
+
+        ensure_panes = re.search(
+            r"function ensurePaneCommands\(nextState\) \{.*?\n    function skipTreeWs",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(ensure_panes)
+        ensure_panes_text = ensure_panes.group(0)
+        self.assertIn("nextState.pane_type_raw = Array.isArray(nextState.pane_type_raw) ? nextState.pane_type_raw.slice(0, count) : [];", ensure_panes_text)
+        self.assertIn("nextState.pane_type_settings = Array.isArray(nextState.pane_type_settings)", ensure_panes_text)
+        self.assertIn("nextState.pane_mpv_outs = Array.isArray(nextState.pane_mpv_outs) ? nextState.pane_mpv_outs.slice(0, count) : [];", ensure_panes_text)
+        self.assertIn("nextState.pane_video_rotate = Array.isArray(nextState.pane_video_rotate) ? nextState.pane_video_rotate.slice(0, count) : [];", ensure_panes_text)
+        self.assertIn("nextState.pane_panscan = Array.isArray(nextState.pane_panscan) ? nextState.pane_panscan.slice(0, count) : [];", ensure_panes_text)
+        self.assertIn("while (nextState.pane_type_raw.length < count) nextState.pane_type_raw.push(\"\");", ensure_panes_text)
+        self.assertIn("while (nextState.pane_type_settings.length < count) nextState.pane_type_settings.push({});", ensure_panes_text)
+        self.assertIn("while (nextState.pane_mpv_outs.length < count) nextState.pane_mpv_outs.push(\"\");", ensure_panes_text)
+        self.assertIn("while (nextState.pane_video_rotate.length < count) nextState.pane_video_rotate.push(\"\");", ensure_panes_text)
+        self.assertIn("while (nextState.pane_panscan.length < count) nextState.pane_panscan.push(\"\");", ensure_panes_text)
+
+        split_remove = re.search(
+            r"function splitSelectedRole\(kind\) \{.*?\n    function waitForIceGatheringComplete",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(split_remove)
+        split_remove_text = split_remove.group(0)
+        self.assertIn("state.pane_type_raw.splice(paneIndex, 1);", split_remove_text)
+        self.assertIn("state.pane_type_settings.splice(paneIndex, 1);", split_remove_text)
+        self.assertIn("state.pane_mpv_outs.splice(paneIndex, 1);", split_remove_text)
+        self.assertIn("state.pane_video_rotate.splice(paneIndex, 1);", split_remove_text)
+        self.assertIn("state.pane_panscan.splice(paneIndex, 1);", split_remove_text)
+
+        identity = re.search(
+            r"function paneIdentityForRole\(nextState, role\) \{.*?\n    function paneIdentityEquals",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(identity)
+        identity_text = identity.group(0)
+        self.assertIn("const paneIndex = role;", identity_text)
+        self.assertNotIn("if (role === 0)", identity_text)
+        self.assertNotIn("const paneIndex = role - 1;", identity_text)
+        self.assertNotIn("kind: \"main\"", identity_text)
+
+        rotation = re.search(
+            r"function configuredVideoRotationDegrees\(role = \(selectedRole >= 0 \? selectedRole : 0\)\) \{.*?\n    function effectivePlaylistThumbRotationDegrees",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(rotation)
+        rotation_text = rotation.group(0)
+        self.assertIn("const rawValue = state?.pane_video_rotate?.[Number(role)] || \"0\";", rotation_text)
+        self.assertNotIn("state?.video_rotate || \"0\"", rotation_text)
+        self.assertNotIn("Number(role) > 0", rotation_text)
+        self.assertNotIn("const paneIndex = Number(role) - 1;", rotation_text)
+
+        sync_form = re.search(
+            r"function syncFormToState\(\) \{.*?\n    function fillForm",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(sync_form)
+        sync_form_text = sync_form.group(0)
+        self.assertIn("const normalizedTreeRoles = Array.from(new Set(treeRoles.map((role) => Number(role)).filter(Number.isFinite))).sort((a, b) => a - b);", sync_form_text)
+        self.assertIn("normalizedTreeRoles.length !== state.pane_count || normalizedTreeRoles.some((role, index) => role !== index)", sync_form_text)
+        self.assertNotIn("treeRoles.length !== state.pane_count + 1 || Math.max(...treeRoles) !== state.pane_count", sync_form_text)
+
     def test_parse_legacy_config_converts_global_media_slot_into_pane_zero(self) -> None:
         text = textwrap.dedent(
             """
