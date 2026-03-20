@@ -76,13 +76,16 @@ class RenderTargetTests(unittest.TestCase):
         self.assertIn("bool pane_visible = !ui->fullscreen || ui->fs_pane == i;", frame_src)
         self.assertIn("media_ctx *pane_ctx = NULL;", frame_src)
 
-        self.assertIn("(i == 0 && use_mpv) ? m->mpv : NULL", app_src)
+        self.assertNotIn("(i == 0 && use_mpv) ? m->mpv : NULL", app_src)
+        self.assertIn("if (use_mpv && opt.pane_count > 0)", app_src)
+        self.assertIn("pane_media[0] = m;", app_src)
         self.assertNotIn('if (index === 0) return "Video";', web_src)
         self.assertNotIn("const paneRoles = roles.slice(1);", web_src)
         self.assertIn("const [primaryRole, ...secondaryRoles] = roles;", web_src)
         self.assertIn("function defaultMediaPaneRole()", web_src)
         self.assertIn("const roles = orderedRolesFromState(nextState);", web_src)
-        self.assertIn("selectedRole < 0 && targetRole === 0", web_src)
+        self.assertIn("return firstMediaPane >= 0 ? firstMediaPane : -1;", web_src)
+        self.assertIn("if (resolvedRole < 0) return 0;", web_src)
 
 
 if __name__ == "__main__":

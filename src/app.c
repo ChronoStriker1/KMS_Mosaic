@@ -350,11 +350,7 @@ static bool app_handle_input_ready(runtime_state *rt, ui_state *ui, options_t *o
             return rt->running;
         }
         for (int i = 0; i < opt->pane_count; ++i) pane_terms[i] = panes_get_term(panes, i);
-        for (int i = 0; i < opt->pane_count; ++i) {
-            pane_mpv[i] = pane_media && pane_media[i].mpv
-                ? pane_media[i].mpv
-                : ((i == 0 && use_mpv) ? m->mpv : NULL);
-        }
+        for (int i = 0; i < opt->pane_count; ++i) pane_mpv[i] = pane_media && pane_media[i].mpv ? pane_media[i].mpv : NULL;
         (void)ui_handle_input(ui, opt, buf, n, use_mpv,
                               pane_terms, pane_mpv, opt->pane_count,
                               m->mpv, &rt->running, debug);
@@ -557,6 +553,15 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
         if (opt.pane_media && opt.pane_media[i].enabled) {
             (void)media_init_pane(&pane_media[i], &opt, &opt.pane_media[i], *debug);
         }
+    }
+    if (use_mpv && opt.pane_count > 0) {
+        if (!pane_media[0].mpv) {
+            pane_media[0] = m;
+        } else {
+            media_shutdown(&m);
+        }
+        memset(&m, 0, sizeof(m));
+        use_mpv = false;
     }
     if (opt.diag) {
         rc = app_print_diag();
