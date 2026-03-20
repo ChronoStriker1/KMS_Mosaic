@@ -350,7 +350,11 @@ static bool app_handle_input_ready(runtime_state *rt, ui_state *ui, options_t *o
             return rt->running;
         }
         for (int i = 0; i < opt->pane_count; ++i) pane_terms[i] = panes_get_term(panes, i);
-        for (int i = 0; i < opt->pane_count; ++i) pane_mpv[i] = pane_media && pane_media[i].mpv ? pane_media[i].mpv : NULL;
+        for (int i = 0; i < opt->pane_count; ++i) {
+            pane_mpv[i] = pane_media && pane_media[i].mpv
+                ? pane_media[i].mpv
+                : ((i == 0 && use_mpv) ? m->mpv : NULL);
+        }
         (void)ui_handle_input(ui, opt, buf, n, use_mpv,
                               pane_terms, pane_mpv, opt->pane_count,
                               m->mpv, &rt->running, debug);
@@ -382,6 +386,9 @@ static void app_handle_runtime_events(runtime_state *rt, ui_state *ui, const opt
         if (pane_media && pane_media[i].mpv && runtime_pane_media_ready(rt, opt, i)) {
             int pane_needs_render = 0;
             media_handle_wakeup(&pane_media[i], debug, &pane_needs_render);
+            if (pane_needs_render && rt->pane_mpv_needs_render) {
+                rt->pane_mpv_needs_render[i] = 1;
+            }
         }
     }
     if (m->playlist_fifo_fd >= 0 && (rt->pfds[RUNTIME_POLL_PLAYLIST_FIFO].revents & POLLIN)) {
@@ -574,7 +581,7 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
         tcsetattr(0, TCSANOW, &rawt);
         atexit(restore_tty);
     }
-    fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus video/panes, Arrows resize, l/L layouts, r/R rotate roles, t swap focus/next, z fullscreen, n/p next/prev FS, c cycle FS, o OSD; Ctrl+P panscan; Ctrl+Q quit.\n");
+    fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus panes, Arrows resize, l/L layouts, r/R rotate roles, t swap focus/next, z fullscreen, n/p next/prev FS, c cycle FS, o OSD; Ctrl+P panscan; Ctrl+Q quit.\n");
 
     if (!runtime_init(&rt, &opt, use_mpv, &m, d.fd)) app_die("runtime_init");
     app_config_watch_init(&cfg_watch, &opt);

@@ -78,29 +78,24 @@ static void ui_mpv_send_keys(mpv_handle *mpv, const char *buf, ssize_t n) {
     }
 }
 
-enum {
-    UI_SLOT_VIDEO = 0
-};
-
 static int ui_role_count(int pane_count) {
-    return KMS_MOSAIC_SLOT_PANE_BASE + pane_count;
+    return pane_count;
 }
 
 static int ui_focus_count(bool use_mpv, int pane_count) {
-    return pane_count + (use_mpv ? 1 : 0);
+    (void)use_mpv;
+    return pane_count;
 }
 
 static int ui_next_focus(int focus, bool use_mpv, int pane_count) {
-    if (!use_mpv && pane_count > 0) {
-        int pane_focus = focus < 1 ? 1 : focus;
-        return ((pane_focus - 1 + 1) % pane_count) + 1;
-    }
     int count = ui_focus_count(use_mpv, pane_count);
-    return count > 0 ? (focus + 1) % count : focus;
+    if (count <= 0) return -1;
+    if (focus < 0 || focus >= count) return 0;
+    return (focus + 1) % count;
 }
 
 static term_pane *ui_focus_term(term_pane *const *panes, int pane_count, int focus) {
-    int pane_index = focus - 1;
+    int pane_index = focus;
     if (pane_index < 0 || pane_index >= pane_count) return NULL;
     return panes[pane_index];
 }
@@ -127,10 +122,11 @@ static void ui_rotate_perm(ui_state *ui, int pane_count, int delta) {
 }
 
 static bool ui_is_pane_focus(int focus, int pane_count) {
-    return focus > UI_SLOT_VIDEO && focus <= pane_count;
+    return focus >= 0 && focus < pane_count;
 }
 
 bool ui_state_init(ui_state *ui, const options_t *opt, bool use_mpv) {
+    (void)use_mpv;
     memset(ui, 0, sizeof(*ui));
     ui->role_count = ui_role_count(opt->pane_count);
     ui->perm = calloc((size_t)ui->role_count, sizeof(*ui->perm));
@@ -139,7 +135,7 @@ bool ui_state_init(ui_state *ui, const options_t *opt, bool use_mpv) {
         ui_state_destroy(ui);
         return false;
     }
-    ui->focus = use_mpv ? 0 : 1;
+    ui->focus = opt->pane_count > 0 ? 0 : -1;
     ui->show_osd = false;
     for (int i = 0; i < ui->role_count; ++i) {
         ui->perm[i] = i;
@@ -185,6 +181,7 @@ void ui_update_fs_cycle(ui_state *ui, int pane_count, int fs_cycle_sec, double n
 bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
                      bool use_mpv, term_pane *const *panes, mpv_handle *const *pane_mpv, int pane_count,
                      mpv_handle *mpv, bool *running, bool debug) {
+    (void)mpv;
     for (ssize_t i = 0; i < n; i++) {
         unsigned char ch = (unsigned char)buf[i];
         if (ch == 0x05) ui->ui_control = !ui->ui_control;
@@ -281,15 +278,18 @@ bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
         }
     }
 
-    if (mpv) {
+    mpv_handle *focused_mpv = NULL;
+    if (pane_mpv && ui->focus >= 0 && ui->focus < pane_count) focused_mpv = pane_mpv[ui->focus];
+
+    if (focused_mpv) {
         for (ssize_t i = 0; i < n; i++) {
             if ((unsigned char)buf[i] == 0x10) {
                 double cur = 0.0;
-                mpv_get_property(mpv, "panscan", MPV_FORMAT_DOUBLE, &cur);
+                mpv_get_property(focused_mpv, "panscan", MPV_FORMAT_DOUBLE, &cur);
                 double target = cur > 0.0 ? 0.0 : (opt->panscan ? atof(opt->panscan) : 1.0);
                 char cmd[64];
                 snprintf(cmd, sizeof(cmd), "set panscan %f", target);
-                mpv_command_string(mpv, cmd);
+                mpv_command_string(focused_mpv, cmd);
                 consumed = true;
                 break;
             }
@@ -299,10 +299,7 @@ bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
     if (!consumed && !ui->ui_control) {
         term_pane *focused = ui_focus_term(panes, pane_count, ui->focus);
         if (focused) term_pane_send_input(focused, buf, (size_t)n);
-        else if (ui_is_pane_focus(ui->focus, pane_count) && pane_mpv && pane_mpv[ui->focus - 1]) {
-            ui_mpv_send_keys(pane_mpv[ui->focus - 1], buf, n);
-        }
-        else if (ui->focus == UI_SLOT_VIDEO && mpv) ui_mpv_send_keys(mpv, buf, n);
+        else if (pane_mpv && ui->focus >= 0 && pane_mpv[ui->focus]) ui_mpv_send_keys(pane_mpv[ui->focus], buf, n);
     }
 
     if (debug) fprintf(stderr, "Input: focus=%d ui_control=%d consumed=%d bytes=%zd\n", ui->focus, ui->ui_control ? 1 : 0, consumed ? 1 : 0, n);

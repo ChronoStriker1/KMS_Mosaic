@@ -21,10 +21,14 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
                   const int *pane_font_px, bool use_mpv,
                   const bool *pane_ready, bool debug,
                   const char *snapshot_path, bool *snapshot_written) {
-    const pane_layout *lay_video = &slot_layouts[KMS_MOSAIC_SLOT_VIDEO];
+    (void)slot_layouts;
     bool has_pane_media = false;
     for (int i = 0; i < pane_count; ++i) {
-        if (pane_media && opt->pane_media && opt->pane_media[i].enabled && pane_media[i].mpv_gl) {
+        bool pane_has_primary_media =
+            !opt->no_video && i == 0 && use_mpv && m->mpv_gl &&
+            !(pane_media && opt->pane_media && opt->pane_media[i].enabled && pane_media[i].mpv_gl);
+        if (pane_has_primary_media ||
+            (pane_media && opt->pane_media && opt->pane_media[i].enabled && pane_media[i].mpv_gl)) {
             has_pane_media = true;
             break;
         }
@@ -59,120 +63,11 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
     glBindFramebuffer(GL_FRAMEBUFFER, rg->rt_fbo);
     glViewport(0, 0, logical_w, logical_h);
     render_gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
+    glBindFramebuffer(GL_FRAMEBUFFER, rg->rt_fbo);
+    render_gl_reset_state_2d();
+    glViewport(0, 0, logical_w, logical_h);
 
-    if (use_mpv && (!ui->fullscreen || ui->fs_pane == 0)) {
-        int vw = lay_video->w;
-        int vh = lay_video->h;
-        if (vw < 1) vw = 1;
-        if (vh < 1) vh = 1;
-        if (!has_pane_media && rt->direct_mode) {
-            if (debug) fprintf(stderr, "Render: mpv direct to default FB...\n");
-            if (!rt->direct_via_fbo) {
-                glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                glDisable(GL_SCISSOR_TEST);
-                glDisable(GL_BLEND);
-                glDisable(GL_DITHER);
-                glDisable(GL_CULL_FACE);
-                glDisable(GL_DEPTH_TEST);
-                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-                glViewport(0, 0, fb_w, fb_h);
-                render_gl_clear_color(1.0f, 0.0f, 0.0f, 1.0f);
-                if (debug) {
-                    GLint vp[4] = {0};
-                    glGetIntegerv(GL_VIEWPORT, vp);
-                    GLint cur_fbo = 0;
-                    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &cur_fbo);
-                    fprintf(stderr, "Direct: viewport=%d,%d %dx%d fbo=%d\n",
-                            vp[0], vp[1], vp[2], vp[3], cur_fbo);
-                }
-                if (!rt->direct_test_only) {
-                    int flip_y = rt->mpv_flip_y_direct;
-                    mpv_opengl_fbo dfbo = {.fbo = 0, .w = fb_w, .h = fb_h, .internal_format = 0};
-                    int block = 1;
-                    mpv_render_param params[] = {
-                        {MPV_RENDER_PARAM_OPENGL_FBO, &dfbo},
-                        {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
-                        {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block},
-                        {0}
-                    };
-                    if (debug) fprintf(stderr, "Render: calling mpv_render_context_render (direct)...\n");
-                    mpv_render_context_render(m->mpv_gl, params);
-                    if (opt->use_atomic && opt->gl_finish) glFinish();
-                    render_gl_check(debug, "after mpv_render_context_render (direct)");
-                    rt->mpv_needs_render = 0;
-                } else if (debug) {
-                    fprintf(stderr, "Direct TEST: skipped mpv render (expect solid red)\n");
-                }
-            } else {
-                render_gl_ensure_video_rt(rg, fb_w, fb_h);
-                glBindFramebuffer(GL_FRAMEBUFFER, rg->vid_fbo);
-                glDisable(GL_SCISSOR_TEST);
-                glDisable(GL_BLEND);
-                glDisable(GL_DITHER);
-                glDisable(GL_CULL_FACE);
-                glDisable(GL_DEPTH_TEST);
-                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-                glViewport(0, 0, fb_w, fb_h);
-                render_gl_clear_color(0.f, 0.f, 0.f, 1.0f);
-                if (!rt->direct_test_only) {
-                    int flip_y = 0;
-                    mpv_opengl_fbo fbo = {.fbo = (int)rg->vid_fbo, .w = fb_w, .h = fb_h, .internal_format = 0};
-                    int block2 = 1;
-                    mpv_render_param params[] = {
-                        {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
-                        {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
-                        {MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, &block2},
-                        {0}
-                    };
-                    if (debug) fprintf(stderr, "Render: calling mpv_render_context_render (direct via FBO)...\n");
-                    mpv_render_context_render(m->mpv_gl, params);
-                    if (opt->use_atomic && opt->gl_finish) glFinish();
-                    render_gl_check(debug, "after mpv_render_context_render (direct via FBO)");
-                    rt->mpv_needs_render = 0;
-                } else if (debug) {
-                    fprintf(stderr, "Direct TEST: skipped mpv render into FBO\n");
-                }
-                glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                glViewport(0, 0, fb_w, fb_h);
-                render_gl_clear_color(1.0f, 0.0f, 0.0f, 1.0f);
-                if (!rt->direct_test_only) render_gl_draw_tex_fullscreen(rg, rg->vid_tex);
-                else if (debug) fprintf(stderr, "Direct TEST: drew red only (no texture blit)\n");
-            }
-        } else {
-            if (debug) fprintf(stderr, "Render: preparing mpv FBO...\n");
-            render_gl_ensure_video_rt(rg, vw, vh);
-            glBindFramebuffer(GL_FRAMEBUFFER, rg->vid_fbo);
-            glDisable(GL_SCISSOR_TEST);
-            glDisable(GL_BLEND);
-            glDisable(GL_DITHER);
-            glDisable(GL_CULL_FACE);
-            glDisable(GL_DEPTH_TEST);
-            glViewport(0, 0, vw, vh);
-            render_gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
-            int flip_y = 0;
-            mpv_opengl_fbo fbo = {.fbo = (int)rg->vid_fbo, .w = vw, .h = vh, .internal_format = 0};
-            mpv_render_param params[] = {
-                {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
-                {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
-                {0}
-            };
-            if (debug) fprintf(stderr, "Render: calling mpv_render_context_render...\n");
-            mpv_render_context_render(m->mpv_gl, params);
-            render_gl_check(debug, "after mpv_render_context_render");
-            rt->mpv_needs_render = 0;
-
-            glBindFramebuffer(GL_FRAMEBUFFER, rg->rt_fbo);
-            render_gl_reset_state_2d();
-            glViewport(0, 0, logical_w, logical_h);
-            render_gl_draw_tex_to_rt(rg, rg->vid_tex, lay_video->x, lay_video->y, vw, vh, logical_w, logical_h);
-        }
-    } else {
-        glBindFramebuffer(GL_FRAMEBUFFER, rg->rt_fbo);
-        render_gl_reset_state_2d();
-        glViewport(0, 0, logical_w, logical_h);
-    }
-
-    if (!rt->direct_mode && !opt->no_panes) {
+    if (!rt->direct_mode) {
         if (debug) {
             glBindFramebuffer(GL_FRAMEBUFFER, rg->rt_fbo);
             render_gl_reset_state_2d();
@@ -190,42 +85,63 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         panes_sync_layout(panes, pane_layouts, pane_count, pane_font_px);
         if (ui->layout_reinit_countdown > 0) ui->layout_reinit_countdown--;
         for (int i = 0; i < pane_count; ++i) {
-            if (pane_media && opt->pane_media && opt->pane_media[i].enabled && pane_media[i].mpv_gl) {
-                if (!ui->fullscreen || ui->fs_pane == i + 1) {
+            bool pane_visible = !ui->fullscreen || ui->fs_pane == i;
+            media_ctx *pane_ctx = NULL;
+            int *pane_needs_render = NULL;
+            if (!opt->no_video) {
+                if (pane_media && opt->pane_media && opt->pane_media[i].enabled && pane_media[i].mpv_gl) {
+                    pane_ctx = &pane_media[i];
+                    pane_needs_render = rt->pane_mpv_needs_render ? &rt->pane_mpv_needs_render[i] : NULL;
+                } else if (i == 0 && use_mpv && m->mpv_gl) {
+                    pane_ctx = m;
+                    pane_needs_render = &rt->mpv_needs_render;
+                }
+            }
+            if (pane_ctx && pane_ctx->mpv_gl) {
+                if (pane_visible) {
                     int vw = pane_layouts[i].w;
                     int vh = pane_layouts[i].h;
                     if (vw < 1) vw = 1;
                     if (vh < 1) vh = 1;
-                    render_gl_ensure_video_rt(rg, vw, vh);
-                    glBindFramebuffer(GL_FRAMEBUFFER, rg->vid_fbo);
-                    glDisable(GL_SCISSOR_TEST);
-                    glDisable(GL_BLEND);
-                    glDisable(GL_DITHER);
-                    glDisable(GL_CULL_FACE);
-                    glDisable(GL_DEPTH_TEST);
-                    glViewport(0, 0, vw, vh);
-                    render_gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
-                    int flip_y = 0;
-                    mpv_opengl_fbo fbo = {.fbo = (int)rg->vid_fbo, .w = vw, .h = vh, .internal_format = 0};
-                    mpv_render_param params[] = {
-                        {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
-                        {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
-                        {0}
-                    };
-                    mpv_render_context_render(pane_media[i].mpv_gl, params);
+                    bool pane_target_resized = render_gl_ensure_pane_video_rt(rg, i, vw, vh);
+                    if (pane_target_resized && pane_needs_render) {
+                        *pane_needs_render = 1;
+                    }
+                    GLuint pane_vid_fbo = render_gl_pane_video_fbo(rg, i);
+                    GLuint pane_vid_tex = render_gl_pane_video_tex(rg, i);
+                    if (!pane_needs_render || *pane_needs_render) {
+                        glBindFramebuffer(GL_FRAMEBUFFER, pane_vid_fbo);
+                        glDisable(GL_SCISSOR_TEST);
+                        glDisable(GL_BLEND);
+                        glDisable(GL_DITHER);
+                        glDisable(GL_CULL_FACE);
+                        glDisable(GL_DEPTH_TEST);
+                        glViewport(0, 0, vw, vh);
+                        render_gl_clear_color(0.0f, 0.0f, 0.0f, 1.0f);
+                        int flip_y = 0;
+                        mpv_opengl_fbo fbo = {.fbo = (int)pane_vid_fbo, .w = vw, .h = vh, .internal_format = 0};
+                        mpv_render_param params[] = {
+                            {MPV_RENDER_PARAM_OPENGL_FBO, &fbo},
+                            {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+                            {0}
+                        };
+                        mpv_render_context_render(pane_ctx->mpv_gl, params);
+                        if (pane_needs_render) *pane_needs_render = 0;
+                    }
 
                     glBindFramebuffer(GL_FRAMEBUFFER, rg->rt_fbo);
                     render_gl_reset_state_2d();
                     glViewport(0, 0, logical_w, logical_h);
-                    render_gl_draw_tex_to_rt(rg, rg->vid_tex,
+                    render_gl_draw_tex_to_rt(rg, pane_vid_tex,
                                              pane_layouts[i].x, pane_layouts[i].y, vw, vh, logical_w, logical_h);
                 }
                 continue;
             }
+            if (opt->no_panes) continue;
             term_pane *tp = panes_get_term(panes, i);
             if (!tp) continue;
             if (pane_ready[i]) (void)term_pane_poll(tp);
-            if (!ui->fullscreen || ui->fs_pane == i + 1) {
+            if (pane_visible) {
                 term_pane_render(tp, screen_w, screen_h);
                 if (debug) {
                     fprintf(stderr, "Pane %d draw at %d,%d %dx%d\n", i + 1,
@@ -236,16 +152,34 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         }
     }
 
-    if (!rt->direct_mode && use_mpv && !opt->no_osd && ui->show_osd) {
+    if (!rt->direct_mode && !opt->no_osd && ui->show_osd) {
+        media_ctx *osd_media = NULL;
+        if (!opt->no_video && ui->focus >= 0 && ui->focus < pane_count) {
+            if (pane_media && opt->pane_media && opt->pane_media[ui->focus].enabled && pane_media[ui->focus].mpv_gl) {
+                osd_media = &pane_media[ui->focus];
+            } else if (ui->focus == 0 && use_mpv && m->mpv_gl) {
+                osd_media = m;
+            }
+        }
+        if (!osd_media && !opt->no_video && use_mpv && m->mpv_gl) osd_media = m;
+        if (!osd_media && !opt->no_video && pane_media && opt->pane_media) {
+            for (int i = 0; i < pane_count; ++i) {
+                if (opt->pane_media[i].enabled && pane_media[i].mpv_gl) {
+                    osd_media = &pane_media[i];
+                    break;
+                }
+            }
+        }
+        if (osd_media && osd_media->mpv) {
         static osd_ctx *osd = NULL;
         if (!osd) osd = osd_create(opt->font_px ? opt->font_px : 20);
         int64_t pos = 0, count = 0;
         int paused_flag = 0;
         char *title = NULL;
-        mpv_get_property(m->mpv, "playlist-pos", MPV_FORMAT_INT64, &pos);
-        mpv_get_property(m->mpv, "playlist-count", MPV_FORMAT_INT64, &count);
-        mpv_get_property(m->mpv, "pause", MPV_FORMAT_FLAG, &paused_flag);
-        title = mpv_get_property_string(m->mpv, "media-title");
+        mpv_get_property(osd_media->mpv, "playlist-pos", MPV_FORMAT_INT64, &pos);
+        mpv_get_property(osd_media->mpv, "playlist-count", MPV_FORMAT_INT64, &count);
+        mpv_get_property(osd_media->mpv, "pause", MPV_FORMAT_FLAG, &paused_flag);
+        title = mpv_get_property_string(osd_media->mpv, "media-title");
         char line[512];
         snprintf(line, sizeof line, "%s %lld/%lld - %s",
                  paused_flag ? "Paused" : "Playing",
@@ -257,6 +191,7 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         render_gl_reset_state_2d();
         glViewport(0, 0, logical_w, logical_h);
         osd_draw(osd, 16, 16, logical_w, logical_h);
+        }
     }
 
     if (!rt->direct_mode && ui->ui_control) {
@@ -264,7 +199,7 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         if (!osdcm) osdcm = osd_create(opt->font_px ? opt->font_px : 20);
         const char *layout_name = layout_mode_name(opt->layout_mode);
         const char *help =
-            "Tab: focus cycle video/panes\n"
+            "Tab: focus cycle panes\n"
             "o: toggle OSD\n"
             "l/L: cycle layouts\n"
             "r/R: rotate roles\n"
@@ -285,19 +220,15 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         osd_draw(osdcm, 16, 48, logical_w, logical_h);
         int bx = 0, by = 0, bw = 0, bh = 0;
         int thickness = 4;
-        const pane_layout **focus_layouts = calloc((size_t)(KMS_MOSAIC_SLOT_PANE_BASE + pane_count), sizeof(*focus_layouts));
-        if (!focus_layouts) return;
-        focus_layouts[KMS_MOSAIC_SLOT_VIDEO] = &slot_layouts[KMS_MOSAIC_SLOT_VIDEO];
-        for (int i = 0; i < pane_count; ++i) focus_layouts[KMS_MOSAIC_SLOT_PANE_BASE + i] = &pane_layouts[i];
         int focus_slot = ui->focus;
-        if (focus_slot < 0 || focus_slot >= KMS_MOSAIC_SLOT_PANE_BASE + pane_count || !focus_layouts[focus_slot]) {
-            focus_slot = KMS_MOSAIC_SLOT_VIDEO;
+        if (focus_slot < 0 || focus_slot >= pane_count) {
+            focus_slot = 0;
         }
-        bx = focus_layouts[focus_slot]->x;
-        by = focus_layouts[focus_slot]->y;
-        bw = focus_layouts[focus_slot]->w;
-        bh = focus_layouts[focus_slot]->h;
-        free(focus_layouts);
+        const pane_layout *focus_layout = &pane_layouts[focus_slot];
+        bx = focus_layout->x;
+        by = focus_layout->y;
+        bw = focus_layout->w;
+        bh = focus_layout->h;
         render_gl_draw_border_rect(bx, by, bw, bh, thickness, logical_w, logical_h, 0.1f, 0.9f, 0.95f, 1.0f);
     }
 
