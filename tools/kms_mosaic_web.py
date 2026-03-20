@@ -4797,17 +4797,14 @@ HTML = r"""<!doctype html>
       if (selectedRole >= 0) return selectedRole;
       const paneTypes = Array.isArray(state?.pane_types) ? state.pane_types : [];
       const firstMediaPane = paneTypes.findIndex((type) => type === "mpv");
-      return firstMediaPane >= 0 ? firstMediaPane : 0;
+      return firstMediaPane >= 0 ? firstMediaPane : -1;
     }
 
-    function configuredVideoRotationDegrees(role = (selectedRole >= 0 ? selectedRole : 0)) {
-      const targetRole = Number.isFinite(Number(role))
+    function configuredVideoRotationDegrees(role = (selectedRole >= 0 ? selectedRole : defaultMediaPaneRole())) {
+      const resolvedRole = Number.isFinite(Number(role))
         ? Number(role)
         : defaultMediaPaneRole();
-      const resolvedRole =
-        selectedRole < 0 && targetRole === 0
-          ? defaultMediaPaneRole()
-          : targetRole;
+      if (resolvedRole < 0) return 0;
       const rawValue = state?.pane_video_rotate?.[Number(resolvedRole)] || "0";
       const raw = parseInt(String(rawValue || "0"), 10);
       if (!Number.isFinite(raw)) return 0;
@@ -4816,7 +4813,7 @@ HTML = r"""<!doctype html>
       return total;
     }
 
-    function effectivePlaylistThumbRotationDegrees(role = (selectedRole >= 0 ? selectedRole : 0)) {
+    function effectivePlaylistThumbRotationDegrees(role = (selectedRole >= 0 ? selectedRole : defaultMediaPaneRole())) {
       let total = (normalizedRotationDegrees() + configuredVideoRotationDegrees(role)) % 360;
       if (total < 0) total += 360;
       return total;

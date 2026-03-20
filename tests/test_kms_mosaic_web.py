@@ -186,7 +186,8 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         )
         self.assertIsNotNone(preset_tree)
         preset_tree_text = preset_tree.group(0)
-        self.assertIn("const roles = Array.from({ length: paneCount }, (_, i) => i);", preset_tree_text)
+        self.assertIn("const roles = orderedRolesFromState(nextState);", preset_tree_text)
+        self.assertIn("const [primaryRole, ...secondaryRoles] = roles;", preset_tree_text)
         self.assertNotIn("const roles = Array.from({ length: paneCount + 1 }, (_, i) => i);", preset_tree_text)
 
         board = re.search(
@@ -301,13 +302,16 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertNotIn("kind: \"main\"", identity_text)
 
         rotation = re.search(
-            r"function configuredVideoRotationDegrees\(role = \(selectedRole >= 0 \? selectedRole : 0\)\) \{.*?\n    function effectivePlaylistThumbRotationDegrees",
+            r"function configuredVideoRotationDegrees\(role = .*?\) \{.*?\n    function effectivePlaylistThumbRotationDegrees",
             html,
             re.S,
         )
         self.assertIsNotNone(rotation)
         rotation_text = rotation.group(0)
-        self.assertIn("const rawValue = state?.pane_video_rotate?.[Number(role)] || \"0\";", rotation_text)
+        self.assertIn("defaultMediaPaneRole()", rotation_text)
+        self.assertIn("const resolvedRole = Number.isFinite(Number(role))", rotation_text)
+        self.assertIn("const rawValue = state?.pane_video_rotate?.[Number(resolvedRole)] || \"0\";", rotation_text)
+        self.assertIn("if (resolvedRole < 0) return 0;", rotation_text)
         self.assertNotIn("state?.video_rotate || \"0\"", rotation_text)
         self.assertNotIn("Number(role) > 0", rotation_text)
         self.assertNotIn("const paneIndex = Number(role) - 1;", rotation_text)

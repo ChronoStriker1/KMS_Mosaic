@@ -24,11 +24,7 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
     (void)slot_layouts;
     bool has_pane_media = false;
     for (int i = 0; i < pane_count; ++i) {
-        bool pane_has_primary_media =
-            !opt->no_video && i == 0 && use_mpv && m->mpv_gl &&
-            !(pane_media && opt->pane_media && opt->pane_media[i].enabled && pane_media[i].mpv_gl);
-        if (pane_has_primary_media ||
-            (pane_media && opt->pane_media && opt->pane_media[i].enabled && pane_media[i].mpv_gl)) {
+        if (pane_media && pane_media[i].mpv_gl) {
             has_pane_media = true;
             break;
         }
@@ -88,14 +84,9 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
             bool pane_visible = !ui->fullscreen || ui->fs_pane == i;
             media_ctx *pane_ctx = NULL;
             int *pane_needs_render = NULL;
-            if (!opt->no_video) {
-                if (pane_media && opt->pane_media && opt->pane_media[i].enabled && pane_media[i].mpv_gl) {
-                    pane_ctx = &pane_media[i];
-                    pane_needs_render = rt->pane_mpv_needs_render ? &rt->pane_mpv_needs_render[i] : NULL;
-                } else if (i == 0 && use_mpv && m->mpv_gl) {
-                    pane_ctx = m;
-                    pane_needs_render = &rt->mpv_needs_render;
-                }
+            if (pane_media && pane_media[i].mpv_gl) {
+                pane_ctx = &pane_media[i];
+                pane_needs_render = rt->pane_mpv_needs_render ? &rt->pane_mpv_needs_render[i] : NULL;
             }
             if (pane_ctx && pane_ctx->mpv_gl) {
                 if (pane_visible) {
@@ -154,17 +145,14 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
 
     if (!rt->direct_mode && !opt->no_osd && ui->show_osd) {
         media_ctx *osd_media = NULL;
-        if (!opt->no_video && ui->focus >= 0 && ui->focus < pane_count) {
-            if (pane_media && opt->pane_media && opt->pane_media[ui->focus].enabled && pane_media[ui->focus].mpv_gl) {
+        if (ui->focus >= 0 && ui->focus < pane_count) {
+            if (pane_media && pane_media[ui->focus].mpv_gl) {
                 osd_media = &pane_media[ui->focus];
-            } else if (ui->focus == 0 && use_mpv && m->mpv_gl) {
-                osd_media = m;
             }
         }
-        if (!osd_media && !opt->no_video && use_mpv && m->mpv_gl) osd_media = m;
-        if (!osd_media && !opt->no_video && pane_media && opt->pane_media) {
+        if (!osd_media && pane_media) {
             for (int i = 0; i < pane_count; ++i) {
-                if (opt->pane_media[i].enabled && pane_media[i].mpv_gl) {
+                if (pane_media[i].mpv_gl) {
                     osd_media = &pane_media[i];
                     break;
                 }
