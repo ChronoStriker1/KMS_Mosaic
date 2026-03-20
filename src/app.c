@@ -554,10 +554,12 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
             (void)media_init_pane(&pane_media[i], &opt, &opt.pane_media[i], *debug);
         }
     }
-    bool first_pane_accepts_legacy_media =
-        opt.pane_count > 0 && (!opt.pane_cmds || !opt.pane_cmds[0] || !*opt.pane_cmds[0]);
-    if (use_mpv && opt.pane_count > 0) {
-        if (first_pane_accepts_legacy_media && !pane_media[0].mpv) {
+    bool has_legacy_root_media =
+        opt.video_path || opt.video_count > 0 || opt.playlist_path || opt.playlist_ext ||
+        opt.playlist_fifo || opt.mpv_out_path || opt.n_mpv_opts > 0 ||
+        (opt.panscan && *opt.panscan) || opt.video_rotate != 0;
+    if (use_mpv && opt.pane_count > 0 && has_legacy_root_media) {
+        if (!pane_media[0].mpv) {
             pane_media[0] = m;
         } else {
             media_shutdown(&m);
