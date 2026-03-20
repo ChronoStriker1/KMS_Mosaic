@@ -2379,7 +2379,6 @@ HTML = r"""<!doctype html>
     let selectedRole = -1;
     let draggedStudioRole = null;
     let studioResizeDrag = null;
-    let pendingNewPaneIndexes = new Set();
     let livePreviewTimer = null;
     let livePreviewController = null;
     let livePreviewUrl = null;
@@ -4537,7 +4536,6 @@ HTML = r"""<!doctype html>
       const newRole = Number(state.pane_count || 0);
       state.pane_count = newRole + 1;
       ensurePaneCommands(state);
-      pendingNewPaneIndexes.add(newRole);
       const changed = splitTreeReplaceLeaf(tree, targetRole, (leaf) => ({
         leaf: false,
         kind,
@@ -4548,7 +4546,6 @@ HTML = r"""<!doctype html>
       if (!changed) {
         state.pane_count = newRole;
         ensurePaneCommands(state);
-        pendingNewPaneIndexes.delete(newRole);
         return false;
       }
       state.splitTreeModel = tree;
@@ -4588,9 +4585,6 @@ HTML = r"""<!doctype html>
       state.pane_panscan.splice(paneIndex, 1);
       state.pane_video_paths.splice(paneIndex, 1);
       state.pane_mpv_opts.splice(paneIndex, 1);
-      pendingNewPaneIndexes = new Set(Array.from(pendingNewPaneIndexes)
-        .filter((index) => index !== paneIndex)
-        .map((index) => index > paneIndex ? index - 1 : index));
       state.pane_count = Math.max(1, state.pane_count - 1);
       ensurePaneCommands(state);
       state.splitTreeModel = tree;
@@ -4900,7 +4894,6 @@ HTML = r"""<!doctype html>
       state.visibility_mode = visibilityModeForState(state);
       normalizeVisibilityFlags();
       rawConfigText = nextRawConfig;
-      pendingNewPaneIndexes = new Set();
       ensurePaneCommands(state);
       state.splitTreeModel = parseSplitTreeSpec(state.split_tree || "");
       const parsedSelection = Number(state?.selected_pane);
