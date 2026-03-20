@@ -77,7 +77,9 @@ class RenderTargetTests(unittest.TestCase):
         self.assertIn("media_ctx *pane_ctx = NULL;", frame_src)
 
         self.assertNotIn("(i == 0 && use_mpv) ? m->mpv : NULL", app_src)
-        self.assertIn("if (use_mpv && opt.pane_count > 0)", app_src)
+        self.assertIn("bool first_pane_accepts_legacy_media =", app_src)
+        self.assertIn("!opt.pane_cmds[0] || !*opt.pane_cmds[0]", app_src)
+        self.assertIn("if (use_mpv && first_pane_accepts_legacy_media)", app_src)
         self.assertIn("pane_media[0] = m;", app_src)
         self.assertNotIn('if (index === 0) return "Video";', web_src)
         self.assertNotIn("const paneRoles = roles.slice(1);", web_src)
