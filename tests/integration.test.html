@@ -262,6 +262,11 @@
       </div>
       <div id="test-3-4-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
+        <div class="test-name">Pane size controls render in Selected Pane instead of inside the board tiles</div>
+        <div id="test-3-4b" class="test-status status-pending">PENDING</div>
+      </div>
+      <div id="test-3-4b-result" style="display: none;" class="test-result"></div>
+      <div class="test-item">
         <div class="test-name">Selected Pane always shows Pane Type and switches queue/command controls by pane type</div>
         <div id="test-3-4c" class="test-status status-pending">PENDING</div>
       </div>
@@ -614,7 +619,7 @@
       log('Testing: Cross-section interaction...', 'info');
 
       if (!pluginPageMounted()) {
-        ['test-3-1', 'test-3-2', 'test-3-3', 'test-3-4', 'test-3-4c', 'test-3-4d'].forEach((id) => {
+        ['test-3-1', 'test-3-2', 'test-3-3', 'test-3-4', 'test-3-4b', 'test-3-4c', 'test-3-4d'].forEach((id) => {
           setTestResult(id, 'skip', pluginPageSkipMessage);
         });
         log('Plugin page shell is not mounted in this harness; cross-section checks were skipped.', 'warn');
@@ -674,14 +679,24 @@
         const previewStreamAfter = previewVideoAfter ? previewVideoAfter.srcObject : null;
         const selectedTitleAfter = selectedPaneTitle ? selectedPaneTitle.textContent.trim() : '';
         const cardTitle = studioCard.querySelector('.studio-card-title')?.textContent.trim() || '';
+        const resizeHandleCount = studioCard.querySelectorAll('[data-studio-resize]').length;
         const previewStable = previewNodeAfter === previewNode &&
           previewVideoAfter === previewVideo &&
           (previewStream === previewStreamAfter || (!previewStream && !previewStreamAfter));
         const selectionUpdated = selectedTitleAfter.length > 0 && selectedTitleAfter !== selectedTitleBefore && selectedTitleAfter === cardTitle;
-        const selectionOk = previewStable && selectionUpdated;
+        const selectionOk = previewStable && selectionUpdated && resizeHandleCount > 0;
         setTestResult('test-3-4', selectionOk ? 'pass' : 'fail',
-          selectionOk ? 'Pane click left the preview layout, preview video node, and stream object intact while updating Selected Pane' : 'Pane click replaced preview state or did not update selected-pane state');
+          selectionOk ? 'Pane click left the preview layout intact, updated Selected Pane, and exposed resize handles on the selected pane' : 'Pane click replaced preview state, missed selected-pane state, or failed to expose resize handles');
       }
+
+      // Test 3.4b: Pane size controls live in Selected Pane, not on the board tiles
+      const boardSizeInputs = document.querySelectorAll('#kmsStudioPlaceholder .studio-card .studio-size-input');
+      const inspectorSizeInputs = document.querySelectorAll('#kmsSelectedPanePanel .studio-size-input');
+      const selectedPaneSizeOk = boardSizeInputs.length === 0 && inspectorSizeInputs.length >= 2;
+      setTestResult('test-3-4b', selectedPaneSizeOk ? 'pass' : 'fail',
+        selectedPaneSizeOk
+          ? 'Pane size inputs are rendered in Selected Pane and no longer clutter the board tiles'
+          : `Expected 0 board size inputs and at least 2 selected-pane inputs, saw ${boardSizeInputs.length} and ${inspectorSizeInputs.length}`);
 
       // Test 3.4c/3.4d: Selected Pane uses one inspector path with pane-type-specific controls
       const canProbeSelectedPane = typeof window.fillForm === 'function' &&
@@ -1258,14 +1273,21 @@
       if (!portraitItem) {
         setTestResult('test-9-6', 'skip', 'Select an mpv pane with a portrait queue item to verify the relocated portrait/mobile queue styling.');
       } else {
-        const controlsRow = portraitItem.querySelector('.playlist-controls-row');
-        const repeatWrap = portraitItem.querySelector('.playlist-repeat-wrap');
-        const relocatedStylingOk = !!controlsRow &&
-          window.getComputedStyle(controlsRow).display === 'grid' &&
-          !!repeatWrap &&
-          Math.abs(repeatWrap.getBoundingClientRect().width - controlsRow.getBoundingClientRect().width) <= 2;
-        setTestResult('test-9-6', relocatedStylingOk ? 'pass' : 'fail',
-          relocatedStylingOk ? 'Relocated queue styling matches the portrait/mobile control layout rules' : 'Relocated queue styling is missing the portrait/mobile control layout rules');
+        const durationChip = portraitItem.querySelector('.playlist-duration-chip');
+        const mediaCell = portraitItem.querySelector('.playlist-media-cell');
+        const thumb = portraitItem.querySelector('.playlist-thumb');
+        const repeatInput = portraitItem.querySelector('.playlist-repeat');
+        const removeButton = portraitItem.querySelector('[data-video-group-remove]');
+        const durationOk = !!durationChip && durationChip.textContent.trim().length > 0;
+        const mediaRect = mediaCell ? mediaCell.getBoundingClientRect() : null;
+        const thumbRect = thumb ? thumb.getBoundingClientRect() : null;
+        const centeredOk = !!mediaRect && !!thumbRect &&
+          Math.abs((thumbRect.left - mediaRect.left) - (mediaRect.right - thumbRect.right)) <= 2;
+        const alignedOk = !!repeatInput && !!removeButton &&
+          Math.abs(repeatInput.getBoundingClientRect().bottom - removeButton.getBoundingClientRect().bottom) <= 2;
+        const queueRowOk = durationOk && centeredOk && alignedOk;
+        setTestResult('test-9-6', queueRowOk ? 'pass' : 'fail',
+          queueRowOk ? 'Queue row shows duration, keeps the thumb centered, and bottom-aligns repeat/remove controls' : 'Queue row is still missing duration, centering, or repeat/remove alignment');
       }
 
       log('✓ Task 3 queue verification complete', 'success');

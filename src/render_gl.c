@@ -121,6 +121,35 @@ static void render_gl_delete_target(GLuint *tex, GLuint *fbo) {
     }
 }
 
+static void render_gl_ensure_pane_video_capacity(render_gl_ctx *ctx, int pane_index) {
+    if (pane_index < 0) return;
+    if (pane_index < ctx->pane_vid_cap) return;
+
+    int new_cap = ctx->pane_vid_cap ? ctx->pane_vid_cap : 4;
+    while (new_cap <= pane_index) new_cap *= 2;
+
+    GLuint *next_fbos = realloc(ctx->pane_vid_fbos, (size_t)new_cap * sizeof(*next_fbos));
+    GLuint *next_texs = realloc(ctx->pane_vid_texs, (size_t)new_cap * sizeof(*next_texs));
+    int *next_ws = realloc(ctx->pane_vid_ws, (size_t)new_cap * sizeof(*next_ws));
+    int *next_hs = realloc(ctx->pane_vid_hs, (size_t)new_cap * sizeof(*next_hs));
+    if (!next_fbos || !next_texs || !next_ws || !next_hs) {
+        fprintf(stderr, "pane video target allocation failed\n");
+        exit(1);
+    }
+
+    ctx->pane_vid_fbos = next_fbos;
+    ctx->pane_vid_texs = next_texs;
+    ctx->pane_vid_ws = next_ws;
+    ctx->pane_vid_hs = next_hs;
+    for (int i = ctx->pane_vid_cap; i < new_cap; ++i) {
+        ctx->pane_vid_fbos[i] = 0;
+        ctx->pane_vid_texs[i] = 0;
+        ctx->pane_vid_ws[i] = 0;
+        ctx->pane_vid_hs[i] = 0;
+    }
+    ctx->pane_vid_cap = new_cap;
+}
+
 void render_gl_ensure_rt(render_gl_ctx *ctx, int w, int h) {
     if (ctx->rt_tex && ctx->rt_w == w && ctx->rt_h == h) return;
     render_gl_delete_target(&ctx->rt_tex, &ctx->rt_fbo);
@@ -163,6 +192,46 @@ void render_gl_ensure_video_rt(render_gl_ctx *ctx, int w, int h) {
         exit(1);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+bool render_gl_ensure_pane_video_rt(render_gl_ctx *ctx, int pane_index, int w, int h) {
+    if (!ctx || pane_index < 0) return false;
+    render_gl_ensure_pane_video_capacity(ctx, pane_index);
+    if (ctx->pane_vid_texs[pane_index] &&
+        ctx->pane_vid_ws[pane_index] == w &&
+        ctx->pane_vid_hs[pane_index] == h) {
+        return false;
+    }
+
+    render_gl_delete_target(&ctx->pane_vid_texs[pane_index], &ctx->pane_vid_fbos[pane_index]);
+    ctx->pane_vid_ws[pane_index] = w;
+    ctx->pane_vid_hs[pane_index] = h;
+    glGenTextures(1, &ctx->pane_vid_texs[pane_index]);
+    glBindTexture(GL_TEXTURE_2D, ctx->pane_vid_texs[pane_index]);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenFramebuffers(1, &ctx->pane_vid_fbos[pane_index]);
+    glBindFramebuffer(GL_FRAMEBUFFER, ctx->pane_vid_fbos[pane_index]);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ctx->pane_vid_texs[pane_index], 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "Pane video FBO incomplete\n");
+        exit(1);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return true;
+}
+
+GLuint render_gl_pane_video_fbo(const render_gl_ctx *ctx, int pane_index) {
+    if (!ctx || pane_index < 0 || pane_index >= ctx->pane_vid_cap) return 0;
+    return ctx->pane_vid_fbos[pane_index];
+}
+
+GLuint render_gl_pane_video_tex(const render_gl_ctx *ctx, int pane_index) {
+    if (!ctx || pane_index < 0 || pane_index >= ctx->pane_vid_cap) return 0;
+    return ctx->pane_vid_texs[pane_index];
 }
 
 void render_gl_blit_rt_to_screen(render_gl_ctx *ctx, rotation_t rot) {
@@ -279,6 +348,18 @@ void render_gl_destroy(render_gl_ctx *ctx) {
     if (!ctx) return;
     render_gl_delete_target(&ctx->rt_tex, &ctx->rt_fbo);
     render_gl_delete_target(&ctx->vid_tex, &ctx->vid_fbo);
+    for (int i = 0; i < ctx->pane_vid_cap; ++i) {
+        render_gl_delete_target(&ctx->pane_vid_texs[i], &ctx->pane_vid_fbos[i]);
+    }
+    free(ctx->pane_vid_fbos);
+    free(ctx->pane_vid_texs);
+    free(ctx->pane_vid_ws);
+    free(ctx->pane_vid_hs);
+    ctx->pane_vid_fbos = NULL;
+    ctx->pane_vid_texs = NULL;
+    ctx->pane_vid_ws = NULL;
+    ctx->pane_vid_hs = NULL;
+    ctx->pane_vid_cap = 0;
     if (ctx->blit_vbo) {
         glDeleteBuffers(1, &ctx->blit_vbo);
         ctx->blit_vbo = 0;

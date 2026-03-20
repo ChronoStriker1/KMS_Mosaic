@@ -25,6 +25,7 @@ typedef struct {
     bool direct_test_only;
     int frame;
     int mpv_needs_render;
+    int *pane_mpv_needs_render;
     struct pollfd *pfds;
     int nfds;
 } runtime_state;
