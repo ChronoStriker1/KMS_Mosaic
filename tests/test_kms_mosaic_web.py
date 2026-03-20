@@ -20,6 +20,17 @@ REMOTE_VIDEO_URL = (
 
 
 class KmsMosaicWebConfigTests(unittest.TestCase):
+    def test_integration_harness_exercises_role_zero_remove_path_and_checks_split_tree_alignment(self) -> None:
+        integration_html = (ROOT / "tests" / "integration.test.html").read_text(encoding="utf-8")
+
+        self.assertIn("const removeOk = typeof window.removeSelectedPane === 'function' && window.removeSelectedPane() === true;", integration_html)
+        self.assertIn("const splitTreeAfterRemove = typeof window.normalizeSplitTreeState === 'function'", integration_html)
+        self.assertIn("if (typeof window.splitTreeCollectRoles === 'function' && splitTreeAfterRemove)", integration_html)
+        self.assertIn("const serializedTreeAfterRemove = typeof window.serializeSplitTree === 'function'", integration_html)
+        self.assertIn("layoutAfterRemove.visibleRoles.length === 1", integration_html)
+        self.assertIn("queueCtxAfterRemove.role === 0", integration_html)
+        self.assertIn("const removePathOk = removeOk && paneCountAligned && treeAligned && arraysAligned && selectedStateAligned;", integration_html)
+
     def test_unified_config_with_legacy_comment_keys_does_not_reenter_legacy_mode(self) -> None:
         text = textwrap.dedent(
             """
@@ -222,16 +233,15 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         split_remove_text = split_remove.group(0)
         self.assertIn("const newRole = Number(state.pane_count || 0);", split_remove_text)
         self.assertIn("state.pane_count = newRole + 1;", split_remove_text)
-        self.assertIn("pendingNewPaneIndexes.add(newRole);", split_remove_text)
         self.assertIn("if (!state || selectedRole < 0 || Number(state.pane_count || 0) === 1) return false;", split_remove_text)
         self.assertIn("const paneIndex = selectedRole;", split_remove_text)
         self.assertIn("for (let i = role + 1; i < state.pane_count; i += 1)", split_remove_text)
         self.assertNotIn("const newRole = Number(state.pane_count || 0) + 1;", split_remove_text)
-        self.assertNotIn("pendingNewPaneIndexes.add(newRole - 1);", split_remove_text)
         self.assertNotIn("Number(state.pane_count || 0) <= 1", split_remove_text)
         self.assertNotIn("if (!state || selectedRole <= 0) return false;", split_remove_text)
         self.assertNotIn("const paneIndex = selectedRole - 1;", split_remove_text)
         self.assertNotIn("for (let i = role + 1; i <= state.pane_count; i += 1)", split_remove_text)
+        self.assertNotIn("pendingNewPaneIndexes", split_remove_text)
 
         layout_actions = re.search(
             r"function selectedPaneLayoutActionsMarkup\(role\) \{.*?\n    function bindSelectedPaneLayoutActions",

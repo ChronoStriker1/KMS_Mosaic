@@ -787,10 +787,63 @@
           await renderProbeState(multiPaneProbe, 0);
           const removeMulti = document.querySelector('#kmsSelectedPanePlaceholder [data-selected-pane-remove], #kmsSelectedPanePanel [data-selected-pane-remove]');
           const removeVisibilityOk = !removeSingle && !!removeMulti;
-          setTestResult('test-3-4d', removeVisibilityOk ? 'pass' : 'fail',
-            removeVisibilityOk
-              ? 'Remove Pane stays hidden for a single pane and reappears once more than one pane exists'
-              : 'Remove Pane visibility is not tied strictly to pane_count === 1');
+
+          const removeOk = typeof window.removeSelectedPane === 'function' && window.removeSelectedPane() === true;
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          if (removeOk) {
+            window.selectRole(0);
+            window.renderStudioBoard();
+            window.renderStudioInspector();
+            if (typeof window.renderPlaylistEditor === 'function') window.renderPlaylistEditor();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          }
+          const layoutAfterRemove = typeof window.visibilityLayoutForState === 'function'
+            ? window.visibilityLayoutForState()
+            : null;
+          const splitTreeAfterRemove = typeof window.normalizeSplitTreeState === 'function'
+            ? window.normalizeSplitTreeState()
+            : null;
+          const splitTreeRolesAfterRemove = [];
+          if (typeof window.splitTreeCollectRoles === 'function' && splitTreeAfterRemove) {
+            window.splitTreeCollectRoles(splitTreeAfterRemove, splitTreeRolesAfterRemove);
+          }
+          const serializedTreeAfterRemove = typeof window.serializeSplitTree === 'function'
+            ? window.serializeSplitTree(splitTreeAfterRemove)
+            : '';
+          const queueCtxAfterRemove = typeof window.queueEditorContext === 'function'
+            ? window.queueEditorContext()
+            : null;
+          const selectedStateAfterRemove = typeof window.selectedPaneStateDetail === 'function'
+            ? window.selectedPaneStateDetail()
+            : null;
+          const commandAfterRemove = document.getElementById('inspectorPaneCommand');
+          const paneCountAligned = !!layoutAfterRemove &&
+            Array.isArray(layoutAfterRemove.visibleRoles) &&
+            layoutAfterRemove.visibleRoles.length === 1 &&
+            String(layoutAfterRemove.visibleRoles[0]) === '0' &&
+            !!layoutAfterRemove.rects?.[0] &&
+            layoutAfterRemove.rects[0].x === 0 &&
+            layoutAfterRemove.rects[0].y === 0 &&
+            layoutAfterRemove.rects[0].w === 100 &&
+            layoutAfterRemove.rects[0].h === 100;
+          const treeAligned = !!splitTreeAfterRemove &&
+            splitTreeRolesAfterRemove.length === 1 &&
+            splitTreeRolesAfterRemove[0] === 0 &&
+            serializedTreeAfterRemove === '0';
+          const arraysAligned = !!commandAfterRemove &&
+            commandAfterRemove.value === 'htop' &&
+            !!queueCtxAfterRemove &&
+            queueCtxAfterRemove.role === 0 &&
+            queueCtxAfterRemove.paneType === 'terminal' &&
+            queueCtxAfterRemove.editable === false;
+          const selectedStateAligned = !!selectedStateAfterRemove &&
+            selectedStateAfterRemove.selectedRole === 0 &&
+            selectedStateAfterRemove.paneType === 'terminal';
+          const removePathOk = removeOk && paneCountAligned && treeAligned && arraysAligned && selectedStateAligned;
+          setTestResult('test-3-4d', removeVisibilityOk && removePathOk ? 'pass' : 'fail',
+            removeVisibilityOk && removePathOk
+              ? 'Remove Pane hides for a single pane, removes role 0 cleanly, and leaves the remapped survivor aligned with the collapsed split tree'
+              : 'Role-0 remove did not leave the split tree, visible roles, or pane arrays aligned');
         } finally {
           window.fillForm(restoreState, restorePath, restoreRaw);
           await new Promise((resolve) => setTimeout(resolve, 0));
