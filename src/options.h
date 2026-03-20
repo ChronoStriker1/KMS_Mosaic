@@ -9,12 +9,12 @@ typedef enum { ROT_0 = 0, ROT_90 = 90, ROT_180 = 180, ROT_270 = 270 } rotation_t
 
 enum {
     KMS_MOSAIC_DEFAULT_PANE_COUNT = 2,
-    KMS_MOSAIC_SLOT_VIDEO = 0,
-    KMS_MOSAIC_SLOT_PANE_BASE = 1,
+    KMS_MOSAIC_SLOT_PANE_BASE = 0,
     KMS_MOSAIC_SLOT_PANE_A = KMS_MOSAIC_SLOT_PANE_BASE + 0,
     KMS_MOSAIC_SLOT_PANE_B = KMS_MOSAIC_SLOT_PANE_BASE + 1,
     KMS_MOSAIC_SLOT_PANE_C = KMS_MOSAIC_SLOT_PANE_BASE + 2,
-    KMS_MOSAIC_SLOT_PANE_D = KMS_MOSAIC_SLOT_PANE_BASE + 3
+    KMS_MOSAIC_SLOT_PANE_D = KMS_MOSAIC_SLOT_PANE_BASE + 3,
+    KMS_MOSAIC_SLOT_VIDEO = KMS_MOSAIC_SLOT_PANE_A
 };
 
 typedef struct {
@@ -86,6 +86,7 @@ typedef struct {
     int *roles;
     int role_cap;
     bool roles_set;
+    bool unified_pane_model;
     const char **mpv_opts;
     int n_mpv_opts;
     int cap_mpv_opts;
