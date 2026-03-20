@@ -5,10 +5,16 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 PLUGIN_DIR="$ROOT_DIR/unraid-plugin"
 STAGE="$(mktemp -d)"
-VERSION="2026.03.18"
+VERSION_FILE="$ROOT_DIR/VERSION"
+VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
 PLUGIN_NAME="kms.mosaic"
 export COPYFILE_DISABLE=1
 export COPY_EXTENDED_ATTRIBUTES_DISABLE=1
+
+if [[ -z "$VERSION" ]]; then
+  echo "VERSION is empty in $VERSION_FILE"
+  exit 1
+fi
 
 cleanup() {
   rm -rf "$STAGE"

@@ -19,6 +19,11 @@ typedef struct {
     GLuint vid_tex;
     int vid_w;
     int vid_h;
+    GLuint *pane_vid_fbos;
+    GLuint *pane_vid_texs;
+    int *pane_vid_ws;
+    int *pane_vid_hs;
+    int pane_vid_cap;
 } render_gl_ctx;
 
 void render_gl_reset_state_2d(void);
@@ -28,6 +33,9 @@ void render_gl_draw_border_rect(int x, int y, int w, int h, int thickness, int f
                                 float r, float g, float b, float a);
 void render_gl_ensure_rt(render_gl_ctx *ctx, int w, int h);
 void render_gl_ensure_video_rt(render_gl_ctx *ctx, int w, int h);
+bool render_gl_ensure_pane_video_rt(render_gl_ctx *ctx, int pane_index, int w, int h);
+GLuint render_gl_pane_video_fbo(const render_gl_ctx *ctx, int pane_index);
+GLuint render_gl_pane_video_tex(const render_gl_ctx *ctx, int pane_index);
 void render_gl_blit_rt_to_screen(render_gl_ctx *ctx, rotation_t rot);
 void render_gl_draw_tex_fullscreen(render_gl_ctx *ctx, GLuint tex);
 void render_gl_draw_tex_to_rt(render_gl_ctx *ctx, GLuint tex, int x, int y, int w, int h, int rt_w, int rt_h);

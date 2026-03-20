@@ -5,6 +5,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 mkdir -p "$DIST_DIR"
+VERSION_FILE="$ROOT_DIR/VERSION"
+
+if [[ ! -f "$VERSION_FILE" ]]; then
+  echo "Missing VERSION file at $VERSION_FILE"
+  exit 1
+fi
 
 # Base image can be overridden; default to Ubuntu for easy deps
 BASE_IMAGE="${BASE_IMAGE:-ubuntu:22.04}"
@@ -163,7 +169,7 @@ kms_mosaic:
 SLK
 
 # Create Slackware-style .txz without makepkg
-VER=$(date +%Y.%m.%d)
+VER=$(tr -d '[:space:]' < /work/VERSION)
 # Detect binary arch from 'file' output for accurate packaging
 case "$BIN_INFO" in
   *x86-64*) PKGARCH=x86_64 ;;

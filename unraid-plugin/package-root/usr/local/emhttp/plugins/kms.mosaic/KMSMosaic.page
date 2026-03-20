@@ -378,6 +378,105 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     opacity: 0.58;
     transform: scale(0.99);
   }
+  #kmsStudioPlaceholder .studio-resize-handle {
+    position: absolute !important;
+    display: block !important;
+    border: 0 !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    min-height: 0 !important;
+    height: auto !important;
+    border-radius: 0 !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+    white-space: normal !important;
+    opacity: 0 !important;
+    transition: opacity 120ms ease !important;
+    pointer-events: none !important;
+    z-index: 4 !important;
+    box-shadow: none !important;
+    color: transparent !important;
+  }
+  #kmsStudioPlaceholder .studio-card.selected .studio-resize-handle {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle::before,
+  #kmsStudioPlaceholder .studio-resize-handle::after {
+    content: '';
+    position: absolute;
+    border-radius: 999px;
+    background: rgba(255,240,200,0.84);
+    box-shadow: 0 0 0 1px rgba(26,15,10,0.22);
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="left"],
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="right"] {
+    top: 10px !important;
+    bottom: 10px !important;
+    width: 18px !important;
+    cursor: ew-resize !important;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="left"]::before,
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="right"]::before {
+    top: 16px;
+    bottom: 16px;
+    left: 8px;
+    width: 2px;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="left"] { left: -9px !important; }
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="right"] { right: -9px !important; }
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="top"],
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="bottom"] {
+    left: 10px !important;
+    right: 10px !important;
+    height: 18px !important;
+    cursor: ns-resize !important;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="top"]::before,
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="bottom"]::before {
+    left: 16px;
+    right: 16px;
+    top: 8px;
+    height: 2px;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="top"] { top: -9px !important; }
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="bottom"] { bottom: -9px !important; }
+  #kmsStudioPlaceholder .studio-resize-handle[data-mode="corner"] {
+    width: 20px !important;
+    height: 20px !important;
+    cursor: nwse-resize !important;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-mode="corner"]::before {
+    inset: 4px;
+    border: 2px solid rgba(255,240,200,0.84);
+    background: rgba(255,240,200,0.16);
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-mode="corner"]::after {
+    display: none;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-mode="corner"][data-corner="top-left"] {
+    top: -10px !important;
+    left: -10px !important;
+    cursor: nwse-resize !important;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-mode="corner"][data-corner="top-right"] {
+    top: -10px !important;
+    right: -10px !important;
+    cursor: nesw-resize !important;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-mode="corner"][data-corner="bottom-left"] {
+    bottom: -10px !important;
+    left: -10px !important;
+    cursor: nesw-resize !important;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-mode="corner"][data-corner="bottom-right"] {
+    bottom: -10px !important;
+    right: -10px !important;
+    cursor: nwse-resize !important;
+  }
   #kmsStudioPlaceholder .studio-tag,
   #kmsStudioPlaceholder .studio-split-btn {
     background: rgba(255,255,255,.6);
@@ -428,6 +527,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   #kmsSelectedPanePlaceholder .selected-pane-structure {
     display: grid;
     gap: 10px;
+    min-width: 0;
   }
   #kmsSelectedPanePlaceholder .actions {
     display: flex;
@@ -447,6 +547,33 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     font-weight: 700;
     color: #2c3136;
   }
+  #kmsSelectedPanePlaceholder .selected-pane-size-group {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+    align-items: start;
+  }
+  #kmsSelectedPanePlaceholder .selected-pane-size-group .studio-size-chip {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  #kmsSelectedPanePlaceholder .selected-pane-size-group .studio-size-chip span {
+    display: block;
+    font-weight: 700;
+    font-size: 13px;
+    color: #2c3136;
+    line-height: 1.2;
+    letter-spacing: 0;
+    text-transform: none;
+  }
   #kmsSelectedPanePlaceholder .mini,
   #kmsSelectedPanePlaceholder .muted-note,
   #kmsSelectedPanePlaceholder .studio-empty,
@@ -462,12 +589,21 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   #kmsSelectedPanePlaceholder select,
   #kmsSelectedPanePlaceholder textarea {
     width: 100%;
+    box-sizing: border-box;
     background: #fff;
     color: #1f2328;
     border: 1px solid rgba(0,0,0,.16);
     border-radius: 4px;
     padding: 6px 8px;
     font-size: 13px;
+  }
+  #kmsSelectedPanePlaceholder .selected-pane-size-group .studio-size-input {
+    width: 100% !important;
+    min-width: 0;
+    max-width: none;
+    margin: 0;
+    box-sizing: border-box;
+    text-align: left;
   }
   #kmsSelectedPanePlaceholder .playlist-bulk {
     margin-top: 10px;
@@ -518,32 +654,48 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   }
   #kmsSelectedPanePlaceholder .playlist-row {
     display: grid;
-    grid-template-columns: minmax(0, 138px) minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
     gap: 8px 10px;
     align-items: start;
   }
   #kmsSelectedPanePlaceholder .playlist-item.portrait-thumb .playlist-row {
-    grid-template-columns: minmax(0, 124px) minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
   }
   #kmsSelectedPanePlaceholder .playlist-media-cell {
-    width: auto;
+    width: 156px;
     display: flex;
+    justify-content: center;
+    align-items: center;
     align-self: start;
     min-width: 0;
+  }
+  #kmsSelectedPanePlaceholder .playlist-duration-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    padding: 0 8px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: #8e939a;
+    font-family: "Menlo", "Consolas", monospace;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  #kmsSelectedPanePlaceholder .playlist-duration-chip:empty {
+    display: none;
   }
   #kmsSelectedPanePlaceholder .playlist-thumb {
     background: linear-gradient(140deg, rgba(0,0,0,0.03), transparent), #f1f3f5;
     border-color: rgba(0,0,0,.10);
-    height: 72px;
-    min-height: 72px;
-    max-height: 72px;
+    height: auto;
+    min-height: 88px;
+    margin-inline: auto;
     border-radius: 8px;
     position: relative;
     overflow: hidden;
-  }
-  #kmsSelectedPanePlaceholder .playlist-item.portrait-thumb .playlist-thumb {
-    width: 92px;
-    margin-inline: auto;
   }
   #kmsSelectedPanePlaceholder .playlist-thumb-media {
     position: absolute;
@@ -605,47 +757,46 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   }
   #kmsSelectedPanePlaceholder .playlist-controls-row {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 6px;
-    align-items: end;
+    align-items: center;
+    min-width: 0;
   }
-  #kmsSelectedPanePlaceholder .playlist-item.portrait-thumb .playlist-controls-row {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    align-items: stretch;
+  #kmsSelectedPanePlaceholder .playlist-inline-group {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    flex: 0 0 auto;
+    min-width: 0;
   }
   #kmsSelectedPanePlaceholder .playlist-controls-row .playlist-mini-btn {
     margin-top: 0;
+    margin-bottom: 0;
+    align-self: center;
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
-  #kmsSelectedPanePlaceholder .playlist-repeat-wrap {
-    display: grid;
-    gap: 3px;
+  #kmsSelectedPanePlaceholder .playlist-repeat-label {
+    display: inline-flex;
     align-items: center;
-    justify-items: center;
     color: #70757d;
     font-size: 9px;
     letter-spacing: 0.12em;
     text-transform: uppercase;
     font-family: "Menlo", "Consolas", monospace;
-    width: 72px;
-  }
-  #kmsSelectedPanePlaceholder .playlist-item.portrait-thumb .playlist-repeat-wrap {
-    width: 100%;
-    justify-items: stretch;
-    grid-column: 1 / -1;
-  }
-  #kmsSelectedPanePlaceholder .playlist-repeat-wrap span {
-    display: block;
-    line-height: 9px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    line-height: 30px;
   }
   #kmsSelectedPanePlaceholder .playlist-repeat {
     text-align: center;
     font-family: "Menlo", "Consolas", monospace;
-    height: 28px;
-    padding: 6px 8px;
-  }
-  #kmsSelectedPanePlaceholder .playlist-item.portrait-thumb .playlist-repeat {
-    width: 100%;
+    height: 30px;
+    width: 5ch !important;
+    min-width: 5ch !important;
+    max-width: 5ch !important;
+    flex: 0 0 5ch;
+    padding: 6px 4px;
   }
   #kmsSelectedPanePlaceholder .playlist-thumb-media.quarter-turn {
     padding: 0;
@@ -653,16 +804,23 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   #kmsSelectedPanePlaceholder .playlist-path {
     width: 100%;
     margin-top: 1px;
+    min-width: 0;
   }
   #kmsSelectedPanePlaceholder .playlist-mini-btn {
     background: #f7f7f8;
     color: #202225;
     border: 1px solid rgba(0,0,0,.18);
     padding: 5px 8px;
-    height: 28px;
+    height: 30px;
+    margin-bottom: 0;
   }
   #kmsSelectedPanePlaceholder .playlist-mini-btn.danger {
     color: #c24f3a;
+  }
+  @media (max-width: 680px) {
+    #kmsSelectedPanePlaceholder .selected-pane-size-group {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
   #kmsSelectedPanePlaceholder .playlist-bulk {
     margin-top: 10px;
@@ -800,6 +958,9 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     #kmsAdvancedPlaceholder .grid,
     #kmsAdvancedPlaceholder .checks {
       grid-template-columns: 1fr;
+    }
+    #kmsSelectedPanePlaceholder .playlist-controls-row {
+      flex-wrap: wrap;
     }
   }
 </style>

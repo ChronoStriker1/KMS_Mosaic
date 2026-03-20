@@ -13,6 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <termios.h>
@@ -345,6 +348,28 @@ static void set_pty_winsize(int pty_fd, int cols, int rows) {
     ioctl(pty_fd, TIOCSWINSZ, &ws);
 }
 
+static void term_pane_terminate_process_group(pid_t leader_pid, bool reap_leader) {
+    if (leader_pid <= 0) return;
+
+    int status = 0;
+    kill(-leader_pid, SIGTERM);
+    kill(leader_pid, SIGTERM);
+    for (int i = 0; i < 20; i++) {
+        if (reap_leader) {
+            pid_t r = waitpid(leader_pid, &status, WNOHANG);
+            if (r == leader_pid || (r < 0 && errno == ECHILD)) return;
+        } else if (kill(-leader_pid, 0) < 0 && errno == ESRCH) {
+            return;
+        }
+        usleep(10000);
+    }
+    kill(-leader_pid, SIGKILL);
+    kill(leader_pid, SIGKILL);
+    if (reap_leader) {
+        (void)waitpid(leader_pid, &status, 0);
+    }
+}
+
 static int spawn_pty_argv(char *const argv[], int *master_out) {
     int mfd = posix_openpt(O_RDWR | O_NOCTTY);
     if (mfd < 0) die("posix_openpt");
@@ -353,6 +378,10 @@ static int spawn_pty_argv(char *const argv[], int *master_out) {
     pid_t pid = fork();
     if (pid < 0) die("fork");
     if (pid == 0) {
+#ifdef __linux__
+        prctl(PR_SET_PDEATHSIG, SIGHUP);
+        if (getppid() == 1) _exit(1);
+#endif
         setsid();
         int sfd = open(slavename, O_RDWR);
         if (sfd < 0) _exit(1);
@@ -375,6 +404,10 @@ static int spawn_pty_shell(const char *cmd, int *master_out) {
     pid_t pid = fork();
     if (pid < 0) die("fork");
     if (pid == 0) {
+#ifdef __linux__
+        prctl(PR_SET_PDEATHSIG, SIGHUP);
+        if (getppid() == 1) _exit(1);
+#endif
         setsid();
         int sfd = open(slavename, O_RDWR);
         if (sfd < 0) _exit(1);
@@ -684,21 +717,8 @@ term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const ch
 void term_pane_destroy(term_pane *tp) {
     if (!tp) return;
     if (tp->child_pid > 0) {
-        int status = 0;
-        kill(tp->child_pid, SIGTERM);
-        for (int i = 0; i < 20; i++) {
-            pid_t r = waitpid(tp->child_pid, &status, WNOHANG);
-            if (r == tp->child_pid || (r < 0 && errno == ECHILD)) {
-                tp->child_pid = -1;
-                break;
-            }
-            usleep(10000);
-        }
-        if (tp->child_pid > 0) {
-            kill(tp->child_pid, SIGKILL);
-            waitpid(tp->child_pid, &status, 0);
-            tp->child_pid = -1;
-        }
+        term_pane_terminate_process_group(tp->child_pid, true);
+        tp->child_pid = -1;
     }
     if (tp->pty_master>=0) close(tp->pty_master);
     pane_tex_destroy(&tp->surface);
@@ -842,6 +862,10 @@ void term_pane_force_rebuild(term_pane *tp) {
 
 void term_pane_respawn(term_pane *tp) {
     if (!tp) return;
+    if (tp->child_pid > 0) {
+        term_pane_terminate_process_group(tp->child_pid, false);
+        tp->child_pid = -1;
+    }
     if (tp->pty_master>=0) { close(tp->pty_master); tp->pty_master = -1; }
     if (tp->use_shell_cmd) {
         tp->child_pid = spawn_pty_shell(tp->shell_cmd ? tp->shell_cmd : "/bin/sh", &tp->pty_master);

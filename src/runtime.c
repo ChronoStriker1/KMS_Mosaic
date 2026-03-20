@@ -39,6 +39,12 @@ bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const m
     rt->nfds = RUNTIME_POLL_BASE_COUNT + opt->pane_count + opt->pane_count + opt->pane_count;
     rt->pfds = calloc((size_t)rt->nfds, sizeof(*rt->pfds));
     if (!rt->pfds) return false;
+    rt->pane_mpv_needs_render = calloc((size_t)opt->pane_count, sizeof(*rt->pane_mpv_needs_render));
+    if (!rt->pane_mpv_needs_render) {
+        free(rt->pfds);
+        rt->pfds = NULL;
+        return false;
+    }
     rt->running = true;
     const char *direct_env = getenv("KMS_MPV_DIRECT");
     rt->direct_mode = (direct_env && (*direct_env == '1' || *direct_env == 'y' || *direct_env == 'Y'));
@@ -52,6 +58,7 @@ bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const m
     const char *dtest_env = getenv("KMS_MPV_DIRECT_TEST");
     rt->direct_test_only = (dtest_env && (*dtest_env == '1' || *dtest_env == 'y' || *dtest_env == 'Y'));
     rt->mpv_needs_render = 1;
+    for (int i = 0; i < opt->pane_count; ++i) rt->pane_mpv_needs_render[i] = 1;
 
     rt->pfds[RUNTIME_POLL_STDIN].fd = isatty(0) ? 0 : -1;
     rt->pfds[RUNTIME_POLL_STDIN].events = POLLIN;
@@ -95,6 +102,8 @@ void runtime_refresh_pane_playlist_fd(runtime_state *rt, const options_t *opt, c
 
 void runtime_destroy(runtime_state *rt) {
     if (!rt) return;
+    free(rt->pane_mpv_needs_render);
+    rt->pane_mpv_needs_render = NULL;
     free(rt->pfds);
     rt->pfds = NULL;
     rt->nfds = 0;
