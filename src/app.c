@@ -556,16 +556,12 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     }
     bool first_pane_accepts_legacy_media =
         opt.pane_count > 0 && (!opt.pane_cmds || !opt.pane_cmds[0] || !*opt.pane_cmds[0]);
-    if (use_mpv && first_pane_accepts_legacy_media) {
-        if (!pane_media[0].mpv) {
+    if (use_mpv && opt.pane_count > 0) {
+        if (first_pane_accepts_legacy_media && !pane_media[0].mpv) {
             pane_media[0] = m;
         } else {
             media_shutdown(&m);
         }
-        memset(&m, 0, sizeof(m));
-        use_mpv = false;
-    } else if (use_mpv && opt.pane_count > 0 && pane_media[0].mpv) {
-        media_shutdown(&m);
         memset(&m, 0, sizeof(m));
         use_mpv = false;
     }
