@@ -2399,14 +2399,31 @@ HTML = r"""<!doctype html>
     }
 
     function slotName(index) {
-      if (index === 0) return "Video";
-      if (index <= 26) return `Pane ${String.fromCharCode(64 + index)}`;
-      return `Pane ${index}`;
+      return roleName(index);
     }
 
     function roleName(role) {
       if (role >= 0 && role < 26) return `Pane ${String.fromCharCode(65 + role)}`;
       return `Pane ${role + 1}`;
+    }
+
+    function orderedRolesFromState(nextState) {
+      const paneCount = Math.max(1, Number(nextState?.pane_count || 2));
+      const fallback = Array.from({ length: paneCount }, (_, i) => i);
+      const text = String(nextState?.roles || "").trim();
+      if (!text) return fallback;
+      const ordered = [];
+      const used = new Set();
+      for (const char of text) {
+        let role = -1;
+        if (char >= "0" && char <= "9") role = Number(char);
+        else if (char >= "A" && char <= "Z") role = char.charCodeAt(0) - 65;
+        else if (char >= "a" && char <= "z") role = char.charCodeAt(0) - 97;
+        if (role < 0 || role >= paneCount || used.has(role)) continue;
+        ordered.push(role);
+        used.add(role);
+      }
+      return ordered.length === paneCount ? ordered : fallback;
     }
 
     function visibilityModeForState(nextState = state) {
@@ -3120,8 +3137,8 @@ HTML = r"""<!doctype html>
     function presetTreeFromState(nextState) {
       const paneCount = Math.max(1, Number(nextState?.pane_count || 2));
       if (paneCount <= 1) return { leaf: true, role: 0 };
-      const roles = Array.from({ length: paneCount }, (_, i) => i);
-      const paneRoles = roles.slice(1);
+      const roles = orderedRolesFromState(nextState);
+      const [primaryRole, ...secondaryRoles] = roles;
       const layout = nextState?.layout || "stack";
       const colPct = Math.max(20, Math.min(80, 100 - Number(nextState?.right_frac || 33)));
       const rowPct = Math.max(10, Math.min(90, Number(nextState?.pane_split || 50)));
@@ -3132,21 +3149,45 @@ HTML = r"""<!doctype html>
           leaf: false,
           kind: Number(nextState?.rotation || 0) === 90 || Number(nextState?.rotation || 0) === 270 ? "row" : "col",
           pct: rowPct,
-          first: { leaf: true, role: 0 },
-          second: balancedTreeForRoles(paneRoles, false)
+          first: { leaf: true, role: primaryRole },
+          second: balancedTreeForRoles(secondaryRoles, false)
         };
       }
       if (layout === "2x1") {
-        return { leaf: false, kind: "col", pct: colPct, first: balancedTreeForRoles(paneRoles, true), second: { leaf: true, role: 0 } };
+        return {
+          leaf: false,
+          kind: "col",
+          pct: colPct,
+          first: balancedTreeForRoles(secondaryRoles, true),
+          second: { leaf: true, role: primaryRole }
+        };
       }
       if (layout === "1x2") {
-        return { leaf: false, kind: "col", pct: colPct, first: { leaf: true, role: 0 }, second: balancedTreeForRoles(paneRoles, true) };
+        return {
+          leaf: false,
+          kind: "col",
+          pct: colPct,
+          first: { leaf: true, role: primaryRole },
+          second: balancedTreeForRoles(secondaryRoles, true)
+        };
       }
       if (layout === "2over1") {
-        return { leaf: false, kind: "row", pct: 100 - rowPct, first: balancedTreeForRoles(paneRoles, false), second: { leaf: true, role: 0 } };
+        return {
+          leaf: false,
+          kind: "row",
+          pct: 100 - rowPct,
+          first: balancedTreeForRoles(secondaryRoles, false),
+          second: { leaf: true, role: primaryRole }
+        };
       }
       if (layout === "1over2") {
-        return { leaf: false, kind: "row", pct: rowPct, first: { leaf: true, role: 0 }, second: balancedTreeForRoles(paneRoles, false) };
+        return {
+          leaf: false,
+          kind: "row",
+          pct: rowPct,
+          first: { leaf: true, role: primaryRole },
+          second: balancedTreeForRoles(secondaryRoles, false)
+        };
       }
       return balancedTreeForRoles(roles, false);
     }
@@ -4752,8 +4793,22 @@ HTML = r"""<!doctype html>
       return normalizedRotationDegrees();
     }
 
+    function defaultMediaPaneRole() {
+      if (selectedRole >= 0) return selectedRole;
+      const paneTypes = Array.isArray(state?.pane_types) ? state.pane_types : [];
+      const firstMediaPane = paneTypes.findIndex((type) => type === "mpv");
+      return firstMediaPane >= 0 ? firstMediaPane : 0;
+    }
+
     function configuredVideoRotationDegrees(role = (selectedRole >= 0 ? selectedRole : 0)) {
-      const rawValue = state?.pane_video_rotate?.[Number(role)] || "0";
+      const targetRole = Number.isFinite(Number(role))
+        ? Number(role)
+        : defaultMediaPaneRole();
+      const resolvedRole =
+        selectedRole < 0 && targetRole === 0
+          ? defaultMediaPaneRole()
+          : targetRole;
+      const rawValue = state?.pane_video_rotate?.[Number(resolvedRole)] || "0";
       const raw = parseInt(String(rawValue || "0"), 10);
       if (!Number.isFinite(raw)) return 0;
       let total = raw % 360;
