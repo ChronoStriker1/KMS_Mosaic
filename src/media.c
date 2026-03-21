@@ -93,8 +93,7 @@ static void media_apply_option_list(media_ctx *m, const char *const *opts, int c
                                     bool *user_set_panscan, bool *user_set_interpolation,
                                     bool *user_set_tscale, bool *user_set_eflush,
                                     bool *user_set_shader_cache,
-                                    bool *user_set_aid,
-                                    bool *user_disabled_audio,
+                                    bool *user_set_keep_open,
                                     bool *user_set_prefetch_playlist,
                                     bool *user_set_load_scripts) {
     for (int i = 0; i < count; i++) {
@@ -114,12 +113,11 @@ static void media_apply_option_list(media_ctx *m, const char *const *opts, int c
         else if (media_key_matches(kv, "keepaspect")) *user_set_keepaspect = true;
         else if (media_key_matches(kv, "video-rotate")) *user_set_rotate = true;
         else if (media_key_matches(kv, "panscan")) *user_set_panscan = true;
-        else if (media_key_matches(kv, "aid")) *user_set_aid = true;
-        else if (media_key_matches(kv, "audio") && strcmp(value, "no") == 0) *user_disabled_audio = true;
         else if (media_key_matches(kv, "interpolation")) *user_set_interpolation = true;
         else if (media_key_matches(kv, "tscale")) *user_set_tscale = true;
         else if (media_key_matches(kv, "opengl-early-flush")) *user_set_eflush = true;
         else if (media_key_matches(kv, "gpu-shader-cache")) *user_set_shader_cache = true;
+        else if (media_key_matches(kv, "keep-open")) *user_set_keep_open = true;
         else if (media_key_matches(kv, "prefetch-playlist")) *user_set_prefetch_playlist = true;
         else if (media_key_matches(kv, "load-scripts")) *user_set_load_scripts = true;
     }
@@ -135,8 +133,7 @@ static void media_apply_options(media_ctx *m, const options_t *opt, const pane_m
     bool user_set_tscale = false;
     bool user_set_eflush = false;
     bool user_set_shader_cache = false;
-    bool user_set_aid = false;
-    bool user_disabled_audio = false;
+    bool user_set_keep_open = false;
     bool user_set_prefetch_playlist = false;
     bool user_set_load_scripts = false;
 
@@ -144,21 +141,24 @@ static void media_apply_options(media_ctx *m, const options_t *opt, const pane_m
                             &user_set_hwdec, &user_set_vsync, &user_set_keepaspect,
                             &user_set_rotate, &user_set_panscan, &user_set_interpolation,
                             &user_set_tscale, &user_set_eflush, &user_set_shader_cache,
-                            &user_set_aid, &user_disabled_audio,
+                            &user_set_keep_open,
                             &user_set_prefetch_playlist, &user_set_load_scripts);
     if (pane_media && pane_media->n_mpv_opts > 0) {
         media_apply_option_list(m, pane_media->mpv_opts, pane_media->n_mpv_opts,
                                 &user_set_hwdec, &user_set_vsync, &user_set_keepaspect,
                                 &user_set_rotate, &user_set_panscan, &user_set_interpolation,
                                 &user_set_tscale, &user_set_eflush, &user_set_shader_cache,
-                                &user_set_aid, &user_disabled_audio,
+                                &user_set_keep_open,
                                 &user_set_prefetch_playlist, &user_set_load_scripts);
     }
 
     if (!user_set_hwdec) mpv_set_option_string(m->mpv, "hwdec", "auto-copy-safe");
-    if (user_disabled_audio && !user_set_aid) mpv_set_option_string(m->mpv, "aid", "no");
+    mpv_set_option_string(m->mpv, "audio", "no");
+    mpv_set_option_string(m->mpv, "aid", "no");
+    if (!user_set_shader_cache) mpv_set_option_string(m->mpv, "gpu-shader-cache", "yes");
+    if (!user_set_keep_open) mpv_set_option_string(m->mpv, "keep-open", "no");
     if (opt->loop_file || opt->loop_flag) mpv_set_option_string(m->mpv, "loop-file", "inf");
-    if (opt->loop_playlist) mpv_set_option_string(m->mpv, "loop-playlist", "yes");
+    mpv_set_option_string(m->mpv, "loop-playlist", "yes");
     if (!user_set_prefetch_playlist) mpv_set_option_string(m->mpv, "prefetch-playlist", "yes");
     if (!user_set_load_scripts) mpv_set_option_string(m->mpv, "load-scripts", "no");
     if (opt->shuffle) mpv_set_option_string(m->mpv, "shuffle", "yes");
@@ -177,7 +177,6 @@ static void media_apply_options(media_ctx *m, const options_t *opt, const pane_m
         if (!user_set_interpolation) mpv_set_option_string(m->mpv, "interpolation", "no");
         if (!user_set_tscale) mpv_set_option_string(m->mpv, "tscale", "linear");
         if (!user_set_eflush) mpv_set_option_string(m->mpv, "opengl-early-flush", "yes");
-        if (!user_set_shader_cache) mpv_set_option_string(m->mpv, "gpu-shader-cache", "yes");
     }
 }
 
@@ -284,13 +283,17 @@ void media_handle_wakeup(media_ctx *m, bool debug, int *mpv_needs_render) {
             }
         } else if (ev->event_id == MPV_EVENT_START_FILE) {
             mpv_event_start_file *start_file = ev->data;
+            char *current_path = mpv_get_property_string(m->mpv, "path");
             if (debug) fprintf(stderr, "mpv: START_FILE\n");
             media_log_event(m, "START_FILE",
                             start_file ? start_file->playlist_entry_id : -1,
-                            NULL, NULL);
+                            current_path, NULL);
+            if (current_path) mpv_free(current_path);
         } else if (ev->event_id == MPV_EVENT_FILE_LOADED) {
+            char *current_path = mpv_get_property_string(m->mpv, "path");
             if (debug) fprintf(stderr, "mpv: FILE_LOADED\n");
-            media_log_event(m, "FILE_LOADED", -1, NULL, NULL);
+            media_log_event(m, "FILE_LOADED", -1, current_path, NULL);
+            if (current_path) mpv_free(current_path);
             *mpv_needs_render = 1;
         } else if (ev->event_id == MPV_EVENT_VIDEO_RECONFIG) {
             if (debug) fprintf(stderr, "mpv: VIDEO_RECONFIG\n");
@@ -301,8 +304,10 @@ void media_handle_wakeup(media_ctx *m, bool debug, int *mpv_needs_render) {
             *mpv_needs_render = 1;
         } else if (ev->event_id == MPV_EVENT_END_FILE) {
             mpv_event_end_file *end_file = ev->data;
+            char *current_path = mpv_get_property_string(m->mpv, "path");
             if (debug) fprintf(stderr, "mpv: END_FILE\n");
-            media_log_event(m, "END_FILE", -1, NULL, end_file);
+            media_log_event(m, "END_FILE", -1, current_path, end_file);
+            if (current_path) mpv_free(current_path);
         }
     }
     int flags = mpv_render_context_update(m->mpv_gl);
@@ -378,7 +383,6 @@ static bool media_init_source(media_ctx *m, const options_t *opt, const pane_med
     }
 
     mpv_set_option_string(m->mpv, "vo", "libmpv");
-    mpv_set_option_string(m->mpv, "keep-open", "yes");
     const char *glver = (const char *)glGetString(GL_VERSION);
     if (glver && strstr(glver, "OpenGL ES")) mpv_set_option_string(m->mpv, "opengl-es", "yes");
     media_apply_options(m, opt, pane_media);

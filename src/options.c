@@ -180,25 +180,42 @@ static bool options_ensure_pane_capacity(options_t *opt, int pane_count) {
     return true;
 }
 
+static int options_first_cmd_pane(const options_t *opt) {
+    return (opt->unified_pane_model || opt->no_video) ? 0 : 1;
+}
+
 static void options_sync_pane_cmds(options_t *opt) {
-    int first_cmd_pane = opt->no_video ? 0 : 1;
+    int first_cmd_pane = options_first_cmd_pane(opt);
     if (opt->pane_cap > first_cmd_pane + 0) opt->pane_cmds[first_cmd_pane + 0] = opt->pane_a_cmd;
     if (opt->pane_cap > first_cmd_pane + 1) opt->pane_cmds[first_cmd_pane + 1] = opt->pane_b_cmd;
     if (opt->pane_cap > first_cmd_pane + 2) opt->pane_cmds[first_cmd_pane + 2] = opt->pane_c_cmd;
     if (opt->pane_cap > first_cmd_pane + 3) opt->pane_cmds[first_cmd_pane + 3] = opt->pane_d_cmd;
 }
 
-static const char *options_translate_legacy_split_tree_spec(const char *spec, int role_count) {
-    if (!spec || !*spec) return spec;
-    for (const char *p = spec; *p; ++p) {
-        if (!isdigit((unsigned char)*p)) continue;
+static bool options_split_tree_roles_in_range(const char *spec, int role_count) {
+    const char *p = spec;
+    const char *prev = NULL;
+    if (!spec || !*spec) return true;
+    while (*p) {
+        if (!isdigit((unsigned char)*p)) {
+            if (!isspace((unsigned char)*p)) prev = p;
+            ++p;
+            continue;
+        }
         char *end = NULL;
         long value = strtol(p, &end, 10);
-        if (end == p) continue;
-        if (value < 0 || value >= role_count) return NULL;
-        p = end - 1;
+        if (end == p) return false;
+        if (!prev || *prev == '(' || *prev == ',') {
+            if (value < 0 || value >= role_count) return false;
+        }
+        p = end;
     }
-    return spec;
+    return true;
+}
+
+static const char *options_translate_legacy_split_tree_spec(const char *spec, int role_count) {
+    if (!spec || !*spec) return spec;
+    return options_split_tree_roles_in_range(spec, role_count) ? spec : NULL;
 }
 
 static void options_promote_legacy_panes(options_t *opt) {
@@ -213,6 +230,93 @@ static void options_promote_legacy_panes(options_t *opt) {
     memmove(&opt->pane_media[1], &opt->pane_media[0], (size_t)old_count * sizeof(*opt->pane_media));
     opt->pane_cmds[0] = NULL;
     opt->pane_media[0] = (pane_media_config){ .video_rotate = -1 };
+}
+
+static bool options_roles_string_has_legacy_hint(const char *roles) {
+    if (!roles) return false;
+    for (const char *p = roles; *p; ++p) {
+        if (strchr("CcAaBbDdEe", *p)) return true;
+    }
+    return false;
+}
+
+static bool options_pane_media_has_payload(const pane_media_config *pane_media) {
+    if (!pane_media) return false;
+    return pane_media->enabled ||
+           pane_media->video_count > 0 ||
+           pane_media->playlist_path != NULL ||
+           pane_media->playlist_ext != NULL ||
+           pane_media->playlist_fifo != NULL ||
+           pane_media->mpv_out_path != NULL ||
+           pane_media->panscan != NULL ||
+           pane_media->video_rotate >= 0 ||
+           pane_media->n_mpv_opts > 0;
+}
+
+static bool options_root_media_present(const options_t *opt) {
+    if (!opt) return false;
+    return opt->video_count > 0 ||
+           opt->playlist_path != NULL ||
+           opt->playlist_ext != NULL ||
+           opt->playlist_fifo != NULL ||
+           opt->mpv_out_path != NULL ||
+           opt->panscan != NULL ||
+           opt->video_rotate != 0 ||
+           opt->n_mpv_opts > 0;
+}
+
+static bool options_split_tree_has_legacy_shape(const char *spec, int pane_count) {
+    bool *seen = NULL;
+    int seen_count = 0;
+    const char *p = spec;
+    const char *prev = NULL;
+    bool legacy_shape = false;
+    if (!spec || !*spec || pane_count < 1) return false;
+    seen = calloc((size_t)(pane_count + 1), sizeof(*seen));
+    if (!seen) return false;
+    while (*p) {
+        if (!isdigit((unsigned char)*p)) {
+            if (!isspace((unsigned char)*p)) prev = p;
+            ++p;
+            continue;
+        }
+        char *end = NULL;
+        long value = strtol(p, &end, 10);
+        if (end == p) break;
+        if (!prev || *prev == '(' || *prev == ',') {
+            if (value < 0 || value > pane_count) {
+                free(seen);
+                return false;
+            }
+            if (!seen[value]) {
+                seen[value] = true;
+                ++seen_count;
+            }
+        }
+        p = end;
+    }
+    legacy_shape = seen_count == pane_count + 1;
+    if (legacy_shape) {
+        for (int i = 0; i <= pane_count; ++i) {
+            if (!seen[i]) {
+                legacy_shape = false;
+                break;
+            }
+        }
+    }
+    free(seen);
+    return legacy_shape;
+}
+
+static bool options_should_infer_legacy_pane_model(const options_t *opt, const char *roles_arg) {
+    bool root_media_present = options_root_media_present(opt);
+    bool legacy_hint = options_roles_string_has_legacy_hint(roles_arg);
+    bool split_tree_legacy_hint =
+        !root_media_present &&
+        !legacy_hint &&
+        options_split_tree_has_legacy_shape(opt ? opt->split_tree_spec : NULL, opt ? opt->pane_count : 0) &&
+        !(opt && opt->pane_count > 0 && options_pane_media_has_payload(&opt->pane_media[0]));
+    return root_media_present || legacy_hint || split_tree_legacy_hint;
 }
 
 void push_video(options_t *opt, const char *path) {
@@ -526,6 +630,8 @@ static void print_usage(const char *exe) {
 int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
     opt->pane_count = KMS_MOSAIC_DEFAULT_PANE_COUNT;
     const char *roles_arg = NULL;
+    bool pane_model_explicit = false;
+    bool used_legacy_pane_model = false;
     if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
         !options_ensure_role_capacity(opt, options_role_count(opt))) {
         fprintf(stderr, "Failed to allocate option storage.\n");
@@ -542,7 +648,7 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
         const char *def = default_config_path();
         if (!opt->no_config && access(def, R_OK) == 0) cfg = def;
     }
-    opt->unified_pane_model = (cfg == NULL);
+    opt->unified_pane_model = true;
 
     char **merged = NULL;
     int margc = 0;
@@ -758,6 +864,7 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
         else if (!strcmp(argv[i], "--split-tree") && i + 1 < argc) opt->split_tree_spec = argv[++i];
         else if (!strcmp(argv[i], "--pane-model") && i + 1 < argc) {
             const char *pane_model = argv[++i];
+            pane_model_explicit = true;
             if (!strcmp(pane_model, "unified")) opt->unified_pane_model = true;
             else if (!strcmp(pane_model, "legacy")) opt->unified_pane_model = false;
         }
@@ -803,10 +910,14 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
     if (!opt->playlist_path && !opt->playlist_ext && !opt->playlist_fifo) {
         if (opt->video_count == 1 && !opt->loop_file && !opt->loop_flag) opt->loop_flag = true;
     }
+    if (!pane_model_explicit) {
+        opt->unified_pane_model = !options_should_infer_legacy_pane_model(opt, roles_arg);
+    }
+    used_legacy_pane_model = !opt->unified_pane_model;
     if (!opt->unified_pane_model) options_promote_legacy_panes(opt);
     if (opt->pane_count < 1) opt->pane_count = 1;
     {
-        int first_cmd_pane = opt->no_video ? 0 : 1;
+        int first_cmd_pane = options_first_cmd_pane(opt);
         if (opt->pane_a_cmd && opt->pane_count < first_cmd_pane + 1) opt->pane_count = first_cmd_pane + 1;
         if (opt->pane_b_cmd && opt->pane_count < first_cmd_pane + 2) opt->pane_count = first_cmd_pane + 2;
         if (opt->pane_c_cmd && opt->pane_count < first_cmd_pane + 3) opt->pane_count = first_cmd_pane + 3;
@@ -824,11 +935,11 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
             opt->roles_set =
                 options_parse_legacy_roles_string(roles_arg, opt->roles, options_role_count(opt));
         }
-        opt->unified_pane_model = true;
     } else if (roles_arg) {
         opt->roles_set = parse_roles_string(roles_arg, opt->roles, options_role_count(opt));
     }
     options_sync_pane_cmds(opt);
+    if (used_legacy_pane_model) opt->unified_pane_model = true;
     return 0;
 }
 
@@ -862,7 +973,6 @@ void save_config(const options_t *opt, const char *path) {
     if (opt->mode_w || opt->mode_h) fprintf(f, "--mode %dx%d@%d\n", opt->mode_w, opt->mode_h, opt->mode_hz);
     if (opt->rotation) fprintf(f, "--rotate %d\n", (int)opt->rotation);
     if (opt->font_px) fprintf(f, "--font-size %d\n", opt->font_px);
-    fprintf(f, "--pane-model unified\n");
     const char *lay_str = layout_mode_name(opt->layout_mode);
     fprintf(f, "--layout %s\n", lay_str);
     if (opt->split_tree_spec && *opt->split_tree_spec) fprintf(f, "--split-tree '%s'\n", opt->split_tree_spec);
@@ -895,8 +1005,6 @@ void save_config(const options_t *opt, const char *path) {
         for (int oi = 0; oi < pm->n_mpv_opts; ++oi) fprintf(f, "--pane-mpv-opt %d '%s'\n", i + 1, pm->mpv_opts[oi]);
     }
     if (opt->no_video) fprintf(f, "--no-video\n");
-    if (opt->loop_file) fprintf(f, "--loop-file\n");
-    if (opt->loop_playlist) fprintf(f, "--loop-playlist\n");
     if (opt->shuffle) fprintf(f, "--shuffle\n");
     for (int i = 0; i < opt->n_mpv_opts; i++) fprintf(f, "--mpv-opt '%s'\n", opt->mpv_opts[i]);
     if (opt->playlist_path) fprintf(f, "--playlist '%s'\n", opt->playlist_path);

@@ -111,6 +111,94 @@ function proxy_backend_request($method, $url, $body = null, $content_type = null
   ];
 }
 
+function stream_backend_response($method, $url, $content_type = null) {
+  if (!function_exists('curl_init')) {
+    throw new RuntimeException('curl is required for backend proxying');
+  }
+
+  $headers = [];
+  if ($content_type) $headers[] = "Content-Type: {$content_type}";
+  if (!empty($_SERVER['HTTP_RANGE'])) $headers[] = "Range: {$_SERVER['HTTP_RANGE']}";
+
+  $allowed_headers = [
+    'content-type' => 'Content-Type',
+    'content-length' => 'Content-Length',
+    'accept-ranges' => 'Accept-Ranges',
+    'content-range' => 'Content-Range',
+    'cache-control' => 'Cache-Control',
+  ];
+  $status = 200;
+  $header_lines = [];
+  $sent_headers = false;
+
+  $ch = curl_init($url);
+  curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, false);
+  curl_setopt($ch, CURLOPT_FOLLOWLOCATION, false);
+  curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+  curl_setopt($ch, CURLOPT_TIMEOUT, 120);
+  if ($headers) curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+  curl_setopt($ch, CURLOPT_HEADERFUNCTION, function($ch, $line) use (&$status, &$header_lines, &$sent_headers, $allowed_headers) {
+    $trimmed = trim($line);
+    if ($trimmed === '') {
+      if (!$sent_headers) {
+        http_response_code($status);
+        foreach ($header_lines as $name => $value) {
+          if (isset($allowed_headers[$name])) {
+            header($allowed_headers[$name] . ': ' . $value);
+          }
+        }
+        $sent_headers = true;
+      }
+      return strlen($line);
+    }
+    if (stripos($trimmed, 'HTTP/') === 0) {
+      $header_lines = [];
+      if (preg_match('#^HTTP/\S+\s+(\d{3})#', $trimmed, $m)) {
+        $status = (int)$m[1];
+      }
+      return strlen($line);
+    }
+    $parts = explode(':', $trimmed, 2);
+    if (count($parts) === 2) {
+      $name = strtolower(trim($parts[0]));
+      $value = trim($parts[1]);
+      if ($name !== '') $header_lines[$name] = $value;
+    }
+    return strlen($line);
+  });
+  curl_setopt($ch, CURLOPT_WRITEFUNCTION, function($ch, $data) use (&$sent_headers, &$status, &$header_lines, $allowed_headers) {
+    if (!$sent_headers) {
+      http_response_code($status);
+      foreach ($header_lines as $name => $value) {
+        if (isset($allowed_headers[$name])) {
+          header($allowed_headers[$name] . ': ' . $value);
+        }
+      }
+      $sent_headers = true;
+    }
+    echo $data;
+    return strlen($data);
+  });
+
+  $ok = curl_exec($ch);
+  if ($ok === false) {
+    $error = curl_error($ch);
+    curl_close($ch);
+    throw new RuntimeException($error ?: 'Unable to reach preview backend');
+  }
+  curl_close($ch);
+  if (!$sent_headers) {
+    http_response_code($status);
+    foreach ($header_lines as $name => $value) {
+      if (isset($allowed_headers[$name])) {
+        header($allowed_headers[$name] . ': ' . $value);
+      }
+    }
+  }
+  exit;
+}
+
 function proxy_backend_json_post($url, $json_text) {
   $headers = [
     'Content-Type: application/json',
@@ -213,8 +301,7 @@ try {
 
   if ($action === 'backend_media') {
     $path = (string)($_GET['path'] ?? '');
-    $result = proxy_backend_request('GET', $backend . '/api/media?path=' . rawurlencode($path));
-    output_proxy_response($result, ['Content-Type', 'Content-Length', 'Accept-Ranges', 'Content-Range', 'Cache-Control']);
+    stream_backend_response('GET', $backend . '/api/media?path=' . rawurlencode($path));
   }
 
   if ($action === 'save') {

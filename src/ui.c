@@ -125,6 +125,12 @@ static bool ui_is_pane_focus(int focus, int pane_count) {
     return focus >= 0 && focus < pane_count;
 }
 
+static bool ui_overlay_roles_swapped(const options_t *opt) {
+    return opt && opt->pane_count == 2 && opt->roles_set &&
+           opt->roles[0] == KMS_MOSAIC_SLOT_PANE_B &&
+           opt->roles[1] == KMS_MOSAIC_SLOT_PANE_A;
+}
+
 bool ui_state_init(ui_state *ui, const options_t *opt, bool use_mpv) {
     (void)use_mpv;
     memset(ui, 0, sizeof(*ui));
@@ -146,12 +152,11 @@ bool ui_state_init(ui_state *ui, const options_t *opt, bool use_mpv) {
     ui->last_pane_split_pct = -1;
     if (opt->roles_set) {
         for (int i = 0; i < ui->role_count; ++i) ui->perm[i] = opt->roles[i];
-        if (opt->layout_mode == 6 && opt->pane_count == 2) ui->overlay_swap = (opt->roles[1] == 2 && opt->roles[2] == 1);
+        if (opt->layout_mode == 6) ui->overlay_swap = ui_overlay_roles_swapped(opt);
     }
     if (opt->layout_mode == 6) {
-        ui->perm[UI_SLOT_VIDEO] = KMS_MOSAIC_SLOT_VIDEO;
         if (!opt->roles_set) {
-            for (int i = 1; i < ui->role_count; ++i) ui->perm[i] = i;
+            for (int i = 0; i < ui->role_count; ++i) ui->perm[i] = i;
             ui->overlay_swap = false;
         }
         ui->last_overlay_swap = ui->overlay_swap;
@@ -203,9 +208,10 @@ bool ui_handle_input(ui_state *ui, options_t *opt, const char *buf, ssize_t n,
                 if (ui_is_pane_focus(ui->focus, pane_count)) {
                     ui->overlay_swap = !ui->overlay_swap;
                     opt->roles_set = true;
-                    opt->roles[0] = KMS_MOSAIC_SLOT_VIDEO;
-                    opt->roles[1] = ui->overlay_swap ? 2 : 1;
-                    opt->roles[2] = ui->overlay_swap ? 1 : 2;
+                    opt->roles[0] = ui->overlay_swap ? KMS_MOSAIC_SLOT_PANE_B : KMS_MOSAIC_SLOT_PANE_A;
+                    opt->roles[1] = ui->overlay_swap ? KMS_MOSAIC_SLOT_PANE_A : KMS_MOSAIC_SLOT_PANE_B;
+                    ui->perm[0] = opt->roles[0];
+                    ui->perm[1] = opt->roles[1];
                 }
             } else {
                 int next = ui_next_focus(ui->focus, use_mpv, pane_count);
