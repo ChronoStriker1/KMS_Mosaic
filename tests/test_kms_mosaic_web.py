@@ -1,8 +1,10 @@
 import sys
 import textwrap
 import re
+import inspect
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -404,6 +406,7 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         saved_text = kms_mosaic_web.build_config_text(parsed)
         reparsed = kms_mosaic_web.parse_config_text(saved_text)
 
+        self.assertNotIn("--pane-model unified", saved_text)
         self.assertIn("--pane-media 1", saved_text)
         self.assertIn("--pane-video 1 /media/main.mp4", saved_text)
         self.assertIn("--pane-playlist 1 /playlists/main.m3u", saved_text)
@@ -504,6 +507,18 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertEqual(parsed["pane_commands"][1], "htop")
         self.assertEqual(parsed["split_tree"], "col:50(0,1)")
 
+    def test_empty_pane_zero_mpv_state_does_not_reenter_legacy_mode_from_stale_split_tree(self) -> None:
+        state = kms_mosaic_web.empty_state()
+        state["pane_count"] = 2
+        state["pane_types"][:2] = ["mpv", "terminal"]
+        state["split_tree"] = "col:50(0,row:50(1,2))"
+
+        parsed = kms_mosaic_web._normalize_loaded_state(state, {})
+
+        self.assertEqual(parsed["pane_count"], 2)
+        self.assertEqual(parsed["pane_types"][:2], ["mpv", "terminal"])
+        self.assertEqual(parsed["split_tree"], "col:50(0,1)")
+
     def test_stale_saved_selection_metadata_does_not_allocate_phantom_panes(self) -> None:
         text = textwrap.dedent(
             """
@@ -566,12 +581,51 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         text = kms_mosaic_web.build_config_text(state)
         reparsed = kms_mosaic_web.parse_config_text(text)
 
+        self.assertNotIn("--pane-model unified", text)
         self.assertIn('"selected_pane":1', text)
         self.assertIn('"focus_pane":0', text)
         self.assertIn('"fullscreen_pane":1', text)
         self.assertEqual(reparsed["selected_pane"], 1)
         self.assertEqual(reparsed["focus_pane"], 0)
         self.assertEqual(reparsed["fullscreen_pane"], 1)
+
+    def test_codec_preference_key_prefers_h264_before_vp8_and_vp9(self) -> None:
+        codecs = [
+            SimpleNamespace(mimeType="video/VP9"),
+            SimpleNamespace(mimeType="video/H264"),
+            SimpleNamespace(mimeType="video/VP8"),
+        ]
+
+        ordered = sorted(codecs, key=kms_mosaic_web.codec_preference_key)
+
+        self.assertEqual([codec.mimeType for codec in ordered], ["video/H264", "video/VP8", "video/VP9"])
+
+    def test_visibility_mode_round_trips_in_web_state_without_legacy_runtime_flags(self) -> None:
+        state = kms_mosaic_web.empty_state()
+        state["pane_count"] = 3
+        state["pane_types"][:3] = ["terminal", "mpv", "terminal"]
+        state["visibility_mode"] = "no-video"
+
+        text = kms_mosaic_web.build_config_text(state)
+        reparsed = kms_mosaic_web.parse_config_text(text)
+
+        self.assertNotIn("--no-video", text)
+        self.assertNotIn("--no-panes", text)
+        self.assertIn('"visibility_mode":"no-video"', text)
+        self.assertEqual(reparsed["visibility_mode"], "no-video")
+        self.assertFalse(reparsed["flags"]["no_video"])
+        self.assertFalse(reparsed["flags"]["no_panes"])
+        self.assertEqual(reparsed["pane_types"][:3], ["terminal", "mpv", "terminal"])
+
+    def test_loop_flags_do_not_serialize_from_editor_state(self) -> None:
+        state = kms_mosaic_web.empty_state()
+        state["flags"]["loop_file"] = True
+        state["flags"]["loop_playlist"] = True
+
+        text = kms_mosaic_web.build_config_text(state)
+
+        self.assertNotIn("--loop-file", text)
+        self.assertNotIn("--loop-playlist", text)
 
         html = kms_mosaic_web.HTML
         select_role = re.search(
@@ -592,6 +646,16 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         fill_form_text = fill_form.group(0)
         self.assertIn("const parsedSelection = Number(state?.selected_pane);", fill_form_text)
         self.assertIn("selectedRole = Number.isFinite(parsedSelection) ? parsedSelection : restoreSelectedRole(state, previousSelection);", fill_form_text)
+
+    def test_preview_track_uses_full_cadence_preview_defaults(self) -> None:
+        init_source = inspect.getsource(kms_mosaic_web.RawPreviewVideoTrack.__init__)
+        self.assertIn("self.interval_ms = 16", init_source)
+        self.assertIn("self.max_edge = 720", init_source)
+
+        reader_source = inspect.getsource(kms_mosaic_web.read_latest_raw_preview_frame)
+        self.assertIn("next_lease_refresh = now", reader_source)
+        self.assertIn("if now >= next_lease_refresh:", reader_source)
+        self.assertIn("next_lease_refresh = now + 0.25", reader_source)
 
     def test_pane_media_parser_clears_seeded_terminal_commands(self) -> None:
         text = textwrap.dedent(

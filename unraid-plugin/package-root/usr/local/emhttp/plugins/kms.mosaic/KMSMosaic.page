@@ -70,7 +70,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   .kms-service-grid {
     display: grid;
     gap: 12px 16px;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     align-items: start;
   }
   .kms-service-meta {
@@ -82,12 +82,6 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     display: grid;
     gap: 6px;
     min-width: 0;
-  }
-  .kms-field.kms-field-apply {
-    grid-column: 7;
-    grid-row: 1;
-    justify-self: end;
-    align-self: start;
   }
   .kms-field label {
     font-weight: 700;
@@ -112,6 +106,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   }
   .kms-actions.service-actions {
     justify-content: flex-start;
+    align-items: center;
   }
   .kms-inline-field {
     display: inline-grid;
@@ -163,17 +158,17 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 1px 3px rgba(0,0,0,.06);
   }
   .kms-visibility-group {
-    grid-column: 5 / span 2;
-    grid-row: 1;
-    align-self: start;
-  }
-  .kms-visibility-head {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px 10px;
     flex-wrap: wrap;
+    min-width: 0;
+    margin-left: 4px;
   }
   .kms-visibility-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
     font-weight: 700;
     color: #2c3136;
     font-size: inherit;
@@ -184,7 +179,7 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     align-items: flex-start;
     gap: 8px;
     flex-wrap: wrap;
-    margin-top: 2px;
+    margin-top: 0;
   }
   .kms-visibility-options button {
     min-width: 104px;
@@ -403,14 +398,15 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   #kmsStudioPlaceholder .studio-card.selected .studio-resize-handle {
     opacity: 1 !important;
     pointer-events: auto !important;
+    filter: drop-shadow(0 0 10px rgba(87, 31, 16, 0.22)) !important;
   }
   #kmsStudioPlaceholder .studio-resize-handle::before,
   #kmsStudioPlaceholder .studio-resize-handle::after {
     content: '';
     position: absolute;
     border-radius: 999px;
-    background: rgba(255,240,200,0.84);
-    box-shadow: 0 0 0 1px rgba(26,15,10,0.22);
+    background: rgba(191, 98, 54, 0.96);
+    box-shadow: 0 0 0 1px rgba(255, 247, 235, 0.72);
   }
   #kmsStudioPlaceholder .studio-resize-handle[data-edge="left"],
   #kmsStudioPlaceholder .studio-resize-handle[data-edge="right"] {
@@ -423,8 +419,18 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   #kmsStudioPlaceholder .studio-resize-handle[data-edge="right"]::before {
     top: 16px;
     bottom: 16px;
-    left: 8px;
-    width: 2px;
+    left: 7px;
+    width: 4px;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="left"]::after,
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="right"]::after {
+    top: 50%;
+    left: 2px;
+    width: 14px;
+    height: 30px;
+    margin-top: -15px;
+    background: rgba(255, 248, 238, 0.96);
+    box-shadow: 0 0 0 2px rgba(87, 31, 16, 0.18);
   }
   #kmsStudioPlaceholder .studio-resize-handle[data-edge="left"] { left: -9px !important; }
   #kmsStudioPlaceholder .studio-resize-handle[data-edge="right"] { right: -9px !important; }
@@ -439,8 +445,18 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   #kmsStudioPlaceholder .studio-resize-handle[data-edge="bottom"]::before {
     left: 16px;
     right: 16px;
-    top: 8px;
-    height: 2px;
+    top: 7px;
+    height: 4px;
+  }
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="top"]::after,
+  #kmsStudioPlaceholder .studio-resize-handle[data-edge="bottom"]::after {
+    left: 50%;
+    top: 2px;
+    width: 30px;
+    height: 14px;
+    margin-left: -15px;
+    background: rgba(255, 248, 238, 0.96);
+    box-shadow: 0 0 0 2px rgba(87, 31, 16, 0.18);
   }
   #kmsStudioPlaceholder .studio-resize-handle[data-edge="top"] { top: -9px !important; }
   #kmsStudioPlaceholder .studio-resize-handle[data-edge="bottom"] { bottom: -9px !important; }
@@ -451,8 +467,9 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   }
   #kmsStudioPlaceholder .studio-resize-handle[data-mode="corner"]::before {
     inset: 4px;
-    border: 2px solid rgba(255,240,200,0.84);
-    background: rgba(255,240,200,0.16);
+    border: 2px solid rgba(255, 248, 238, 0.96);
+    background: rgba(191, 98, 54, 0.94);
+    box-shadow: 0 0 0 2px rgba(87, 31, 16, 0.18);
   }
   #kmsStudioPlaceholder .studio-resize-handle[data-mode="corner"]::after {
     display: none;
@@ -866,6 +883,12 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   #kmsAdvancedPlaceholder .grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  #kmsAdvancedPlaceholder .checks {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px 16px;
+  }
   #kmsAdvancedPlaceholder label {
     display: block;
     font-weight: 700;
@@ -902,6 +925,8 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     gap: 8px;
     color: #202225;
     font-size: 13px;
+    flex: 1 1 220px;
+    min-width: 220px;
   }
   #kmsAdvancedPlaceholder .check input {
     width: 14px;
@@ -923,14 +948,6 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
   }
   @media (max-width: 1200px) {
     .kms-service-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
-    .kms-visibility-group,
-    .kms-field.kms-field-apply {
-      grid-column: 1 / -1;
-      grid-row: auto;
-    }
-    .kms-field.kms-field-apply {
-      justify-self: stretch;
-    }
     .kms-panel-body { padding: 14px; }
     #kmsStudioPlaceholder .studio-grid { grid-template-columns: 1fr; }
   }
@@ -955,8 +972,10 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
     }
   }
   @media (max-width: 680px) {
-    #kmsAdvancedPlaceholder .grid,
     #kmsAdvancedPlaceholder .checks {
+      flex-direction: column;
+    }
+    #kmsAdvancedPlaceholder .grid {
       grid-template-columns: 1fr;
     }
     #kmsSelectedPanePlaceholder .playlist-controls-row {
@@ -987,6 +1006,14 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
         <button type="button" onclick="kmsRefreshStatus()">Refresh</button>
         <button type="button" class="orange" id="kmsSaveConfigBtn">Save Config</button>
         <button type="button" id="kmsReloadConfigBtn">Reload From Disk</button>
+        <div class="kms-visibility-group" id="kmsVisibilityGroup">
+          <div class="kms-visibility-label">Visibility Mode</div>
+          <div class="kms-visibility-options" id="kmsVisibilityButtons">
+            <button type="button" class="secondary" id="kmsVisibilityNeitherBtn" onclick="kmsSetVisibilityMode('neither')">Neither</button>
+            <button type="button" class="secondary" id="kmsVisibilityNoVideoBtn" onclick="kmsSetVisibilityMode('no-video')">No Video</button>
+            <button type="button" class="secondary" id="kmsVisibilityNoPanesBtn" onclick="kmsSetVisibilityMode('no-terminal')">No Terminal</button>
+          </div>
+        </div>
       </div>
 
       <div class="kms-service-grid">
@@ -1014,21 +1041,6 @@ $initial_status_json = json_encode($initial_status, JSON_UNESCAPED_SLASHES | JSO
         <div class="kms-field">
           <label for="kmsConfigPath">Config path</label>
           <input id="kmsConfigPath" name="CONFIG_PATH" type="text" value="<?php echo htmlspecialchars($config_path); ?>">
-        </div>
-
-        <div class="kms-field kms-visibility-group" id="kmsVisibilityGroup">
-          <div class="kms-visibility-head">
-            <div class="kms-visibility-label">Visibility Mode</div>
-          </div>
-          <div class="kms-visibility-options" id="kmsVisibilityButtons">
-            <button type="button" class="secondary" id="kmsVisibilityNeitherBtn" onclick="kmsSetVisibilityMode('neither')">Neither</button>
-            <button type="button" class="secondary" id="kmsVisibilityNoVideoBtn" onclick="kmsSetVisibilityMode('no-video')">No Video</button>
-            <button type="button" class="secondary" id="kmsVisibilityNoPanesBtn" onclick="kmsSetVisibilityMode('no-terminal')">No Terminal</button>
-          </div>
-        </div>
-
-        <div class="kms-field kms-field-apply">
-          <button type="button" onclick="kmsSavePluginSettings()">Apply Settings</button>
         </div>
       </div>
 
@@ -1593,6 +1605,35 @@ async function kmsRefreshStatus() {
   }
 }
 
+function kmsGetPluginSettingsSnapshot() {
+  const ids = ['kmsServiceBoot', 'kmsWebBoot', 'kmsWebPort', 'kmsConfigPath'];
+  return ids.map((id) => {
+    const el = document.getElementById(id);
+    return el ? `${id}:${el.value}` : `${id}:`;
+  }).join('|');
+}
+
+function kmsMarkPluginSettingsSaved() {
+  window.__kmsPluginSettingsLastSavedSnapshot = kmsGetPluginSettingsSnapshot();
+}
+
+async function kmsMaybeAutoSavePluginSettings() {
+  if (window.__kmsPluginSettingsSavePromise) return window.__kmsPluginSettingsSavePromise;
+  window.__kmsPluginSettingsSavePromise = (async () => {
+    while (true) {
+      const snapshot = kmsGetPluginSettingsSnapshot();
+      if (window.__kmsPluginSettingsLastSavedSnapshot === snapshot) return true;
+      const ok = await kmsSavePluginSettings();
+      if (!ok) return false;
+      window.__kmsPluginSettingsLastSavedSnapshot = snapshot;
+      if (kmsGetPluginSettingsSnapshot() === snapshot) return true;
+    }
+  })().finally(() => {
+    window.__kmsPluginSettingsSavePromise = null;
+  });
+  return window.__kmsPluginSettingsSavePromise;
+}
+
 async function kmsSavePluginSettings() {
   try {
     const data = await kmsPost('save', {
@@ -1605,11 +1646,13 @@ async function kmsSavePluginSettings() {
     try {
       await kmsEnsureEmbeddedLoaded();
     } catch (err) {
-      console.error('KMS Mosaic editor load failed after applying plugin settings', err);
+      console.error('KMS Mosaic editor load failed after saving plugin settings', err);
     }
+    return true;
   } catch (err) {
     document.getElementById('kmsStatus').className = 'kms-status bad';
-    document.getElementById('kmsStatus').textContent = err.message || 'Apply failed';
+    document.getElementById('kmsStatus').textContent = err.message || 'Save settings failed';
+    return false;
   }
 }
 
@@ -1676,6 +1719,39 @@ function kmsSyncVisibilityMode() {
   }
 }
 
+function kmsFilterRawConfigText(rawConfig) {
+  return String(rawConfig || '').replace(/^\s*--pane-model unified\s*\r?\n?/gm, '');
+}
+
+function kmsSanitizeRawConfigField() {
+  const rawConfig = document.getElementById('rawConfig');
+  if (!rawConfig) return;
+  const filtered = kmsFilterRawConfigText(rawConfig.value);
+  if (filtered !== rawConfig.value) {
+    rawConfig.value = filtered;
+  }
+}
+
+function kmsInstallEmbeddedRuntimeWrappers() {
+  if (window.__kmsEmbeddedRuntimeWrappersInstalled) return;
+  if (typeof window.fillForm === 'function') {
+    const originalFillForm = window.fillForm;
+    window.fillForm = function(state, configPath, rawConfig) {
+      const result = originalFillForm.call(this, state, configPath, kmsFilterRawConfigText(rawConfig));
+      kmsSanitizeRawConfigField();
+      return result;
+    };
+  }
+  if (typeof window.saveState === 'function') {
+    const originalSaveState = window.saveState;
+    window.saveState = async function(...args) {
+      kmsSanitizeRawConfigField();
+      return originalSaveState.apply(this, args);
+    };
+  }
+  window.__kmsEmbeddedRuntimeWrappersInstalled = true;
+}
+
 async function kmsSetVisibilityMode(mode) {
   try {
     await kmsEnsureEmbeddedLoaded();
@@ -1689,6 +1765,22 @@ async function kmsSetVisibilityMode(mode) {
     document.getElementById('kmsStatus').className = 'kms-status bad';
     document.getElementById('kmsStatus').textContent = err.message || 'Visibility update failed';
   }
+}
+
+function kmsBindPluginSettingsAutosave() {
+  if (window.__kmsPluginSettingsAutosaveInstalled) return;
+  const ids = ['kmsServiceBoot', 'kmsWebBoot', 'kmsWebPort', 'kmsConfigPath'];
+  ids.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    ['change', 'blur'].forEach((eventName) => {
+      el.addEventListener(eventName, () => {
+        kmsMaybeAutoSavePluginSettings().catch(() => {});
+      });
+    });
+  });
+  kmsMarkPluginSettingsSaved();
+  window.__kmsPluginSettingsAutosaveInstalled = true;
 }
 
 function kmsSetSelectedPaneState(detail = {}) {
@@ -1818,9 +1910,11 @@ async function kmsEnsureEmbeddedLoaded() {
         mount.appendChild(script);
       });
       kmsInstallWorkspaceHooks();
+      kmsInstallEmbeddedRuntimeWrappers();
       if (typeof window.fillForm === 'function') {
         window.fillForm(statePayload.state, statePayload.config_path, statePayload.raw_config);
       }
+      kmsMarkPluginSettingsSaved();
       if (typeof window.scheduleLivePreview === 'function') {
         window.scheduleLivePreview();
       }
@@ -1851,6 +1945,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   if (saveBtn) saveBtn.addEventListener('click', kmsSaveConfigState);
   if (reloadBtn) reloadBtn.addEventListener('click', kmsReloadConfigState);
+  kmsBindPluginSettingsAutosave();
 
   kmsEnsureEmbeddedLoaded();
   kmsRefreshStatus();

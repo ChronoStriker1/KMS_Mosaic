@@ -143,6 +143,15 @@ def visibility_mode_from_flags(flags: dict[str, Any]) -> str:
     return "neither"
 
 
+def normalize_visibility_mode(value: Any, default: str = "neither") -> str:
+    mode = str(value or "").strip()
+    if mode == "no-panes":
+        return "no-terminal"
+    if mode in {"neither", "no-video", "no-terminal"}:
+        return mode
+    return default
+
+
 def ensure_panes(state: dict[str, Any]) -> None:
     pane_count = max(1, int(state.get("pane_count", 2)))
     state["pane_count"] = pane_count
@@ -476,6 +485,7 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
         and not legacy_hint
         and len(split_roles) == source_pane_count + 1
         and sorted(split_roles) == list(range(source_pane_count + 1))
+        and source_payloads[0].get("type") != "mpv"
         and not _payload_has_media(source_payloads[0])
     )
     legacy_mode = root_media_present or legacy_hint or split_tree_legacy_hint
@@ -557,7 +567,10 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
     normalized["video_rotate"] = ""
     normalized["panscan"] = ""
     normalized["mpv_opts"] = []
-    normalized["visibility_mode"] = visibility_mode_from_flags(normalized.get("flags", {}))
+    normalized["visibility_mode"] = normalize_visibility_mode(
+        web_state.get("visibility_mode"),
+        visibility_mode_from_flags(normalized.get("flags", {})),
+    )
     return normalized
 
 
@@ -871,11 +884,7 @@ def build_config_text(state: dict[str, Any]) -> str:
             lines.append(f"--pane {idx + 1} {shlex.quote(str(cmd))}")
 
     flags = state.get("flags", {})
-    add_flag("--no-video", bool(flags.get("no_video")))
-    add_flag("--no-panes", bool(flags.get("no_panes")))
     add_flag("--smooth", bool(flags.get("smooth")))
-    add_flag("--loop-file", bool(flags.get("loop_file")))
-    add_flag("--loop-playlist", bool(flags.get("loop_playlist")))
     add_flag("--shuffle", bool(flags.get("shuffle")))
     add_flag("--no-osd", bool(flags.get("no_osd")))
     if flags.get("atomic_nonblock"):
@@ -900,6 +909,12 @@ def build_config_text(state: dict[str, Any]) -> str:
         metadata["focus_pane"] = focus_pane
     if fullscreen_pane >= 0:
         metadata["fullscreen_pane"] = fullscreen_pane
+    visibility_mode = normalize_visibility_mode(
+        state.get("visibility_mode"),
+        visibility_mode_from_flags(flags),
+    )
+    if visibility_mode != "neither":
+        metadata["visibility_mode"] = visibility_mode
     raw_types = [str(value or "") for value in state.get("pane_type_raw", [])[:pane_count]]
     if any(raw_types):
         effective_types = []
@@ -955,14 +970,19 @@ def write_preview_lease(app_config: WebConfig, interval_ms: int) -> None:
 def read_latest_raw_preview_frame(app_config: WebConfig, last_mtime_ns: int = 0, interval_ms: int = 16,
                                   timeout_sec: float = 3.0) -> tuple[bytes, int]:
     output_path = app_config.snapshot_output_path
-    deadline = time.time() + timeout_sec
-    while time.time() < deadline:
-        write_preview_lease(app_config, interval_ms)
+    now = time.monotonic()
+    deadline = now + timeout_sec
+    next_lease_refresh = now
+    while now < deadline:
+        if now >= next_lease_refresh:
+            write_preview_lease(app_config, interval_ms)
+            next_lease_refresh = now + 0.25
         if output_path.exists():
             st = output_path.stat()
             if st.st_size >= 8 and (last_mtime_ns <= 0 or st.st_mtime_ns > last_mtime_ns):
                 return output_path.read_bytes(), st.st_mtime_ns
         time.sleep(0.01)
+        now = time.monotonic()
     raise TimeoutError("Timed out waiting for kms_mosaic frame")
 
 
@@ -980,7 +1000,7 @@ def decode_raw_preview_frame(frame_bytes: bytes) -> tuple[int, int, bytes]:
     return width, height, payload
 
 
-def boost_h264_bitrate_sdp(sdp: str, start_kbps: int = 50000, max_kbps: int = 100000, min_kbps: int = 20000) -> str:
+def boost_h264_bitrate_sdp(sdp: str, start_kbps: int = 8000, max_kbps: int = 12000, min_kbps: int = 2000) -> str:
     if not sdp:
         return sdp
     lines = sdp.splitlines()
@@ -1022,11 +1042,11 @@ def boost_h264_bitrate_sdp(sdp: str, start_kbps: int = 50000, max_kbps: int = 10
 
 def codec_preference_key(codec: Any) -> tuple[int, str]:
     mime = str(getattr(codec, "mimeType", "")).lower()
-    if mime == "video/vp9":
-        return (0, mime)
     if mime == "video/h264":
-        return (1, mime)
+        return (0, mime)
     if mime == "video/vp8":
+        return (1, mime)
+    if mime == "video/vp9":
         return (2, mime)
     if mime == "video/av1":
         return (3, mime)
@@ -1037,12 +1057,13 @@ class RawPreviewVideoTrack(VideoStreamTrack):
     def __init__(self, app_config: WebConfig) -> None:
         super().__init__()
         self.app_config = app_config
-        self.interval_ms = 1
+        self.interval_ms = 16
         self.last_mtime_ns = 0
         self.last_frame: av.VideoFrame | None = None
         self.timestamp = 0
         self.time_base = Fraction(1, 90000)
         self.last_timestamp_time = time.monotonic()
+        self.max_edge = 720
 
     async def recv(self) -> av.VideoFrame:
         try:
@@ -1056,12 +1077,20 @@ class RawPreviewVideoTrack(VideoStreamTrack):
             width, height, rgba = decode_raw_preview_frame(frame_bytes)
             frame = av.VideoFrame(width, height, "rgba")
             frame.planes[0].update(rgba)
-            self.last_frame = frame.reformat(format="yuvj420p")
+            if max(width, height) > self.max_edge:
+                scale = self.max_edge / max(width, height)
+                scaled_w = max(2, int(round(width * scale)))
+                scaled_h = max(2, int(round(height * scale)))
+                scaled_w -= scaled_w % 2
+                scaled_h -= scaled_h % 2
+                self.last_frame = frame.reformat(width=scaled_w, height=scaled_h, format="yuv420p")
+            else:
+                self.last_frame = frame.reformat(format="yuv420p")
         except Exception:
             if self.last_frame is None:
                 fallback = av.VideoFrame(16, 9, "rgba")
                 fallback.planes[0].update(bytes(16 * 9 * 4))
-                self.last_frame = fallback.reformat(format="yuvj420p")
+                self.last_frame = fallback.reformat(format="yuv420p")
         frame_out = self.last_frame
         now = time.monotonic()
         elapsed = max(now - self.last_timestamp_time, 1 / 90000)
@@ -1819,14 +1848,15 @@ HTML = r"""<!doctype html>
     .studio-card.selected .studio-resize-handle {
       opacity: 1;
       pointer-events: auto;
+      filter: drop-shadow(0 0 10px rgba(87, 31, 16, 0.22));
     }
     .studio-resize-handle::before,
     .studio-resize-handle::after {
       content: "";
       position: absolute;
       border-radius: 999px;
-      background: rgba(255,240,200,0.84);
-      box-shadow: 0 0 0 1px rgba(26,15,10,0.22);
+      background: rgba(191, 98, 54, 0.96);
+      box-shadow: 0 0 0 1px rgba(255, 247, 235, 0.72);
     }
     .studio-resize-handle[data-edge="left"],
     .studio-resize-handle[data-edge="right"] {
@@ -1839,8 +1869,18 @@ HTML = r"""<!doctype html>
     .studio-resize-handle[data-edge="right"]::before {
       top: 16px;
       bottom: 16px;
-      left: 8px;
-      width: 2px;
+      left: 7px;
+      width: 4px;
+    }
+    .studio-resize-handle[data-edge="left"]::after,
+    .studio-resize-handle[data-edge="right"]::after {
+      top: 50%;
+      left: 2px;
+      width: 14px;
+      height: 30px;
+      margin-top: -15px;
+      background: rgba(255, 248, 238, 0.96);
+      box-shadow: 0 0 0 2px rgba(87, 31, 16, 0.18);
     }
     .studio-resize-handle[data-edge="left"] { left: -9px; }
     .studio-resize-handle[data-edge="right"] { right: -9px; }
@@ -1855,8 +1895,18 @@ HTML = r"""<!doctype html>
     .studio-resize-handle[data-edge="bottom"]::before {
       left: 16px;
       right: 16px;
-      top: 8px;
-      height: 2px;
+      top: 7px;
+      height: 4px;
+    }
+    .studio-resize-handle[data-edge="top"]::after,
+    .studio-resize-handle[data-edge="bottom"]::after {
+      left: 50%;
+      top: 2px;
+      width: 30px;
+      height: 14px;
+      margin-left: -15px;
+      background: rgba(255, 248, 238, 0.96);
+      box-shadow: 0 0 0 2px rgba(87, 31, 16, 0.18);
     }
     .studio-resize-handle[data-edge="top"] { top: -9px; }
     .studio-resize-handle[data-edge="bottom"] { bottom: -9px; }
@@ -1867,8 +1917,9 @@ HTML = r"""<!doctype html>
     }
     .studio-resize-handle[data-mode="corner"]::before {
       inset: 4px;
-      border: 2px solid rgba(255,240,200,0.84);
-      background: rgba(255,240,200,0.16);
+      border: 2px solid rgba(255, 248, 238, 0.96);
+      background: rgba(191, 98, 54, 0.94);
+      box-shadow: 0 0 0 2px rgba(87, 31, 16, 0.18);
     }
     .studio-resize-handle[data-mode="corner"]::after {
       display: none;
@@ -2298,12 +2349,8 @@ HTML = r"""<!doctype html>
         <div class="advanced-block panel-wide" id="advancedPanel">
           <div class="advanced-body">
             <div>
-              <input id="flagNoVideo" type="hidden" />
-              <input id="flagNoPanes" type="hidden" />
               <div class="checks">
                 <label class="check" title="Enable the compositor's smooth-presentation preset for gentler frame pacing defaults."><input id="flagSmooth" type="checkbox" /> Smooth Preset</label>
-                <label class="check" title="Loop the current file when a pane or queue is pointed at a single item."><input id="flagLoop" type="checkbox" /> Loop File</label>
-                <label class="check" title="Loop each pane playlist instead of stopping at the end."><input id="flagLoopPlaylist" type="checkbox" /> Loop Playlist</label>
                 <label class="check" title="Shuffle playlist order before playback advances through the queue."><input id="flagShuffle" type="checkbox" /> Shuffle</label>
                 <label class="check" title="Use DRM atomic modesetting when the GPU and connector support it."><input id="flagAtomic" type="checkbox" /> Atomic</label>
                 <label class="check" title="Request non-blocking atomic commits when atomic modesetting is enabled."><input id="flagAtomicNonblock" type="checkbox" /> Atomic Nonblock</label>
@@ -2438,11 +2485,9 @@ HTML = r"""<!doctype html>
     }
 
     function normalizeVisibilityFlags() {
-      if (!state?.flags) return;
+      if (!state) return;
       const mode = visibilityModeForState(state);
       state.visibility_mode = mode;
-      state.flags.no_video = mode === "no-video";
-      state.flags.no_panes = mode === "no-terminal";
     }
 
     function currentVisibilityMode() {
@@ -2612,22 +2657,15 @@ HTML = r"""<!doctype html>
     }
 
     function parseMpvOptionGroups(opts) {
-      const groups = { audioMode: "", muteMode: "", loopFile: "", videoMode: "", shaders: [], other: [] };
+      const groups = { videoMode: "", shaders: [], other: [] };
       (Array.isArray(opts) ? opts : []).forEach((opt) => {
         const value = String(opt || "").trim();
         if (!value) return;
-        if (value === "no-audio" || value === "audio=no" || value === "ao=null" || value === "mpv-out=no-audio") {
-          groups.audioMode = "no-audio";
+        if (value === "no-audio" || value === "audio=no" || value === "ao=null" || value === "mpv-out=no-audio" || value === "aid=no") {
           return;
         }
-        if (value === "mute=yes" || value === "mute=no") {
-          groups.muteMode = value.slice("mute=".length);
-          return;
-        }
-        if (value === "loop-file=no" || value === "loop-file=yes" || value === "loop-file=inf") {
-          groups.loopFile = value.slice("loop-file=".length);
-          return;
-        }
+        if (value === "mute=yes" || value === "mute=no") return;
+        if (value === "loop-file=no" || value === "loop-file=yes" || value === "loop-file=inf") return;
         if (value === "vid=no") {
           groups.videoMode = "audio-only";
           return;
@@ -2645,15 +2683,6 @@ HTML = r"""<!doctype html>
 
     function buildMpvOptsFromParts(parts) {
       const opts = [];
-      if (parts.audioMode === "no-audio") {
-        opts.push("audio=no");
-      }
-      if (parts.muteMode === "yes" || parts.muteMode === "no") {
-        opts.push(`mute=${parts.muteMode}`);
-      }
-      if (parts.loopFile === "no" || parts.loopFile === "yes" || parts.loopFile === "inf") {
-        opts.push(`loop-file=${parts.loopFile}`);
-      }
       if (parts.videoMode === "audio-only") {
         opts.push("vid=no");
       }
@@ -2670,29 +2699,13 @@ HTML = r"""<!doctype html>
       return opts;
     }
 
-    function buildMpvOptsFromControls() {
-      const audioEl = document.getElementById("mpvAudioMode");
-      const shadersEl = document.getElementById("mpvShaders");
-      return buildMpvOptsFromParts({
-        audioMode: audioEl ? audioEl.value : "",
-        shadersText: shadersEl ? shadersEl.value : "",
-        otherText: "",
-      });
-    }
-
     function syncInspectorPaneMpvOpts(paneIndex) {
       if (!state || paneIndex < 0) return;
-      const audioEl = document.getElementById("inspectorPaneAudioMode");
-      const muteEl = document.getElementById("inspectorPaneMuteMode");
-      const loopEl = document.getElementById("inspectorPaneLoopFile");
       const panscanEl = document.getElementById("inspectorPanePanscan");
       const shadersEl = document.getElementById("inspectorPaneShaders");
       const otherEl = document.getElementById("inspectorPaneMpvOpts");
-      if (!audioEl || !muteEl || !loopEl || !panscanEl || !shadersEl || !otherEl) return;
+      if (!panscanEl || !shadersEl || !otherEl) return;
       state.pane_mpv_opts[paneIndex] = buildMpvOptsFromParts({
-        audioMode: audioEl.value,
-        muteMode: muteEl.value,
-        loopFile: loopEl.value,
         shadersText: shadersEl.value,
         otherText: otherEl.value,
       });
@@ -3365,7 +3378,7 @@ HTML = r"""<!doctype html>
       if (!area || !branchArea) return null;
       const displayArea = transformStudioPaneRect(area);
       const displayBranch = transformStudioPaneRect(branchArea);
-      const total = normalizedRotationDegrees();
+      const total = studioRotationDegrees();
       const logicalEdge = logicalResizeEdgeForSplit(entry.node.kind, branchArea, area);
       const edge = displayEdgeForLogicalEdge(logicalEdge, total);
       return {
@@ -3721,7 +3734,7 @@ HTML = r"""<!doctype html>
 
     function displayPointToLogicalPoint(point) {
       if (!point) return null;
-      return inversePointByDegrees(point.x, 100 - point.y, normalizedRotationDegrees());
+      return inversePointByDegrees(point.x, 100 - point.y, studioRotationDegrees());
     }
 
     function displayEdgeForLogicalEdge(logicalEdge, total) {
@@ -4095,27 +4108,6 @@ HTML = r"""<!doctype html>
                 <option value="mpv" selected>mpv</option>
               </select>
             </label>
-            <label>Audio Output
-              <select id="inspectorPaneAudioMode">
-                <option value="">Default</option>
-                <option value="no-audio"${paneMpvGroups.audioMode === "no-audio" ? " selected" : ""}>No Audio</option>
-              </select>
-            </label>
-            <label>Mute
-              <select id="inspectorPaneMuteMode">
-                <option value="">Default</option>
-                <option value="yes"${paneMpvGroups.muteMode === "yes" ? " selected" : ""}>Muted</option>
-                <option value="no"${paneMpvGroups.muteMode === "no" ? " selected" : ""}>Unmuted</option>
-              </select>
-            </label>
-            <label>Loop Current File
-              <select id="inspectorPaneLoopFile">
-                <option value="">Default</option>
-                <option value="no"${paneMpvGroups.loopFile === "no" ? " selected" : ""}>Off</option>
-                <option value="yes"${paneMpvGroups.loopFile === "yes" ? " selected" : ""}>On</option>
-                <option value="inf"${paneMpvGroups.loopFile === "inf" ? " selected" : ""}>Infinite</option>
-              </select>
-            </label>
             <label>Panscan
               <input id="inspectorPanePanscan" type="number" step="0.01" placeholder="0.00" value="${panePanscan.replace(/"/g, "&quot;")}">
             </label>
@@ -4136,9 +4128,6 @@ HTML = r"""<!doctype html>
           renderStudioInspector();
         });
         [
-          "inspectorPaneAudioMode",
-          "inspectorPaneMuteMode",
-          "inspectorPaneLoopFile",
           "inspectorPanePanscan",
           "inspectorPaneShaders",
           "inspectorPaneMpvOpts",
@@ -4685,10 +4674,10 @@ HTML = r"""<!doctype html>
           const capabilities = RTCRtpReceiver.getCapabilities("video");
           if (capabilities?.codecs?.length) {
             const codecRank = (mimeType) => {
-              if (mimeType === "video/AV1") return 0;
-              if (mimeType === "video/VP9") return 1;
-              if (mimeType === "video/VP8") return 2;
-              if (mimeType === "video/H264") return 3;
+              if (mimeType === "video/H264") return 0;
+              if (mimeType === "video/VP8") return 1;
+              if (mimeType === "video/VP9") return 2;
+              if (mimeType === "video/AV1") return 3;
               return 4;
             };
             const ordered = capabilities.codecs.slice().sort((a, b) => codecRank(a.mimeType) - codecRank(b.mimeType));
@@ -4903,15 +4892,9 @@ HTML = r"""<!doctype html>
       if (layoutEl) state.layout = layoutEl.value;
       if (rolesEl) state.roles = rolesEl.value.trim();
       if (fsCycleEl) state.fs_cycle_sec = readInt("fsCycleSec", 5);
-      state.flags.no_video = document.getElementById("flagNoVideo").checked;
-      state.flags.no_panes = document.getElementById("flagNoPanes").checked;
-      state.visibility_mode = document.getElementById("flagNoVideo").checked
-        ? "no-video"
-        : (document.getElementById("flagNoPanes").checked ? "no-terminal" : "neither");
+      state.visibility_mode = visibilityModeForState(state);
       normalizeVisibilityFlags();
       state.flags.smooth = document.getElementById("flagSmooth").checked;
-      state.flags.loop_file = document.getElementById("flagLoop").checked;
-      state.flags.loop_playlist = document.getElementById("flagLoopPlaylist").checked;
       state.flags.shuffle = document.getElementById("flagShuffle").checked;
       state.flags.atomic = document.getElementById("flagAtomic").checked;
       state.flags.atomic_nonblock = document.getElementById("flagAtomicNonblock").checked;
@@ -4980,11 +4963,7 @@ HTML = r"""<!doctype html>
       const queueField = selectedPaneQueueField();
       const queueCtx = queueEditorContext();
       if (queueField) queueField.value = (queueCtx?.paths || []).join("\n");
-      document.getElementById("flagNoVideo").checked = !!state.flags.no_video;
-      document.getElementById("flagNoPanes").checked = !!state.flags.no_panes;
       document.getElementById("flagSmooth").checked = !!state.flags.smooth;
-      document.getElementById("flagLoop").checked = !!state.flags.loop_file;
-      document.getElementById("flagLoopPlaylist").checked = !!state.flags.loop_playlist;
       document.getElementById("flagShuffle").checked = !!state.flags.shuffle;
       document.getElementById("flagAtomic").checked = !!state.flags.atomic;
       document.getElementById("flagAtomicNonblock").checked = !!state.flags.atomic_nonblock;
@@ -5072,32 +5051,18 @@ HTML = r"""<!doctype html>
     }
 
     async function setVisibilityMode(mode) {
-      if (!state?.flags) return;
+      if (!state) return;
       const nextMode = mode === "no-video"
         ? "no-video"
         : (mode === "no-terminal" || mode === "no-panes")
           ? "no-terminal"
           : "neither";
       const previousMode = visibilityModeForState(state);
-      const previousFlags = {
-        no_video: !!state.flags.no_video,
-        no_panes: !!state.flags.no_panes,
-      };
       state.visibility_mode = nextMode;
-      state.flags.no_video = nextMode === "no-video";
-      state.flags.no_panes = nextMode === "no-terminal";
-      const noVideoField = document.getElementById("flagNoVideo");
-      const noPanesField = document.getElementById("flagNoPanes");
-      if (typeof noVideoField !== "undefined" && noVideoField) noVideoField.checked = !!state.flags.no_video;
-      if (typeof noPanesField !== "undefined" && noPanesField) noPanesField.checked = !!state.flags.no_panes;
       try {
         await saveState();
       } catch (err) {
         state.visibility_mode = previousMode;
-        state.flags.no_video = previousFlags.no_video;
-        state.flags.no_panes = previousFlags.no_panes;
-        if (noVideoField) noVideoField.checked = !!state.flags.no_video;
-        if (noPanesField) noPanesField.checked = !!state.flags.no_panes;
         renderPlaylistEditor();
         renderStudioBoard();
         renderStudioInspector();
@@ -5178,8 +5143,7 @@ HTML = r"""<!doctype html>
     [
       "mode","rotation","fontSize","rightFrac","paneSplit",
       "videoFrac","paneCount","layout","roles","fsCycleSec",
-      "videoList","extraLines","flagNoVideo","flagNoPanes",
-      "flagSmooth","flagLoop","flagLoopPlaylist","flagShuffle","flagAtomic",
+      "videoList","extraLines","flagSmooth","flagShuffle","flagAtomic",
       "flagAtomicNonblock","flagGlFinish","flagNoOsd"
     ].forEach(id => {
       const el = document.getElementById(id);
@@ -5248,7 +5212,7 @@ class Handler(BaseHTTPRequestHandler):
                 st = output_path.stat()
                 if st.st_mtime_ns > last_mtime_ns and st.st_size > 0:
                     return output_path.read_bytes(), st.st_mtime_ns
-            time.sleep(0.03)
+            time.sleep(0.015)
         raise TimeoutError("Timed out waiting for preview frame")
 
     def _thumbnail_cache_path(self, source: Path) -> Path:

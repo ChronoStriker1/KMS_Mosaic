@@ -207,7 +207,7 @@
       </div>
       <div id="test-1-5-result" style="display: none;" class="test-result"></div>
       <div class="test-item">
-        <div class="test-name">Visibility controls sit above Apply Settings in Service Status & Controls</div>
+        <div class="test-name">Visibility controls sit next to Reload From Disk in Service Status & Controls</div>
         <div id="test-1-6" class="test-status status-pending">PENDING</div>
       </div>
       <div id="test-1-6-result" style="display: none;" class="test-result"></div>
@@ -568,13 +568,13 @@
       setTestResult('test-1-5', bottomEditorRemoved ? 'pass' : 'fail',
         bottomEditorRemoved ? 'Hidden editor mount remains and no visible Configuration Editor shell is rendered' : 'A visible Configuration Editor shell is still present');
 
-      // Test 1.6: Visibility controls sit above the main apply action
+      // Test 1.6: Visibility controls sit next to Reload From Disk in the service action row
       const visibilityGroup = document.getElementById('kmsVisibilityGroup');
-      const applyButton = Array.from(document.querySelectorAll('button')).find((btn) => btn.textContent.trim() === 'Apply Settings');
-      const visibilityAboveApply = !!visibilityGroup && !!applyButton &&
-        !!(visibilityGroup.compareDocumentPosition(applyButton) & Node.DOCUMENT_POSITION_FOLLOWING);
-      setTestResult('test-1-6', visibilityAboveApply ? 'pass' : 'fail',
-        visibilityAboveApply ? 'Visibility buttons are placed before Apply Settings' : 'Visibility buttons are not above Apply Settings');
+      const reloadButton = document.getElementById('kmsReloadConfigBtn');
+      const visibilityNextToReload = !!visibilityGroup && !!reloadButton &&
+        !!(reloadButton.compareDocumentPosition(visibilityGroup) & Node.DOCUMENT_POSITION_FOLLOWING);
+      setTestResult('test-1-6', visibilityNextToReload ? 'pass' : 'fail',
+        visibilityNextToReload ? 'Visibility buttons follow Reload From Disk in the service action row' : 'Visibility buttons are not next to Reload From Disk');
 
       // Test 1.7: No Terminal label is used for the mpv-hide toggle
       const noPanesBtn = document.getElementById('kmsVisibilityNoPanesBtn');
@@ -626,17 +626,17 @@
         return;
       }
 
-      // Test 3.1: Visibility controls remain in the service shell and keep the updated naming
+      // Test 3.1: Visibility controls remain in the service action row and keep the updated naming
       const visGroup = document.getElementById('kmsVisibilityGroup');
       const visButtons = visGroup ? visGroup.querySelectorAll('button').length : 0;
       const noTerminalBtn = document.getElementById('kmsVisibilityNoPanesBtn');
-      const applyButton = Array.from(document.querySelectorAll('button')).find((btn) => btn.textContent.trim() === 'Apply Settings');
-      const visLayoutOk = !!visGroup && !!noTerminalBtn && !!applyButton &&
+      const reloadButton = document.getElementById('kmsReloadConfigBtn');
+      const visLayoutOk = !!visGroup && !!noTerminalBtn && !!reloadButton &&
         visButtons >= 3 &&
         noTerminalBtn.textContent.trim() === 'No Terminal' &&
-        !!(visGroup.compareDocumentPosition(applyButton) & Node.DOCUMENT_POSITION_FOLLOWING);
+        !!(reloadButton.compareDocumentPosition(visGroup) & Node.DOCUMENT_POSITION_FOLLOWING);
       setTestResult('test-3-1', visLayoutOk ? 'pass' : 'fail',
-        visLayoutOk ? 'Visibility controls are above Apply Settings and use No Terminal naming' : 'Visibility controls are missing or out of order');
+        visLayoutOk ? 'Visibility controls follow Reload From Disk and use No Terminal naming' : 'Visibility controls are missing or out of order');
 
       // Test 3.2: Status display
       const statusEl = document.getElementById('kmsStatus');

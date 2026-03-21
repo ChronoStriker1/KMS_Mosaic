@@ -149,7 +149,7 @@ kms_mosaic:
 SLK
 
 # Create Slackware-style .txz without makepkg
-VER=$(date +%Y.%m.%d)
+VER=$(tr -d '[:space:]' < /work/VERSION)
 # Detect binary arch from 'file' output for accurate packaging
 case "$BIN_INFO" in
   *x86-64*) PKGARCH=x86_64 ;;

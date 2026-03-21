@@ -408,13 +408,12 @@ static void app_handle_runtime_events(runtime_state *rt, ui_state *ui, const opt
 
 static void app_update_layout(const options_t *opt, ui_state *ui, pane_runtime *panes, app_scene *scene, bool debug) {
     if (opt->layout_mode == 6) {
-        ui->perm[KMS_MOSAIC_SLOT_VIDEO] = KMS_MOSAIC_SLOT_VIDEO;
         if (ui->last_layout_mode != 6) {
             if (opt->roles_set) {
-                for (int i = 1; i < KMS_MOSAIC_SLOT_PANE_BASE + opt->pane_count; ++i) ui->perm[i] = opt->roles[i];
-                ui->overlay_swap = (opt->pane_count == 2 && opt->roles[1] == 2 && opt->roles[2] == 1);
+                for (int i = 0; i < KMS_MOSAIC_SLOT_PANE_BASE + opt->pane_count; ++i) ui->perm[i] = opt->roles[i];
+                ui->overlay_swap = (opt->pane_count == 2 && opt->roles[0] == 1 && opt->roles[1] == 0);
             } else {
-                for (int i = 1; i < KMS_MOSAIC_SLOT_PANE_BASE + opt->pane_count; ++i) ui->perm[i] = i;
+                for (int i = 0; i < KMS_MOSAIC_SLOT_PANE_BASE + opt->pane_count; ++i) ui->perm[i] = i;
                 ui->overlay_swap = false;
             }
             ui->last_overlay_swap = ui->overlay_swap;
@@ -460,9 +459,12 @@ static void app_update_layout(const options_t *opt, ui_state *ui, pane_runtime *
         }
         ui->layout_reinit_countdown = default_frames;
         if (debug) {
+            int perm0 = opt->pane_count > 0 ? ui->perm[0] : -1;
+            int perm1 = opt->pane_count > 1 ? ui->perm[1] : -1;
+            int perm2 = opt->pane_count > 2 ? ui->perm[2] : -1;
             fprintf(stderr, "Layout changed -> reinit countdown %d (mode=%d, perm=%d/%d/%d, rot=%d)\n",
                     ui->layout_reinit_countdown, opt->layout_mode,
-                    ui->perm[0], ui->perm[1], ui->perm[2], (int)opt->rotation);
+                    perm0, perm1, perm2, (int)opt->rotation);
         }
     }
 
