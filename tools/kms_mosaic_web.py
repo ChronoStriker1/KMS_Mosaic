@@ -66,6 +66,50 @@ def read_state_from_config(config_path: Path) -> dict[str, Any]:
     return parse_config_text(read_raw_config_text(config_path))
 
 
+def parse_connector_listing(text: str) -> list[dict[str, Any]]:
+    connectors: list[dict[str, Any]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        match = re.match(r"^(\d+):\s+([^\s]+)\s+\((connected|disconnected)\)", line)
+        if not match:
+            continue
+        if match.group(3) != "connected":
+            continue
+        connectors.append({
+            "id": match.group(1),
+            "name": match.group(2),
+            "connected": True,
+        })
+    return connectors
+
+
+def list_connectors() -> list[dict[str, Any]]:
+    candidates = [
+        shutil.which("kms_mosaic"),
+        shutil.which("kms_mosaic.bin"),
+        "/usr/local/bin/kms_mosaic",
+        "/usr/local/bin/kms_mosaic.bin",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            result = subprocess.run(
+                [candidate, "--list-connectors"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        output = "\n".join(part for part in [result.stdout, result.stderr] if part)
+        connectors = parse_connector_listing(output)
+        if connectors:
+            return connectors
+    return []
+
+
 def write_text_atomic(target_path: Path, text: str) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd, tmp_name = tempfile.mkstemp(prefix=target_path.name + ".", dir=str(target_path.parent))
@@ -2362,6 +2406,11 @@ HTML = r"""<!doctype html>
             <div>
               <h2 class="section-title">Scene Rules</h2>
               <div class="grid">
+                <label>Display
+                  <select id="connector">
+                    <option value="">Auto</option>
+                  </select>
+                </label>
                 <label>Rotation
                   <select id="rotation">
                     <option value="0">0</option>
@@ -4941,6 +4990,7 @@ HTML = r"""<!doctype html>
       state.selected_pane = selectedRole;
       document.getElementById("configPath").textContent = `Config: ${configPath}`;
       const modeEl = document.getElementById("mode");
+      const connectorEl = document.getElementById("connector");
       const rotationEl = document.getElementById("rotation");
       const fontSizeEl = document.getElementById("fontSize");
       const rightFracEl = document.getElementById("rightFrac");
@@ -4951,6 +5001,7 @@ HTML = r"""<!doctype html>
       const rolesEl = document.getElementById("roles");
       const fsCycleEl = document.getElementById("fsCycleSec");
       if (modeEl) modeEl.value = state.mode || "";
+      if (connectorEl) connectorEl.value = state.connector || "";
       if (rotationEl) rotationEl.value = String(state.rotation || 0);
       if (fontSizeEl) fontSizeEl.value = String(state.font_size || 18);
       if (rightFracEl) rightFracEl.value = String(state.right_frac || 33);
@@ -4977,6 +5028,42 @@ HTML = r"""<!doctype html>
       applyPreviewGeometry();
     }
 
+    async function loadConnectorOptions() {
+      const connectorEl = document.getElementById("connector");
+      if (!connectorEl) return;
+      const response = await fetch("/api/connectors");
+      const text = await response.text();
+      let payload = {};
+      if (text.trim()) {
+        try {
+          payload = JSON.parse(text);
+        } catch (err) {
+          throw new Error("Failed to parse connectors response");
+        }
+      }
+      if (!response.ok) throw new Error(payload.error || "Failed to load displays");
+      const connectors = Array.isArray(payload.connectors) ? payload.connectors : [];
+      const currentValue = state.connector || "";
+      connectorEl.innerHTML = "";
+      const autoOption = document.createElement("option");
+      autoOption.value = "";
+      autoOption.textContent = "Auto";
+      connectorEl.appendChild(autoOption);
+      connectors.forEach((connector) => {
+        const option = document.createElement("option");
+        option.value = connector.name || "";
+        option.textContent = connector.id ? `${connector.name} (${connector.id})` : (connector.name || "");
+        connectorEl.appendChild(option);
+      });
+      if (currentValue && !connectors.some((connector) => connector.name === currentValue)) {
+        const option = document.createElement("option");
+        option.value = currentValue;
+        option.textContent = `${currentValue} (saved)`;
+        connectorEl.appendChild(option);
+      }
+      connectorEl.value = state.connector || "";
+    }
+
     async function loadState() {
       const response = await fetch("/api/state");
       const text = await response.text();
@@ -4990,6 +5077,7 @@ HTML = r"""<!doctype html>
       }
       if (!response.ok) throw new Error(payload.error || "Failed to load state");
       fillForm(payload.state, payload.config_path, payload.raw_config);
+      await loadConnectorOptions();
       scheduleLivePreview();
       setStatus(`Loaded ${payload.config_path}`, false, true);
     }
@@ -5141,7 +5229,7 @@ HTML = r"""<!doctype html>
       }
     });
     [
-      "mode","rotation","fontSize","rightFrac","paneSplit",
+      "mode","connector","rotation","fontSize","rightFrac","paneSplit",
       "videoFrac","paneCount","layout","roles","fsCycleSec",
       "videoList","extraLines","flagSmooth","flagShuffle","flagAtomic",
       "flagAtomicNonblock","flagGlFinish","flagNoOsd"
@@ -5359,6 +5447,10 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
 
+        if parsed.path == "/api/connectors":
+            self._send_json({"connectors": list_connectors()})
+            return
+
         if parsed.path == "/api/frame.bin":
             try:
                 data = self._request_snapshot()
@@ -5454,6 +5546,7 @@ def parse_cli_args() -> argparse.Namespace:
     parser.add_argument("--host", default="0.0.0.0", help="Bind host")
     parser.add_argument("--port", type=int, default=8787, help="Bind port")
     parser.add_argument("--dump-state", action="store_true", help="Print parsed config state as JSON and exit")
+    parser.add_argument("--dump-connectors", action="store_true", help="Print connected display outputs as JSON and exit")
     parser.add_argument("--print-html", action="store_true", help="Print the standalone HTML shell and exit")
     parser.add_argument("--write-state-json", help="Read a JSON file containing {state: ...}, write config, print updated JSON")
     parser.add_argument("--write-raw-json", help="Read a JSON file containing {raw_config: ...}, write config, print updated JSON")
@@ -5485,6 +5578,9 @@ def main() -> int:
             "state": read_state_from_config(config_path),
             "raw_config": read_raw_config_text(config_path),
         }))
+        return 0
+    if cli.dump_connectors:
+        print(json.dumps({"connectors": list_connectors()}))
         return 0
     if cli.write_state_json:
         payload = json.loads(Path(cli.write_state_json).read_text(encoding="utf-8"))

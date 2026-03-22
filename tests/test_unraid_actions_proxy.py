@@ -15,6 +15,11 @@ class UnraidActionsProxyTests(unittest.TestCase):
         self.assertIn("if ($action === 'backend_media') {", src)
         self.assertIn("stream_backend_response('GET', $backend . '/api/media?path=' . rawurlencode($path));", src)
 
+    def test_backend_connectors_uses_wrapper_json_output(self) -> None:
+        src = ACTIONS_PHP.read_text(encoding="utf-8")
+        self.assertIn("if ($action === 'backend_connectors') {", src)
+        self.assertIn("echo run_web_wrapper($web_wrapper, $cfg['CONFIG_PATH'], ['--dump-connectors']);", src)
+
 
 if __name__ == "__main__":
     unittest.main()

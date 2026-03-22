@@ -57,17 +57,30 @@ class MediaDebuggingTests(unittest.TestCase):
         self.assertIn('mpv_set_option_string(m->mpv, "loop-playlist", "yes");', src)
         self.assertNotIn('if (opt->loop_playlist) mpv_set_option_string(m->mpv, "loop-playlist", "yes");', src)
 
-    def test_mpv_event_logging_includes_path_and_playlist_position(self) -> None:
+    def test_mpv_wakeup_logging_avoids_sync_property_reads(self) -> None:
         src = MEDIA_C.read_text(encoding="utf-8")
-        self.assertNotIn('mpv_get_property(m->mpv, "playlist-pos"', src)
-        self.assertIn('mpv_get_property_string(m->mpv, "path")', src)
-        self.assertIn('mpv_free(current_path);', src)
+        wakeup_start = src.index("void media_handle_wakeup(")
+        wakeup_end = src.index("void media_handle_playlist_fifo(")
+        wakeup_src = src[wakeup_start:wakeup_end]
+        self.assertNotIn('mpv_get_property_string(m->mpv, "path")', wakeup_src)
+        self.assertNotIn('mpv_get_property(m->mpv, "playlist-pos"', wakeup_src)
         self.assertIn("media_log_event(m, \"START_FILE\"", src)
         self.assertIn("media_log_event(m, \"FILE_LOADED\"", src)
         self.assertIn('playlist_entry_id=%lld', src)
         self.assertIn("MPV_EVENT_START_FILE", src)
         self.assertIn("MPV_EVENT_FILE_LOADED", src)
         self.assertIn("MPV_EVENT_END_FILE", src)
+
+    def test_media_loadfile_command_nodes_are_freed_after_async_queue(self) -> None:
+        src = MEDIA_C.read_text(encoding="utf-8")
+        self.assertIn("static void media_free_owned_node(mpv_node *node)", src)
+        self.assertIn('root.u.list->values[root.u.list->num].u.string = strdup(str);', src)
+        self.assertIn('map.u.list->values[map.u.list->num].u.string = strdup(val);', src)
+        queue_call = 'mpv_command_node_async(m->mpv, 0, &root);'
+        cleanup_call = 'media_free_owned_node(&root);'
+        self.assertIn(queue_call, src)
+        self.assertIn(cleanup_call, src)
+        self.assertLess(src.find(queue_call), src.find(cleanup_call))
 
 
 if __name__ == "__main__":

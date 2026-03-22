@@ -22,6 +22,39 @@ REMOTE_VIDEO_URL = (
 
 
 class KmsMosaicWebConfigTests(unittest.TestCase):
+    def test_connector_option_round_trips_through_config_state(self) -> None:
+        state = kms_mosaic_web.empty_state()
+        state["connector"] = "HDMI-A-2"
+
+        text = kms_mosaic_web.serialize_config(state)
+        parsed = kms_mosaic_web.parse_config_text(text)
+
+        self.assertIn("--connector HDMI-A-2", text)
+        self.assertEqual(parsed["connector"], "HDMI-A-2")
+
+    def test_parse_connector_listing_extracts_connected_outputs(self) -> None:
+        listing = textwrap.dedent(
+            """
+            Using DRM atomic modesetting (plane 58).
+            Connectors:
+              93: HDMI-A-1 (connected) modes:11 [use --mode WxH@Hz]
+                  1920x1080@60
+              102: HDMI-A-2 (connected) modes:32 [use --mode WxH@Hz]
+                  1920x1080@60 (preferred)
+              108: DP-1 (disconnected) modes:0
+            """
+        ).strip()
+
+        parsed = kms_mosaic_web.parse_connector_listing(listing)
+
+        self.assertEqual(
+            parsed,
+            [
+                {"id": "93", "name": "HDMI-A-1", "connected": True},
+                {"id": "102", "name": "HDMI-A-2", "connected": True},
+            ],
+        )
+
     def test_integration_harness_exercises_role_zero_remove_path_and_checks_split_tree_alignment(self) -> None:
         integration_html = (ROOT / "tests" / "integration.test.html").read_text(encoding="utf-8")
 

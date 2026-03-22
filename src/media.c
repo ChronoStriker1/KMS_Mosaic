@@ -45,6 +45,28 @@ static const char *media_normalize_hwdec_value(const char *value) {
     return value;
 }
 
+static void media_free_owned_node(mpv_node *node) {
+    if (!node) return;
+    if (node->format == MPV_FORMAT_STRING) {
+        free(node->u.string);
+        node->u.string = NULL;
+        return;
+    }
+    if (node->format != MPV_FORMAT_NODE_ARRAY && node->format != MPV_FORMAT_NODE_MAP) return;
+    mpv_node_list *list = node->u.list;
+    if (!list) return;
+    for (int i = 0; i < list->num; ++i) {
+        media_free_owned_node(&list->values[i]);
+        if (node->format == MPV_FORMAT_NODE_MAP) {
+            free(list->keys[i]);
+        }
+    }
+    free(list->values);
+    free(list->keys);
+    free(list);
+    node->u.list = NULL;
+}
+
 static void media_log_timestamp(char *buf, size_t buf_size) {
     if (!buf || buf_size == 0) return;
     struct timespec ts;
@@ -227,7 +249,7 @@ static void media_load_inputs_source(media_ctx *m, const options_t *opt, const p
 #define MEDIA_PUSH_STR(str) do { \
     root.u.list->values = realloc(root.u.list->values, sizeof(mpv_node) * (root.u.list->num + 1)); \
     root.u.list->values[root.u.list->num].format = MPV_FORMAT_STRING; \
-    root.u.list->values[root.u.list->num].u.string = (char *)(str); \
+    root.u.list->values[root.u.list->num].u.string = strdup(str); \
     root.u.list->num++; \
 } while (0)
             MEDIA_PUSH_STR("loadfile");
@@ -253,13 +275,14 @@ static void media_load_inputs_source(media_ctx *m, const options_t *opt, const p
                 map.u.list->keys = realloc(map.u.list->keys, sizeof(char *) * (map.u.list->num + 1));
                 map.u.list->keys[map.u.list->num] = key;
                 map.u.list->values[map.u.list->num].format = MPV_FORMAT_STRING;
-                map.u.list->values[map.u.list->num].u.string = (char *)val;
+                map.u.list->values[map.u.list->num].u.string = strdup(val);
                 map.u.list->num++;
             }
             root.u.list->values = realloc(root.u.list->values, sizeof(mpv_node) * (root.u.list->num + 1));
             root.u.list->values[root.u.list->num] = map;
             root.u.list->num++;
             mpv_command_node_async(m->mpv, 0, &root);
+            media_free_owned_node(&root);
         }
     }
     if (opt->shuffle) {
@@ -283,17 +306,13 @@ void media_handle_wakeup(media_ctx *m, bool debug, int *mpv_needs_render) {
             }
         } else if (ev->event_id == MPV_EVENT_START_FILE) {
             mpv_event_start_file *start_file = ev->data;
-            char *current_path = mpv_get_property_string(m->mpv, "path");
             if (debug) fprintf(stderr, "mpv: START_FILE\n");
             media_log_event(m, "START_FILE",
                             start_file ? start_file->playlist_entry_id : -1,
-                            current_path, NULL);
-            if (current_path) mpv_free(current_path);
+                            NULL, NULL);
         } else if (ev->event_id == MPV_EVENT_FILE_LOADED) {
-            char *current_path = mpv_get_property_string(m->mpv, "path");
             if (debug) fprintf(stderr, "mpv: FILE_LOADED\n");
-            media_log_event(m, "FILE_LOADED", -1, current_path, NULL);
-            if (current_path) mpv_free(current_path);
+            media_log_event(m, "FILE_LOADED", -1, NULL, NULL);
             *mpv_needs_render = 1;
         } else if (ev->event_id == MPV_EVENT_VIDEO_RECONFIG) {
             if (debug) fprintf(stderr, "mpv: VIDEO_RECONFIG\n");
@@ -304,10 +323,8 @@ void media_handle_wakeup(media_ctx *m, bool debug, int *mpv_needs_render) {
             *mpv_needs_render = 1;
         } else if (ev->event_id == MPV_EVENT_END_FILE) {
             mpv_event_end_file *end_file = ev->data;
-            char *current_path = mpv_get_property_string(m->mpv, "path");
             if (debug) fprintf(stderr, "mpv: END_FILE\n");
-            media_log_event(m, "END_FILE", -1, current_path, end_file);
-            if (current_path) mpv_free(current_path);
+            media_log_event(m, "END_FILE", -1, NULL, end_file);
         }
     }
     int flags = mpv_render_context_update(m->mpv_gl);
