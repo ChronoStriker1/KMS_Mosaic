@@ -124,6 +124,14 @@ class KmsMosaicWebHtmlTests(unittest.TestCase):
         self.assertNotIn('id="flagLoop"', html)
         self.assertNotIn('id="flagLoopPlaylist"', html)
 
+    def test_editor_exposes_display_selector_and_loads_connector_options(self):
+        html = self.module.HTML
+        self.assertIn("<label>Display", html)
+        self.assertIn('id="connector"', html)
+        self.assertIn('fetch("/api/connectors")', html)
+        self.assertIn("async function loadConnectorOptions()", html)
+        self.assertIn("connectorEl.value = state.connector || \"\";", html)
+
     def test_plugin_page_keeps_visible_resize_grips_after_relocation(self):
         html = PLUGIN_PAGE_PATH.read_text(encoding="utf-8")
         self.assertIn('#kmsStudioPlaceholder .studio-card.selected .studio-resize-handle {', html)
@@ -163,6 +171,9 @@ class KmsMosaicWebHtmlTests(unittest.TestCase):
         self.assertIn('kmsFilterRawConfigText(rawConfig)', html)
         self.assertIn('window.saveState = async function(...args)', html)
         self.assertIn('kmsSanitizeRawConfigField();', html)
+        self.assertIn(".replaceAll('/api/connectors', `${kmsActionUrl}?action=backend_connectors`)", html)
+        self.assertIn("if (typeof window.loadConnectorOptions === 'function') {", html)
+        self.assertIn("await window.loadConnectorOptions();", html)
 
 
 if __name__ == "__main__":

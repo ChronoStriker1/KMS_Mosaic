@@ -269,6 +269,12 @@ try {
     exit;
   }
 
+  if ($action === 'backend_connectors') {
+    header('Content-Type: application/json');
+    echo run_web_wrapper($web_wrapper, $cfg['CONFIG_PATH'], ['--dump-connectors']);
+    exit;
+  }
+
   if ($action === 'backend_config') {
     header('Content-Type: application/json');
     $json_payload = $_POST['payload'] ?? file_get_contents('php://input');

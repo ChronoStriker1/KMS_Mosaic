@@ -1096,6 +1096,7 @@ function kmsEmbeddedUrl(action) {
 function kmsRewriteBackendHtml(html) {
   return html
     .replaceAll('/api/state', `${kmsActionUrl}?action=backend_state`)
+    .replaceAll('/api/connectors', `${kmsActionUrl}?action=backend_connectors`)
     .replaceAll('/api/config', `${kmsActionUrl}?action=backend_config`)
     .replaceAll('/api/raw_config', `${kmsActionUrl}?action=backend_raw_config`)
       .replaceAll('/api/webrtc-offer', `${kmsActionUrl}?action=backend_webrtc_offer`)
@@ -1913,6 +1914,9 @@ async function kmsEnsureEmbeddedLoaded() {
       kmsInstallEmbeddedRuntimeWrappers();
       if (typeof window.fillForm === 'function') {
         window.fillForm(statePayload.state, statePayload.config_path, statePayload.raw_config);
+      }
+      if (typeof window.loadConnectorOptions === 'function') {
+        await window.loadConnectorOptions();
       }
       kmsMarkPluginSettingsSaved();
       if (typeof window.scheduleLivePreview === 'function') {
