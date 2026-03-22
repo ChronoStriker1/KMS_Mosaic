@@ -1347,7 +1347,7 @@ HTML = r"""<!doctype html>
       border-radius: var(--r);
       box-shadow: var(--shadow);
       backdrop-filter: blur(20px);
-      overflow: hidden;
+      overflow: clip;
     }
     .left-rail { position: sticky; top: 12px; }
     /* ─── app header ──────────────────────────────────── */
@@ -1359,7 +1359,7 @@ HTML = r"""<!doctype html>
       border-bottom: 1px solid var(--line);
       background: linear-gradient(180deg, rgba(255,255,255,0.55), rgba(255,255,255,0.25));
       min-height: 64px;
-      overflow: hidden;
+      overflow: clip;
     }
     .accent-bar {
       width: 4px;
@@ -1404,7 +1404,7 @@ HTML = r"""<!doctype html>
       border-radius: 14px;
       background: linear-gradient(180deg, #1a1714, #0c0b09);
       border: 1px solid rgba(0,0,0,0.28);
-      overflow: hidden;
+      overflow: clip;
       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04), 0 4px 12px rgba(0,0,0,0.18);
       margin: 0 auto;
     }
@@ -1473,7 +1473,7 @@ HTML = r"""<!doctype html>
     }
     /* ─── advanced block ──────────────────────────────── */
     details.advanced-block {
-      overflow: hidden;
+      overflow: clip;
     }
     details.advanced-block > summary {
       list-style: none;
@@ -2272,7 +2272,7 @@ HTML = r"""<!doctype html>
       border: 1px solid var(--line);
       border-radius: var(--r-sm);
       background: rgba(255,255,255,0.02);
-      overflow: hidden;
+      overflow: clip;
     }
     .playlist-bulk summary {
       cursor: pointer;
@@ -2303,7 +2303,7 @@ HTML = r"""<!doctype html>
       border: 1px solid var(--line);
       border-radius: var(--r-sm);
       background: rgba(255,255,255,0.02);
-      overflow: hidden;
+      overflow: clip;
     }
     .layout-suggestions-block summary {
       cursor: pointer;
