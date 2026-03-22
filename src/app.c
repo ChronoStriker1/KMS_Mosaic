@@ -2,13 +2,16 @@
 
 #include "app.h"
 
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <termios.h>
@@ -16,6 +19,9 @@
 
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
+
+#include <linux/kd.h>
+#include <linux/vt.h>
 
 #include <mpv/client.h>
 
@@ -93,6 +99,77 @@ static void app_scene_destroy(app_scene *scene) {
 
 static void restore_tty(void) {
     if (g_have_oldt) tcsetattr(0, TCSANOW, &g_oldt);
+}
+
+static void app_write_text_file(const char *path, const char *value) {
+    if (!path || !value) return;
+    FILE *fp = fopen(path, "w");
+    if (!fp) return;
+    fputs(value, fp);
+    fclose(fp);
+}
+
+static bool app_read_text_file(const char *path, char *buf, size_t buf_size) {
+    if (!path || !buf || buf_size == 0) return false;
+    FILE *fp = fopen(path, "r");
+    if (!fp) return false;
+    bool ok = fgets(buf, (int)buf_size, fp) != NULL;
+    fclose(fp);
+    return ok;
+}
+
+static void app_rebind_fbcon(void) {
+    DIR *dir = opendir("/sys/class/vtconsole");
+    if (!dir) return;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue;
+        char name_path[256];
+        char bind_path[256];
+        snprintf(name_path, sizeof(name_path), "/sys/class/vtconsole/%s/name", entry->d_name);
+        snprintf(bind_path, sizeof(bind_path), "/sys/class/vtconsole/%s/bind", entry->d_name);
+        char name_buf[128] = {0};
+        if (!app_read_text_file(name_path, name_buf, sizeof(name_buf))) continue;
+        if (!strstr(name_buf, "frame buffer")) continue;
+        app_write_text_file(bind_path, "0\n");
+        usleep(100000);
+        app_write_text_file(bind_path, "1\n");
+    }
+    closedir(dir);
+}
+
+static void app_unblank_framebuffers(void) {
+    DIR *dir = opendir("/sys/class/graphics");
+    if (!dir) return;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "fb", 2) != 0) continue;
+        if (strcmp(entry->d_name, "fbcon") == 0) continue;
+        char blank_path[256];
+        snprintf(blank_path, sizeof(blank_path), "/sys/class/graphics/%s/blank", entry->d_name);
+        app_write_text_file(blank_path, "0\n");
+    }
+    closedir(dir);
+}
+
+static void app_restore_linux_console(void) {
+    app_rebind_fbcon();
+    app_unblank_framebuffers();
+
+    int vt_fd = open("/dev/tty0", O_RDWR | O_NOCTTY);
+    if (vt_fd >= 0) {
+        int vt = 1;
+        ioctl(vt_fd, VT_ACTIVATE, vt);
+        ioctl(vt_fd, VT_WAITACTIVE, vt);
+        close(vt_fd);
+    }
+
+    int tty_fd = open("/dev/tty1", O_RDWR | O_NOCTTY);
+    if (tty_fd >= 0) {
+        ioctl(tty_fd, KDSETMODE, KD_TEXT);
+        write(tty_fd, "\033c\033[2J\033[H", 10);
+        close(tty_fd);
+    }
 }
 
 static void app_die(const char *msg) {
@@ -505,6 +582,7 @@ static void app_cleanup(const options_t *opt, media_ctx *m, media_ctx *pane_medi
     if (d->conn) drmModeFreeConnector(d->conn);
     if (d->res) drmModeFreeResources(d->res);
     if (d->fd >= 0) close(d->fd);
+    app_restore_linux_console();
 }
 
 int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag) {

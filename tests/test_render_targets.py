@@ -91,6 +91,20 @@ class RenderTargetTests(unittest.TestCase):
         self.assertIn("return firstMediaPane >= 0 ? firstMediaPane : -1;", web_src)
         self.assertIn("if (resolvedRole < 0) return 0;", web_src)
 
+    def test_app_cleanup_restores_linux_console_after_drm_shutdown(self) -> None:
+        app_src = APP_C.read_text(encoding="utf-8")
+        self.assertIn("static void app_restore_linux_console(void)", app_src)
+        self.assertIn('"/sys/class/vtconsole"', app_src)
+        self.assertIn("KDSETMODE", app_src)
+        self.assertIn("KD_TEXT", app_src)
+        self.assertIn("VT_ACTIVATE", app_src)
+        self.assertIn("VT_WAITACTIVE", app_src)
+        self.assertIn("app_restore_linux_console();", app_src)
+        self.assertLess(
+            app_src.find("if (d->fd >= 0) close(d->fd);"),
+            app_src.find("app_restore_linux_console();"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
