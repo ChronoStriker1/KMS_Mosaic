@@ -73,7 +73,8 @@ class RenderTargetTests(unittest.TestCase):
         self.assertNotIn("if (use_mpv && (!ui->fullscreen || ui->fs_pane == 0))", frame_src)
         self.assertNotIn("focus_layouts[KMS_MOSAIC_SLOT_VIDEO]", frame_src)
         self.assertIn("const pane_layout *focus_layout = &pane_layouts[focus_slot];", frame_src)
-        self.assertIn("bool pane_visible = !ui->fullscreen || ui->fs_pane == i;", frame_src)
+        self.assertIn("bool pane_hidden = options_pane_hidden(opt, i);", frame_src)
+        self.assertIn("bool pane_visible = !pane_hidden && (!ui->fullscreen || ui->fs_pane == i);", frame_src)
         self.assertIn("media_ctx *pane_ctx = NULL;", frame_src)
 
         self.assertNotIn("(i == 0 && use_mpv) ? m->mpv : NULL", app_src)

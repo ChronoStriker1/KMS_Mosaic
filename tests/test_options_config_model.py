@@ -91,6 +91,7 @@ class OptionsConfigModelTests(unittest.TestCase):
                         printf("pane1_media=%d\\n", opt.pane_media[1].enabled ? 1 : 0);
                         printf("pane2_media=%d\\n", opt.pane_media[2].enabled ? 1 : 0);
                         printf("split_tree=%s\\n", opt.split_tree_spec ? opt.split_tree_spec : "(null)");
+                        printf("visibility=%s\\n", visibility_mode_name(opt.visibility_mode));
                         options_destroy(&opt);
                         return 0;
                     }}
@@ -139,6 +140,7 @@ class OptionsConfigModelTests(unittest.TestCase):
                 --pane-b 'tail -F /var/log/syslog'
                 --pane-media 3
                 --pane-video 3 /mnt/user/demo.mp4
+                --visibility-mode no-video
                 """
             ),
             [
@@ -150,6 +152,7 @@ class OptionsConfigModelTests(unittest.TestCase):
                 "pane1_media=0",
                 "pane2_media=1",
                 "split_tree=row:50(0,col:50(1,2))",
+                "visibility=no-video",
             ],
         )
 
@@ -178,6 +181,32 @@ class OptionsConfigModelTests(unittest.TestCase):
                 "pane1_media=0",
                 "pane2_media=0",
                 "split_tree=col:60(0,row:50(1,col:50(2,3)))",
+                "visibility=neither",
+            ],
+        )
+
+    def test_web_visibility_mode_cli_round_trips_without_legacy_flags(self):
+        self.assertEqual(
+            self._probe_config(
+                """
+                --pane-count 3
+                --pane-a 'htop'
+                --pane-media 2
+                --pane-video 2 /media/main.mp4
+                --pane-c 'tail -f /var/log/syslog'
+                --visibility-mode no-terminal
+                """
+            ),
+            [
+                "pane_count=3",
+                "pane0_cmd=htop",
+                "pane1_cmd=(null)",
+                "pane2_cmd=tail -f /var/log/syslog",
+                "pane0_media=0",
+                "pane1_media=1",
+                "pane2_media=0",
+                "split_tree=(null)",
+                "visibility=no-terminal",
             ],
         )
 

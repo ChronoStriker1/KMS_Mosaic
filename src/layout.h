@@ -17,6 +17,8 @@ void compute_mosaic_layout(int screen_w, int screen_h, int layout_mode,
                            int right_frac_pct, int pane_split_pct, int pane_count,
                            const char *split_tree_spec,
                            rotation_t rotation, const int *perm,
+                           visibility_mode_t visibility_mode,
+                           const pane_media_config *pane_media,
                            bool overlay_swap, bool fullscreen, int fs_pane,
                            mosaic_layout *out);
 

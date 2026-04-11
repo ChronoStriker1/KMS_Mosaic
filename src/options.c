@@ -32,6 +32,23 @@ rotation_t parse_rot(const char *s) {
     }
 }
 
+visibility_mode_t parse_visibility_mode(const char *s) {
+    if (!s) return VISIBILITY_MODE_NEITHER;
+    if (!strcmp(s, "no-video")) return VISIBILITY_MODE_NO_VIDEO;
+    if (!strcmp(s, "no-terminal") || !strcmp(s, "no-panes")) return VISIBILITY_MODE_NO_TERMINAL;
+    return VISIBILITY_MODE_NEITHER;
+}
+
+const char *visibility_mode_name(visibility_mode_t mode) {
+    switch (mode) {
+        case VISIBILITY_MODE_NO_VIDEO: return "no-video";
+        case VISIBILITY_MODE_NO_TERMINAL: return "no-terminal";
+        case VISIBILITY_MODE_NEITHER:
+        default:
+            return "neither";
+    }
+}
+
 int parse_layout_mode(const char *s) {
     if (!s) return -1;
     if (!strcmp(s, "stack") || !strcmp(s, "stack3")) return 0;
@@ -319,6 +336,14 @@ static bool options_should_infer_legacy_pane_model(const options_t *opt, const c
     return root_media_present || legacy_hint || split_tree_legacy_hint;
 }
 
+bool options_pane_hidden(const options_t *opt, int pane_index) {
+    if (!opt || pane_index < 0 || pane_index >= opt->pane_count) return false;
+    bool is_media = opt->pane_media && opt->pane_media[pane_index].enabled;
+    if (opt->visibility_mode == VISIBILITY_MODE_NO_VIDEO) return is_media;
+    if (opt->visibility_mode == VISIBILITY_MODE_NO_TERMINAL) return !is_media;
+    return false;
+}
+
 void push_video(options_t *opt, const char *path) {
     if (opt->video_count == opt->video_cap) {
         int ncap = opt->video_cap ? opt->video_cap * 2 : 8;
@@ -573,6 +598,7 @@ static void print_usage(const char *exe) {
         "  --pane-mpv-out N FILE   Write pane-local mpv logs/events to FILE or FIFO.\n"
         "  --pane-video-rotate N D Per-pane pass-through to mpv video-rotate.\n"
         "  --pane-panscan N VAL    Per-pane pass-through to mpv panscan.\n"
+        "  --visibility-mode MODE  Visual pane filter: neither, no-video, or no-terminal.\n"
         "  --pane-model MODEL      Pane indexing model: unified (default) or legacy.\n"
         "  --split-tree SPEC        Explicit split-tree layout override.\n"
         "  --layout M              stack | row | 2x1 | 1x2 | 2over1 | 1over2 | overlay\n"
@@ -857,6 +883,9 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
         else if (!strcmp(argv[i], "--list-connectors")) opt->list_connectors = true;
         else if (!strcmp(argv[i], "--no-video")) opt->no_video = true;
         else if (!strcmp(argv[i], "--no-panes")) opt->no_panes = true;
+        else if (!strcmp(argv[i], "--visibility-mode") && i + 1 < argc) {
+            opt->visibility_mode = parse_visibility_mode(argv[++i]);
+        }
         else if (!strcmp(argv[i], "--diag")) opt->diag = true;
         else if (!strcmp(argv[i], "--gl-test")) opt->gl_test = true;
         else if (!strcmp(argv[i], "--no-config")) opt->no_config = true;
@@ -1003,6 +1032,9 @@ void save_config(const options_t *opt, const char *path) {
         if (pm->panscan) fprintf(f, "--pane-panscan %d '%s'\n", i + 1, pm->panscan);
         for (int vi = 0; vi < pm->video_count; ++vi) fprintf(f, "--pane-video %d '%s'\n", i + 1, pm->videos[vi].path);
         for (int oi = 0; oi < pm->n_mpv_opts; ++oi) fprintf(f, "--pane-mpv-opt %d '%s'\n", i + 1, pm->mpv_opts[oi]);
+    }
+    if (opt->visibility_mode != VISIBILITY_MODE_NEITHER) {
+        fprintf(f, "--visibility-mode %s\n", visibility_mode_name(opt->visibility_mode));
     }
     if (opt->no_video) fprintf(f, "--no-video\n");
     if (opt->shuffle) fprintf(f, "--shuffle\n");
