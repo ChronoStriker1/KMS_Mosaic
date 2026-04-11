@@ -6,6 +6,11 @@
 #include <mpv/client.h>
 
 typedef enum { ROT_0 = 0, ROT_90 = 90, ROT_180 = 180, ROT_270 = 270 } rotation_t;
+typedef enum {
+    VISIBILITY_MODE_NEITHER = 0,
+    VISIBILITY_MODE_NO_VIDEO,
+    VISIBILITY_MODE_NO_TERMINAL,
+} visibility_mode_t;
 
 enum {
     KMS_MOSAIC_DEFAULT_PANE_COUNT = 2,
@@ -67,6 +72,7 @@ typedef struct {
     bool list_connectors;
     bool no_video;
     bool no_panes;
+    visibility_mode_t visibility_mode;
     bool gl_test;
     bool diag;
     bool loop_file;
@@ -99,9 +105,12 @@ typedef struct {
 
 void parse_mode(const char *s, int *w, int *h, int *hz);
 rotation_t parse_rot(const char *s);
+visibility_mode_t parse_visibility_mode(const char *s);
+const char *visibility_mode_name(visibility_mode_t mode);
 int parse_layout_mode(const char *s);
 const char *layout_mode_name(int mode);
 bool parse_roles_string(const char *s, int *roles, int role_count);
+bool options_pane_hidden(const options_t *opt, int pane_index);
 void push_video(options_t *opt, const char *path);
 void push_pane_video(pane_media_config *pane_media, const char *path);
 void push_video_opt(video_item *vi, const char *kv);

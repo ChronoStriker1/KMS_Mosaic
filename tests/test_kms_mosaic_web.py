@@ -642,6 +642,7 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         text = kms_mosaic_web.build_config_text(state)
         reparsed = kms_mosaic_web.parse_config_text(text)
 
+        self.assertIn("--visibility-mode no-video", text)
         self.assertNotIn("--no-video", text)
         self.assertNotIn("--no-panes", text)
         self.assertIn('"visibility_mode":"no-video"', text)

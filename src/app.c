@@ -397,7 +397,7 @@ static void app_init_scene(const options_t *opt, bool use_mpv, pane_runtime *pan
     if (!mosaic_layout_init(&initial_layout, KMS_MOSAIC_SLOT_PANE_BASE + scene->pane_count)) app_die("mosaic_layout_init");
     compute_mosaic_layout(scene->screen_w, scene->screen_h, opt->layout_mode, opt->right_frac_pct,
                           opt->pane_split_pct, scene->pane_count, opt->split_tree_spec,
-                          opt->rotation, ui->perm, ui->overlay_swap,
+                          opt->rotation, ui->perm, opt->visibility_mode, opt->pane_media, ui->overlay_swap,
                           ui->fullscreen, ui->fs_pane, &initial_layout);
     for (int i = 0; i < KMS_MOSAIC_SLOT_PANE_BASE + scene->pane_count; ++i) scene->slot_layouts[i] = initial_layout.role_layouts[i];
     for (int i = 0; i < scene->pane_count; ++i) scene->pane_layouts[i] = scene->slot_layouts[KMS_MOSAIC_SLOT_PANE_BASE + i];
@@ -521,7 +521,7 @@ static void app_update_layout(const options_t *opt, ui_state *ui, pane_runtime *
     if (!mosaic_layout_init(&active_layout, KMS_MOSAIC_SLOT_PANE_BASE + scene->pane_count)) app_die("mosaic_layout_init");
     compute_mosaic_layout(scene->screen_w, scene->screen_h, opt->layout_mode, opt->right_frac_pct,
                           opt->pane_split_pct, scene->pane_count, opt->split_tree_spec,
-                          opt->rotation, ui->perm, ui->overlay_swap,
+                          opt->rotation, ui->perm, opt->visibility_mode, opt->pane_media, ui->overlay_swap,
                           ui->fullscreen, ui->fs_pane, &active_layout);
     for (int i = 0; i < KMS_MOSAIC_SLOT_PANE_BASE + scene->pane_count; ++i) scene->slot_layouts[i] = active_layout.role_layouts[i];
     for (int i = 0; i < scene->pane_count; ++i) scene->pane_layouts[i] = scene->slot_layouts[KMS_MOSAIC_SLOT_PANE_BASE + i];

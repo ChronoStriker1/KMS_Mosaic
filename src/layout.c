@@ -212,104 +212,135 @@ static void split_tree_apply(const split_tree_node *node, pane_layout area,
     }
 }
 
-bool mosaic_layout_init(mosaic_layout *layout, int role_count) {
-    memset(layout, 0, sizeof(*layout));
-    layout->role_layouts = calloc((size_t)role_count, sizeof(*layout->role_layouts));
-    layout->role_count = layout->role_layouts ? role_count : 0;
-    return layout->role_layouts != NULL;
+static void split_tree_collect_roles(const split_tree_node *node, int role_count,
+                                     int *out_roles, int *out_count, bool *seen) {
+    if (!node || !out_roles || !out_count || !seen) return;
+    if (node->leaf) {
+        if (node->role >= 0 && node->role < role_count && !seen[node->role]) {
+            out_roles[(*out_count)++] = node->role;
+            seen[node->role] = true;
+        }
+        return;
+    }
+    split_tree_collect_roles(node->first, role_count, out_roles, out_count, seen);
+    split_tree_collect_roles(node->second, role_count, out_roles, out_count, seen);
 }
 
-void mosaic_layout_destroy(mosaic_layout *layout) {
-    if (!layout) return;
-    free(layout->role_layouts);
-    layout->role_layouts = NULL;
-    layout->role_count = 0;
+static void ordered_roles_from_perm(const int *perm, int role_count, int *ordered_roles) {
+    int count = 0;
+    for (int slot = 0; slot < role_count; ++slot) {
+        for (int role = 0; role < role_count; ++role) {
+            if (perm && perm[role] == slot) {
+                ordered_roles[count++] = role;
+                break;
+            }
+        }
+    }
+    while (count < role_count) {
+        ordered_roles[count] = count;
+        count++;
+    }
 }
 
-void compute_mosaic_layout(int screen_w, int screen_h, int layout_mode,
-                           int right_frac_pct, int pane_split_pct, int pane_count,
-                           const char *split_tree_spec,
-                           rotation_t rotation, const int *perm,
-                           bool overlay_swap, bool fullscreen, int fs_pane,
-                           mosaic_layout *out) {
-    if (!out || !out->role_layouts) return;
-    memset(out->role_layouts, 0, (size_t)out->role_count * sizeof(*out->role_layouts));
-
-    int mode = layout_mode;
-    int split_pct = clamp_split_pct(pane_split_pct);
-    int col_pct = clamp_col_pct(right_frac_pct);
-    int role_count = pane_count;
-    pane_layout s0 = {0}, s1 = {0}, s2 = {0};
+static int visible_ordered_roles(const char *split_tree_spec, const int *perm,
+                                 const bool *role_visible, int role_count,
+                                 int *ordered_roles) {
+    int ordered_count = 0;
+    bool *seen = calloc((size_t)role_count, sizeof(*seen));
+    if (!seen) return 0;
 
     if (split_tree_spec && *split_tree_spec) {
         split_tree_node *tree = NULL;
         if (split_tree_parse(split_tree_spec, &tree)) {
             split_tree_node *translated = split_tree_translate_legacy_roles(tree, role_count);
             if (translated) {
-                split_tree_apply(translated,
-                                 (pane_layout){ .x = 0, .y = 0, .w = screen_w, .h = screen_h },
-                                 out->role_layouts, role_count);
-                if (fullscreen) {
-                    pane_layout full = { .x = 0, .y = 0, .w = screen_w, .h = screen_h };
-                    out->role_layouts[fs_pane >= 0 && fs_pane < role_count ? fs_pane : KMS_MOSAIC_SLOT_PANE_A] = full;
-                }
+                split_tree_collect_roles(translated, role_count, ordered_roles, &ordered_count, seen);
                 split_tree_destroy(translated);
-                split_tree_destroy(tree);
-                return;
             }
             split_tree_destroy(tree);
         }
     }
 
-    if (pane_count > 2) {
-        pane_layout *slots = calloc((size_t)role_count, sizeof(*slots));
-        pane_layout pane_area = {0};
-        if (!slots) return;
-
-        if (mode == 0) {
-            split_vertical((pane_layout){ .x = 0, .y = 0, .w = screen_w, .h = screen_h }, role_count, slots);
-        } else if (mode == 1) {
-            split_horizontal((pane_layout){ .x = 0, .y = 0, .w = screen_w, .h = screen_h }, role_count, slots);
-        } else if (mode == 2) {
-            int wleft = screen_w * col_pct / 100;
-            slots[KMS_MOSAIC_SLOT_PANE_A] =
-                (pane_layout){ .x = wleft, .y = 0, .w = screen_w - wleft, .h = screen_h };
-            pane_area = (pane_layout){ .x = 0, .y = 0, .w = wleft, .h = screen_h };
-            tile_rects(pane_area, pane_count - 1, &slots[KMS_MOSAIC_SLOT_PANE_B]);
-        } else if (mode == 3) {
-            int wleft = screen_w * col_pct / 100;
-            slots[KMS_MOSAIC_SLOT_PANE_A] = (pane_layout){ .x = 0, .y = 0, .w = wleft, .h = screen_h };
-            pane_area = (pane_layout){ .x = wleft, .y = 0, .w = screen_w - wleft, .h = screen_h };
-            tile_rects(pane_area, pane_count - 1, &slots[KMS_MOSAIC_SLOT_PANE_B]);
-        } else if (mode == 4) {
-            int htop = screen_h * split_pct / 100;
-            pane_area = (pane_layout){ .x = 0, .y = screen_h - htop, .w = screen_w, .h = htop };
-            slots[KMS_MOSAIC_SLOT_PANE_A] =
-                (pane_layout){ .x = 0, .y = 0, .w = screen_w, .h = screen_h - htop };
-            tile_rects(pane_area, pane_count - 1, &slots[KMS_MOSAIC_SLOT_PANE_B]);
-        } else if (mode == 5) {
-            int htop = screen_h * split_pct / 100;
-            slots[KMS_MOSAIC_SLOT_PANE_A] =
-                (pane_layout){ .x = 0, .y = screen_h - htop, .w = screen_w, .h = htop };
-            pane_area = (pane_layout){ .x = 0, .y = 0, .w = screen_w, .h = screen_h - htop };
-            tile_rects(pane_area, pane_count - 1, &slots[KMS_MOSAIC_SLOT_PANE_B]);
-        } else {
-            slots[KMS_MOSAIC_SLOT_PANE_A] = (pane_layout){ .x = 0, .y = 0, .w = screen_w, .h = screen_h };
-            pane_area = (pane_layout){ .x = screen_w / 10, .y = screen_h / 10, .w = screen_w * 8 / 10, .h = screen_h * 8 / 10 };
-            tile_rects(pane_area, pane_count - 1, &slots[KMS_MOSAIC_SLOT_PANE_B]);
+    if (ordered_count < role_count) {
+        int *perm_roles = calloc((size_t)role_count, sizeof(*perm_roles));
+        if (perm_roles) {
+            ordered_roles_from_perm(perm, role_count, perm_roles);
+            for (int i = 0; i < role_count; ++i) {
+                int role = perm_roles[i];
+                if (role >= 0 && role < role_count && !seen[role]) {
+                    ordered_roles[ordered_count++] = role;
+                    seen[role] = true;
+                }
+            }
+            free(perm_roles);
         }
+    }
 
-        for (int role = 0; role < role_count; ++role) out->role_layouts[role] = slots[perm[role]];
-        if (fullscreen) {
-            pane_layout full = { .x = 0, .y = 0, .w = screen_w, .h = screen_h };
-            out->role_layouts[fs_pane >= 0 && fs_pane < role_count ? fs_pane : KMS_MOSAIC_SLOT_PANE_A] = full;
-        }
-        free(slots);
+    int visible_count = 0;
+    for (int i = 0; i < ordered_count; ++i) {
+        int role = ordered_roles[i];
+        if (role_visible[role]) ordered_roles[visible_count++] = role;
+    }
+    free(seen);
+    return visible_count;
+}
+
+static void build_visible_slots(int screen_w, int screen_h, int mode,
+                                int split_pct, int col_pct, rotation_t rotation,
+                                bool overlay_swap, int visible_count,
+                                pane_layout *slots) {
+    if (!slots || visible_count <= 0) return;
+
+    pane_layout screen = { .x = 0, .y = 0, .w = screen_w, .h = screen_h };
+    if (visible_count <= 1) {
+        slots[0] = screen;
+        return;
+    }
+    if (visible_count == 2) {
+        if (mode == 1) split_horizontal(screen, 2, slots);
+        else split_vertical(screen, 2, slots);
         return;
     }
 
+    int pane_count = visible_count - 1;
+    int role_count = visible_count;
+    if (pane_count > 2) {
+        pane_layout pane_area = {0};
+        if (mode == 0) {
+            split_vertical(screen, role_count, slots);
+        } else if (mode == 1) {
+            split_horizontal(screen, role_count, slots);
+        } else if (mode == 2) {
+            int wleft = screen_w * col_pct / 100;
+            slots[0] = (pane_layout){ .x = wleft, .y = 0, .w = screen_w - wleft, .h = screen_h };
+            pane_area = (pane_layout){ .x = 0, .y = 0, .w = wleft, .h = screen_h };
+            tile_rects(pane_area, pane_count, &slots[1]);
+        } else if (mode == 3) {
+            int wleft = screen_w * col_pct / 100;
+            slots[0] = (pane_layout){ .x = 0, .y = 0, .w = wleft, .h = screen_h };
+            pane_area = (pane_layout){ .x = wleft, .y = 0, .w = screen_w - wleft, .h = screen_h };
+            tile_rects(pane_area, pane_count, &slots[1]);
+        } else if (mode == 4) {
+            int htop = screen_h * split_pct / 100;
+            pane_area = (pane_layout){ .x = 0, .y = screen_h - htop, .w = screen_w, .h = htop };
+            slots[0] = (pane_layout){ .x = 0, .y = 0, .w = screen_w, .h = screen_h - htop };
+            tile_rects(pane_area, pane_count, &slots[1]);
+        } else if (mode == 5) {
+            int htop = screen_h * split_pct / 100;
+            slots[0] = (pane_layout){ .x = 0, .y = screen_h - htop, .w = screen_w, .h = htop };
+            pane_area = (pane_layout){ .x = 0, .y = 0, .w = screen_w, .h = screen_h - htop };
+            tile_rects(pane_area, pane_count, &slots[1]);
+        } else {
+            slots[0] = screen;
+            pane_area = (pane_layout){ .x = screen_w / 10, .y = screen_h / 10, .w = screen_w * 8 / 10, .h = screen_h * 8 / 10 };
+            tile_rects(pane_area, pane_count, &slots[1]);
+        }
+        return;
+    }
+
+    pane_layout s0 = {0}, s1 = {0}, s2 = {0};
     if (mode == 6) {
-        s0 = (pane_layout){ .x = 0, .y = 0, .w = screen_w, .h = screen_h };
+        s0 = screen;
         if (rotation == ROT_0 || rotation == ROT_180) {
             int wleft = screen_w * split_pct / 100;
             int wright = screen_w - wleft;
@@ -369,18 +400,103 @@ void compute_mosaic_layout(int screen_w, int screen_h, int layout_mode,
         s2 = (pane_layout){ .x = wleft, .y = 0, .w = wright, .h = hbot };
     }
 
-    if (mode == 6) {
-        out->role_layouts[KMS_MOSAIC_SLOT_PANE_A] = s0;
-        if (role_count > 1) out->role_layouts[KMS_MOSAIC_SLOT_PANE_B] = overlay_swap ? s2 : s1;
-    } else {
-        pane_layout slots[3] = { s0, s1, s2 };
-        for (int role = 0; role < role_count; ++role) {
-            out->role_layouts[role] = slots[perm[role]];
+    slots[0] = s0;
+    slots[1] = (mode == 6 && overlay_swap) ? s2 : s1;
+    slots[2] = (mode == 6 && overlay_swap) ? s1 : s2;
+}
+
+bool mosaic_layout_init(mosaic_layout *layout, int role_count) {
+    memset(layout, 0, sizeof(*layout));
+    layout->role_layouts = calloc((size_t)role_count, sizeof(*layout->role_layouts));
+    layout->role_count = layout->role_layouts ? role_count : 0;
+    return layout->role_layouts != NULL;
+}
+
+void mosaic_layout_destroy(mosaic_layout *layout) {
+    if (!layout) return;
+    free(layout->role_layouts);
+    layout->role_layouts = NULL;
+    layout->role_count = 0;
+}
+
+void compute_mosaic_layout(int screen_w, int screen_h, int layout_mode,
+                           int right_frac_pct, int pane_split_pct, int pane_count,
+                           const char *split_tree_spec,
+                           rotation_t rotation, const int *perm,
+                           visibility_mode_t visibility_mode,
+                           const pane_media_config *pane_media,
+                           bool overlay_swap, bool fullscreen, int fs_pane,
+                           mosaic_layout *out) {
+    if (!out || !out->role_layouts) return;
+    memset(out->role_layouts, 0, (size_t)out->role_count * sizeof(*out->role_layouts));
+
+    int mode = layout_mode;
+    int split_pct = clamp_split_pct(pane_split_pct);
+    int col_pct = clamp_col_pct(right_frac_pct);
+    int role_count = pane_count;
+    bool *role_visible = calloc((size_t)role_count, sizeof(*role_visible));
+    if (!role_visible) return;
+    int visible_count = 0;
+    int first_visible_role = -1;
+    for (int role = 0; role < role_count; ++role) {
+        bool is_media = pane_media && pane_media[role].enabled;
+        role_visible[role] =
+            visibility_mode == VISIBILITY_MODE_NO_VIDEO ? !is_media :
+            visibility_mode == VISIBILITY_MODE_NO_TERMINAL ? is_media :
+            true;
+        if (role_visible[role]) {
+            if (first_visible_role < 0) first_visible_role = role;
+            visible_count++;
         }
+    }
+
+    if (visible_count == role_count && split_tree_spec && *split_tree_spec) {
+        split_tree_node *tree = NULL;
+        if (split_tree_parse(split_tree_spec, &tree)) {
+            split_tree_node *translated = split_tree_translate_legacy_roles(tree, role_count);
+            if (translated) {
+                split_tree_apply(translated,
+                                 (pane_layout){ .x = 0, .y = 0, .w = screen_w, .h = screen_h },
+                                 out->role_layouts, role_count);
+                if (fullscreen) {
+                    pane_layout full = { .x = 0, .y = 0, .w = screen_w, .h = screen_h };
+                    int target_role = fs_pane >= 0 && fs_pane < role_count ? fs_pane : KMS_MOSAIC_SLOT_PANE_A;
+                    if (role_visible[target_role]) out->role_layouts[target_role] = full;
+                }
+                split_tree_destroy(translated);
+                split_tree_destroy(tree);
+                free(role_visible);
+                return;
+            }
+            split_tree_destroy(tree);
+        }
+    }
+
+    if (visible_count > 0) {
+        int *ordered_roles = calloc((size_t)role_count, sizeof(*ordered_roles));
+        pane_layout *slots = calloc((size_t)visible_count, sizeof(*slots));
+        if (!ordered_roles || !slots) {
+            free(ordered_roles);
+            free(slots);
+            free(role_visible);
+            return;
+        }
+        int ordered_visible_count = visible_ordered_roles(split_tree_spec, perm, role_visible, role_count, ordered_roles);
+        build_visible_slots(screen_w, screen_h, mode, split_pct, col_pct, rotation, overlay_swap, ordered_visible_count, slots);
+        for (int index = 0; index < ordered_visible_count; ++index) {
+            int role = ordered_roles[index];
+            out->role_layouts[role] = slots[index];
+        }
+        free(ordered_roles);
+        free(slots);
     }
 
     if (fullscreen) {
         pane_layout full = { .x = 0, .y = 0, .w = screen_w, .h = screen_h };
-        out->role_layouts[fs_pane >= 0 && fs_pane < role_count ? fs_pane : KMS_MOSAIC_SLOT_PANE_A] = full;
+        int target_role = fs_pane >= 0 && fs_pane < role_count ? fs_pane : first_visible_role;
+        if (target_role >= 0 && target_role < role_count && role_visible[target_role]) {
+            out->role_layouts[target_role] = full;
+        }
     }
+    free(role_visible);
 }

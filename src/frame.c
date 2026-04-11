@@ -81,7 +81,8 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         panes_sync_layout(panes, pane_layouts, pane_count, pane_font_px);
         if (ui->layout_reinit_countdown > 0) ui->layout_reinit_countdown--;
         for (int i = 0; i < pane_count; ++i) {
-            bool pane_visible = !ui->fullscreen || ui->fs_pane == i;
+            bool pane_hidden = options_pane_hidden(opt, i);
+            bool pane_visible = !pane_hidden && (!ui->fullscreen || ui->fs_pane == i);
             media_ctx *pane_ctx = NULL;
             int *pane_needs_render = NULL;
             if (pane_media && pane_media[i].mpv_gl) {

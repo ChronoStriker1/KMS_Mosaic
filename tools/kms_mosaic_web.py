@@ -776,6 +776,9 @@ def parse_config_text(text: str) -> dict[str, Any]:
             elif tok == "--panscan" and nxt is not None:
                 state["panscan"] = nxt
                 i += 2
+            elif tok == "--visibility-mode" and nxt is not None:
+                state["visibility_mode"] = normalize_visibility_mode(nxt)
+                i += 2
             elif tok == "--no-video":
                 state["flags"]["no_video"] = True
                 i += 1
@@ -957,6 +960,8 @@ def build_config_text(state: dict[str, Any]) -> str:
         state.get("visibility_mode"),
         visibility_mode_from_flags(flags),
     )
+    if visibility_mode != "neither":
+        lines.append(f"--visibility-mode {visibility_mode}")
     if visibility_mode != "neither":
         metadata["visibility_mode"] = visibility_mode
     raw_types = [str(value or "") for value in state.get("pane_type_raw", [])[:pane_count]]
