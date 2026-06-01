@@ -71,9 +71,12 @@ exclude_lib() {
   case "$(basename "$1")" in
     linux-vdso.so.*|ld-linux*.so*|ld-musl*.so*) return 0 ;;
     libc.so.*|libm.so.*|libdl.so.*|librt.so.*|libpthread.so.*|libgcc_s.so.*|libstdc++.so.*) return 0 ;;
-    # Keep system libdrm and libgbm to match kernel/DRM; allow bundling GLVND libs (libEGL/libGLESv2)
-    libdrm.so.*|libgbm.so.*) return 0 ;;
-    libX11.so.*|libXext.so.*|libxcb.so.*) return 0 ;;
+    # Keep the KMS/DRM/GLVND/Mesa-facing stack from Unraid so packaged
+    # libraries do not shadow the host GPU driver after OS upgrades.
+    libdrm*.so.*|libgbm.so.*|libEGL*.so.*|libGLESv2.so.*|libGL*.so.*|libOpenGL.so.*|libgallium*.so.*) return 0 ;;
+    libX11*.so.*|libXau.so.*|libXdmcp.so.*|libXext.so.*|libxcb*.so.*|libwayland*.so.*|libxshmfence.so.*|libpciaccess.so.*) return 0 ;;
+    libLLVM*.so.*|libSPIRV*.so.*|libsensors.so.*|libelf.so.*|libedit.so.*) return 0 ;;
+    libexpat.so.*|libz.so.*|libzstd.so.*|liblzma.so.*|libbz2.so.*|libffi.so.*|libncursesw.so.*|libtinfo.so.*) return 0 ;;
   esac
   return 1
 }
@@ -137,6 +140,19 @@ done
 rm -f "$LIBDIR"/libstdc++.so.* "$LIBDIR"/libgcc_s.so.* "$LIBDIR"/libc.so.* "$LIBDIR"/libm.so.* \
       "$LIBDIR"/libpthread.so.* "$LIBDIR"/librt.so.* "$LIBDIR"/libdl.so.* || true
 
+# Safety: never ship the host GPU driver stack. These libraries must stay in
+# lockstep with Unraid's Mesa/GLVND/DRM stack across OS updates.
+rm -f "$LIBDIR"/libdrm*.so* "$LIBDIR"/libgbm.so* "$LIBDIR"/libEGL*.so* \
+      "$LIBDIR"/libGLESv2.so* "$LIBDIR"/libGL*.so* "$LIBDIR"/libOpenGL.so* \
+      "$LIBDIR"/libgallium*.so* "$LIBDIR"/libX11*.so* "$LIBDIR"/libXau.so* \
+      "$LIBDIR"/libXdmcp.so* "$LIBDIR"/libXext.so* "$LIBDIR"/libxcb*.so* \
+      "$LIBDIR"/libwayland*.so* "$LIBDIR"/libxshmfence.so* "$LIBDIR"/libpciaccess.so* \
+      "$LIBDIR"/libLLVM*.so* "$LIBDIR"/libSPIRV*.so* "$LIBDIR"/libsensors.so* \
+      "$LIBDIR"/libelf.so* "$LIBDIR"/libedit.so* "$LIBDIR"/libexpat.so* \
+      "$LIBDIR"/libz.so* "$LIBDIR"/libzstd.so* "$LIBDIR"/liblzma.so* \
+      "$LIBDIR"/libbz2.so* "$LIBDIR"/libffi.so* "$LIBDIR"/libncursesw.so* \
+      "$LIBDIR"/libtinfo.so* || true
+
 # Create a wrapper to ensure our lib dir is used for dlopen() as well
 cat >"$PKGROOT/usr/local/bin/kms_mosaic" <<'WRAP'
 #!/usr/bin/env bash
@@ -144,12 +160,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LIBDIR="$SCRIPT_DIR/../lib/kms_mosaic"
 export KMS_MOSAIC_REEXEC="$SCRIPT_DIR/kms_mosaic"
-# Prepend our libdir if critical GL libs are missing system-wide; otherwise append (prefer system)
-if ! ldconfig -p 2>/dev/null | grep -qE 'libGLESv2\.so|libEGL\.so'; then
-  export LD_LIBRARY_PATH="$LIBDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-else
-  export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$LIBDIR"
-fi
+rm -f "$LIBDIR"/libdrm*.so* "$LIBDIR"/libgbm.so* "$LIBDIR"/libEGL*.so* \
+      "$LIBDIR"/libGLESv2.so* "$LIBDIR"/libGL*.so* "$LIBDIR"/libOpenGL.so* \
+      "$LIBDIR"/libgallium*.so* "$LIBDIR"/libX11*.so* "$LIBDIR"/libXau.so* \
+      "$LIBDIR"/libXdmcp.so* "$LIBDIR"/libXext.so* "$LIBDIR"/libxcb*.so* \
+      "$LIBDIR"/libwayland*.so* "$LIBDIR"/libxshmfence.so* "$LIBDIR"/libpciaccess.so* \
+      "$LIBDIR"/libLLVM*.so* "$LIBDIR"/libSPIRV*.so* "$LIBDIR"/libsensors.so* \
+      "$LIBDIR"/libelf.so* "$LIBDIR"/libedit.so* "$LIBDIR"/libexpat.so* \
+      "$LIBDIR"/libz.so* "$LIBDIR"/libzstd.so* "$LIBDIR"/liblzma.so* \
+      "$LIBDIR"/libbz2.so* "$LIBDIR"/libffi.so* "$LIBDIR"/libncursesw.so* \
+      "$LIBDIR"/libtinfo.so* 2>/dev/null || true
+export LD_LIBRARY_PATH="$LIBDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$SCRIPT_DIR/kms_mosaic.bin" "$@"
 WRAP
 chmod +x "$PKGROOT/usr/local/bin/kms_mosaic"

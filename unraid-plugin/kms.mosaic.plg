@@ -2,13 +2,21 @@
 <PLUGIN
   name="kms.mosaic"
   author="OpenAI / chronostriker1"
-  version="2026.03.19"
+  version="2026.05.01"
   launch="Settings/KMSMosaic"
   pluginURL="https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/unraid-plugin/kms.mosaic.plg"
   icon="desktop"
   description="Direct-rendered DRM video wall and terminal compositor with pane layout editing, mpv-backed media panes, and live preview management from Unraid.">
 
 <CHANGES>
+###2026.05.01
+- Fix mpv panes after Unraid 7.2.5 by no longer bundling/shadowing host GLVND/Mesa libraries.
+- Remove stale packaged GL libraries during install so the compositor uses Unraid's current GPU stack.
+
+###2026.04.17
+- Quiet default logging: no log files created unless `LOG_ENABLE="enable"` set in plugin cfg.
+- Web UI + compositor discard stdout/stderr by default to stop `/tmp/*.log` growth.
+
 ###2026.03.19
 - Fix package version drift so plugin installs deploy the current runtime binary.
 - Restore `panscan` editing in the selected mpv pane editor.
@@ -19,12 +27,12 @@
 - Host the full configuration UI directly inside the Unraid Settings page.
 </CHANGES>
 
-<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.03.19.tgz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.03.19.tgz</URL>
+<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.05.01.tgz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.05.01.tgz</URL>
 </FILE>
 
-<FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.03.19-x86_64-1.txz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.03.19-x86_64-1.txz</URL>
+<FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.05.01-x86_64-1.txz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.05.01-x86_64-1.txz</URL>
 </FILE>
 
 <FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic.cfg">
@@ -34,6 +42,7 @@ SERVICE="enable"
 WEB_SERVICE="enable"
 WEB_PORT="8788"
 CONFIG_PATH="/boot/config/kms_mosaic.conf"
+LOG_ENABLE="disable"
 ]]>
 </INLINE>
 </FILE>
@@ -46,13 +55,43 @@ mkdir -p /usr/local/emhttp/plugins/kms.mosaic
 # Those stale copies can override the live Settings route even after a correct reinstall.
 rm -rf /usr/local/emhttp/plugins/usr
 rm -rf /usr/local/emhttp/plugins/kms.mosaic.backup
-tar --no-overwrite-dir --no-same-owner -xzf /boot/config/plugins/kms.mosaic/kms.mosaic-2026.03.19.tgz -C /
+# Remove any older versioned artifacts from prior installs so only the current version remains.
+find /boot/config/plugins/kms.mosaic -maxdepth 1 -type f \( -name 'kms.mosaic-*.tgz' -o -name 'kms_mosaic-*-x86_64-1.txz' \) ! -name 'kms.mosaic-2026.05.01.tgz' ! -name 'kms_mosaic-2026.05.01-x86_64-1.txz' -delete 2>/dev/null || true
+tar --no-overwrite-dir --no-same-owner -xzf /boot/config/plugins/kms.mosaic/kms.mosaic-2026.05.01.tgz -C /
 chown root:root /usr/local /usr/local/bin /usr/local/emhttp /usr/local/emhttp/plugins
 chown -R root:root /usr/local/emhttp/plugins/kms.mosaic
 chown root:root /usr/local/bin/kms_mosaic_web /usr/local/bin/kms_mosaic_web.py
 find /usr/local/emhttp/plugins/kms.mosaic -type d -exec chmod 0755 {} +
 find /usr/local/emhttp/plugins/kms.mosaic -type f -exec chmod 0644 {} +
-upgradepkg --install-new --reinstall /boot/config/plugins/kms.mosaic/kms_mosaic-2026.03.19-x86_64-1.txz
+upgradepkg --install-new --reinstall /boot/config/plugins/kms.mosaic/kms_mosaic-2026.05.01-x86_64-1.txz
+rm -f /usr/local/lib/kms_mosaic/libdrm*.so* \
+      /usr/local/lib/kms_mosaic/libgbm.so* \
+      /usr/local/lib/kms_mosaic/libEGL*.so* \
+      /usr/local/lib/kms_mosaic/libGLESv2.so* \
+      /usr/local/lib/kms_mosaic/libGL*.so* \
+      /usr/local/lib/kms_mosaic/libOpenGL.so* \
+      /usr/local/lib/kms_mosaic/libgallium*.so* \
+      /usr/local/lib/kms_mosaic/libX11*.so* \
+      /usr/local/lib/kms_mosaic/libXau.so* \
+      /usr/local/lib/kms_mosaic/libXdmcp.so* \
+      /usr/local/lib/kms_mosaic/libXext.so* \
+      /usr/local/lib/kms_mosaic/libxcb*.so* \
+      /usr/local/lib/kms_mosaic/libwayland*.so* \
+      /usr/local/lib/kms_mosaic/libxshmfence.so* \
+      /usr/local/lib/kms_mosaic/libpciaccess.so* \
+      /usr/local/lib/kms_mosaic/libLLVM*.so* \
+      /usr/local/lib/kms_mosaic/libSPIRV*.so* \
+      /usr/local/lib/kms_mosaic/libsensors.so* \
+      /usr/local/lib/kms_mosaic/libelf.so* \
+      /usr/local/lib/kms_mosaic/libedit.so* \
+      /usr/local/lib/kms_mosaic/libexpat.so* \
+      /usr/local/lib/kms_mosaic/libz.so* \
+      /usr/local/lib/kms_mosaic/libzstd.so* \
+      /usr/local/lib/kms_mosaic/liblzma.so* \
+      /usr/local/lib/kms_mosaic/libbz2.so* \
+      /usr/local/lib/kms_mosaic/libffi.so* \
+      /usr/local/lib/kms_mosaic/libncursesw.so* \
+      /usr/local/lib/kms_mosaic/libtinfo.so* 2>/dev/null || true
 chmod +x /usr/local/bin/kms_mosaic_web
 chmod +x /usr/local/bin/kms_mosaic_web.py
 chmod +x /usr/local/emhttp/plugins/kms.mosaic/event/started
@@ -63,11 +102,13 @@ legacy_backup="/boot/config/plugins/user.scripts/scripts/Start kms_mosaic.disabl
 if [ -d "$legacy_userscript" ] && [ ! -e "$legacy_backup" ]; then
   mv "$legacy_userscript" "$legacy_backup"
 fi
+# Drop any previously-created noisy log files so fresh install starts clean.
+rm -f /tmp/start_kms_mosaic.log /tmp/kms_mosaic_web.log 2>/dev/null || true
 /usr/local/emhttp/plugins/kms.mosaic/scripts/kms_mosaic-service restart >/dev/null 2>&1 || true
 echo ""
 echo "-----------------------------------------------------------"
 echo " Plugin kms.mosaic is installed."
-echo " Version: 2026.03.19"
+echo " Version: 2026.05.01"
 echo "-----------------------------------------------------------"
 echo ""
 ]]>
