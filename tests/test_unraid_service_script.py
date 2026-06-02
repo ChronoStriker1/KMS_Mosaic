@@ -17,16 +17,25 @@ class UnraidServiceScriptTests(unittest.TestCase):
         text = SERVICE_SCRIPT.read_text(encoding="utf-8")
 
         self.assertIn("kms_pids_from_system()", text)
+        self.assertIn("wait_for_kms_exit()", text)
         self.assertIn("kms_child_group_leaders()", text)
         self.assertIn("ps -o pid=,pgid= --ppid", text)
         self.assertIn('pids="$(kms_pids_from_system)"', text)
-        self.assertIn('new_groups="$(kms_child_group_leaders "$pid")"', text)
+        self.assertIn('new_groups="$(kms_child_group_leaders "$pid" || true)"', text)
         self.assertIn('child_groups="$(printf \'%s\\n%s\\n\' \"$child_groups\" \"$new_groups\" | awk \'NF && !seen[$0]++\')"', text)
         self.assertIn('for pid in $pids; do', text)
         self.assertIn('if [ "$any_running" = "false" ]; then', text)
+        self.assertIn("wait_for_kms_exit 20 || true", text)
         self.assertIn("for leader in $child_groups; do", text)
         self.assertNotIn('child_pids="$(pgrep -P "$pid"', text)
         self.assertNotIn("for child_pid in $child_pids; do", text)
+
+    def test_restart_waits_for_old_kms_pid_to_clear_before_starting(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+        restart_case = text[text.index("  restart)") : text.index("  status)")]
+
+        self.assertLess(restart_case.index("stop_kms"), restart_case.index("wait_for_kms_exit 20 || true"))
+        self.assertLess(restart_case.index("wait_for_kms_exit 20 || true"), restart_case.index("start_kms"))
 
     def test_start_kms_removes_packaged_host_gpu_libraries(self) -> None:
         text = SERVICE_SCRIPT.read_text(encoding="utf-8")
@@ -58,6 +67,16 @@ class UnraidServiceScriptTests(unittest.TestCase):
 
         start_kms = text[text.index("start_kms() {") : text.index("stop_kms() {")]
         self.assertIn("cleanup_host_gpu_libs", start_kms)
+
+    def test_start_kms_retries_when_new_process_exits_immediately(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+        start_kms = text[text.index("start_kms() {") : text.index("stop_kms() {")]
+
+        self.assertIn("for attempt in 1 2; do", start_kms)
+        self.assertIn("sleep 3", start_kms)
+        self.assertIn("if is_kms_running; then", start_kms)
+        self.assertIn('cleanup_pidfile "$KMS_PIDFILE"', start_kms)
+        self.assertIn("sleep 5", start_kms)
 
 
 if __name__ == "__main__":

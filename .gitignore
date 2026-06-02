@@ -16,6 +16,8 @@
 *.tar.gz
 
 # Logs and temporary files
+__pycache__/
+*.py[cod]
 *.log
 *.swp
 *~

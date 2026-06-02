@@ -11,6 +11,7 @@ function read_plugin_cfg_file($cfg_file) {
     'WEB_SERVICE' => 'enable',
     'WEB_PORT' => '8788',
     'CONFIG_PATH' => '/boot/config/kms_mosaic.conf',
+    'LOG_ENABLE' => 'disable',
   ];
   $cfg = file_exists($cfg_file) ? parse_ini_file($cfg_file) : [];
   return array_merge($defaults, is_array($cfg) ? $cfg : []);
@@ -319,6 +320,7 @@ try {
     $cfg['WEB_PORT'] = (string)$port;
     $cfg['CONFIG_PATH'] = trim((string)($request['CONFIG_PATH'] ?? '/boot/config/kms_mosaic.conf'));
     if ($cfg['CONFIG_PATH'] === '') $cfg['CONFIG_PATH'] = '/boot/config/kms_mosaic.conf';
+    $cfg['LOG_ENABLE'] = (($request['LOG_ENABLE'] ?? 'disable') === 'enable') ? 'enable' : 'disable';
     write_plugin_cfg_file($cfg_file, $cfg);
     run_service_command($service_script, 'restart');
   } elseif ($action === 'start' || $action === 'stop' || $action === 'restart') {

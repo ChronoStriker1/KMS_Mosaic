@@ -225,8 +225,8 @@ The preferred Unraid deployment path is now the native plugin under
 Plugin artifacts:
 
 - plugin manifest: `dist/kms.mosaic.plg`
-- plugin payload bundle: `dist/kms.mosaic-2026.03.17.tgz`
-- Linux package: `dist/kms_mosaic-2026.03.17-x86_64-1.txz`
+- plugin payload bundle: `dist/kms.mosaic-2026.04.17.tgz`
+- Linux package: `dist/kms_mosaic-2026.04.17-x86_64-1.txz`
 
 Build the plugin artifacts after building the Linux package:
 

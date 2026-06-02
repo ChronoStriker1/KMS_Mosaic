@@ -1001,6 +1001,7 @@ class WebConfig:
     preview_lease_path: Path
     snapshot_output_path: Path
     thumb_cache_dir: Path
+    verbose: bool = False
 
 
 def write_text_atomic(path: Path, text: str) -> None:
@@ -5268,7 +5269,16 @@ class Handler(BaseHTTPRequestHandler):
         return self.server.webrtc  # type: ignore[attr-defined]
 
     def log_message(self, fmt: str, *args: Any) -> None:
+        cfg = getattr(self.server, "app_config", None)
+        if cfg is None or not getattr(cfg, "verbose", False):
+            return
         print(f"[web] {self.address_string()} - {fmt % args}")
+
+    def log_error(self, fmt: str, *args: Any) -> None:
+        cfg = getattr(self.server, "app_config", None)
+        if cfg is None or not getattr(cfg, "verbose", False):
+            return
+        print(f"[web-err] {self.address_string()} - {fmt % args}")
 
     def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
         data = json.dumps(payload).encode("utf-8")
@@ -5555,6 +5565,7 @@ def parse_cli_args() -> argparse.Namespace:
     parser.add_argument("--print-html", action="store_true", help="Print the standalone HTML shell and exit")
     parser.add_argument("--write-state-json", help="Read a JSON file containing {state: ...}, write config, print updated JSON")
     parser.add_argument("--write-raw-json", help="Read a JSON file containing {raw_config: ...}, write config, print updated JSON")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable HTTP access logs and startup banner on stdout (quiet by default)")
     return parser.parse_args()
 
 
@@ -5617,12 +5628,14 @@ def main() -> int:
         preview_lease_path=Path("/tmp/kms_mosaic_preview.active"),
         snapshot_output_path=Path("/tmp/kms_mosaic_preview.rgba"),
         thumb_cache_dir=Path("/tmp/kms_mosaic_web_thumbs"),
+        verbose=bool(getattr(cli, "verbose", False)),
     )
     server = ReusableThreadingHTTPServer((app_config.host, app_config.port), Handler)
     server.app_config = app_config  # type: ignore[attr-defined]
     server.webrtc = WebRTCBridge(app_config)  # type: ignore[attr-defined]
     server.webrtc.start()  # type: ignore[attr-defined]
-    print(f"KMS Mosaic web UI serving {app_config.config_path} on http://{app_config.host}:{app_config.port}")
+    if app_config.verbose:
+        print(f"KMS Mosaic web UI serving {app_config.config_path} on http://{app_config.host}:{app_config.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
