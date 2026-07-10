@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -91,7 +92,8 @@ static void render_gl_ensure_blit_prog(render_gl_ctx *ctx) {
         "precision mediump float;\n"
         "varying vec2 v_uv;\n"
         "uniform sampler2D u_tex;\n"
-        "void main(){ gl_FragColor = texture2D(u_tex, v_uv); }";
+        "uniform float u_brightness;\n"
+        "void main(){ vec4 c=texture2D(u_tex,v_uv); gl_FragColor=vec4(c.rgb*u_brightness,c.a); }";
     GLuint v = render_gl_compile_shader(GL_VERTEX_SHADER, vs);
     GLuint f = render_gl_compile_shader(GL_FRAGMENT_SHADER, fs);
     ctx->blit_prog = glCreateProgram();
@@ -107,6 +109,7 @@ static void render_gl_ensure_blit_prog(render_gl_ctx *ctx) {
         exit(1);
     }
     ctx->blit_u_tex = glGetUniformLocation(ctx->blit_prog, "u_tex");
+    ctx->blit_u_brightness = glGetUniformLocation(ctx->blit_prog, "u_brightness");
     glGenBuffers(1, &ctx->blit_vbo);
 }
 
@@ -118,6 +121,27 @@ static void render_gl_delete_target(GLuint *tex, GLuint *fbo) {
     if (*fbo) {
         glDeleteFramebuffers(1, fbo);
         *fbo = 0;
+    }
+}
+
+static void render_gl_ensure_preview_rt(render_gl_ctx *ctx, int w, int h) {
+    if (ctx->preview_tex && ctx->preview_w == w && ctx->preview_h == h) return;
+    render_gl_delete_target(&ctx->preview_tex, &ctx->preview_fbo);
+    ctx->preview_w = w;
+    ctx->preview_h = h;
+    glGenTextures(1, &ctx->preview_tex);
+    glBindTexture(GL_TEXTURE_2D, ctx->preview_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenFramebuffers(1, &ctx->preview_fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, ctx->preview_fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ctx->preview_tex, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "Preview FBO incomplete\n");
+        exit(1);
     }
 }
 
@@ -234,12 +258,13 @@ GLuint render_gl_pane_video_tex(const render_gl_ctx *ctx, int pane_index) {
     return ctx->pane_vid_texs[pane_index];
 }
 
-void render_gl_blit_rt_to_screen(render_gl_ctx *ctx, rotation_t rot) {
+void render_gl_blit_rt_to_screen_brightness(render_gl_ctx *ctx, rotation_t rot, float brightness) {
     render_gl_ensure_blit_prog(ctx);
     glUseProgram(ctx->blit_prog);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, ctx->rt_tex);
     glUniform1i(ctx->blit_u_tex, 0);
+    glUniform1f(ctx->blit_u_brightness, brightness < 0.f ? 0.f : (brightness > 1.f ? 1.f : brightness));
 
     const float L = -1.f, R = 1.f, B = -1.f, T = 1.f;
     const float u0 = 0.f, v0 = 0.f, u1 = 1.f, v1 = 1.f;
@@ -263,12 +288,17 @@ void render_gl_blit_rt_to_screen(render_gl_ctx *ctx, rotation_t rot) {
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
+void render_gl_blit_rt_to_screen(render_gl_ctx *ctx, rotation_t rot) {
+    render_gl_blit_rt_to_screen_brightness(ctx, rot, 1.f);
+}
+
 void render_gl_draw_tex_fullscreen(render_gl_ctx *ctx, GLuint tex) {
     render_gl_ensure_blit_prog(ctx);
     glUseProgram(ctx->blit_prog);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
     glUniform1i(ctx->blit_u_tex, 0);
+    glUniform1f(ctx->blit_u_brightness, 1.f);
     const float L = -1.f, R = 1.f, B = -1.f, T = 1.f;
     const float verts[] = { L,B, 0,0,  R,B, 1,0,  R,T, 1,1,  L,B, 0,0,  R,T, 1,1,  L,T, 0,1 };
     glBindBuffer(GL_ARRAY_BUFFER, ctx->blit_vbo);
@@ -286,6 +316,7 @@ void render_gl_draw_tex_to_rt(render_gl_ctx *ctx, GLuint tex, int x, int y, int 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
     glUniform1i(ctx->blit_u_tex, 0);
+    glUniform1f(ctx->blit_u_brightness, 1.f);
     const float l = (2.0f * x / rt_w) - 1.0f;
     const float r = (2.0f * (x + w) / rt_w) - 1.0f;
     const float t = 1.0f - (2.0f * y / rt_h);
@@ -300,39 +331,34 @@ void render_gl_draw_tex_to_rt(render_gl_ctx *ctx, GLuint tex, int x, int y, int 
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-bool render_gl_write_current_rgba_frame(const char *path, int w, int h) {
-    if (!path || w <= 0 || h <= 0) return false;
+bool render_gl_write_current_rgba_frame(render_gl_ctx *ctx, const char *path, int w, int h) {
+    if (!ctx || !path || w <= 0 || h <= 0) return false;
 
     size_t pixel_bytes = (size_t)w * (size_t)h * 4u;
-    unsigned char *rgba = malloc(pixel_bytes);
-    if (!rgba) return false;
+    if (ctx->preview_pixels_cap < pixel_bytes) {
+        unsigned char *next = realloc(ctx->preview_pixels, pixel_bytes);
+        if (!next) return false;
+        ctx->preview_pixels = next;
+        ctx->preview_pixels_cap = pixel_bytes;
+    }
 
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, ctx->preview_pixels);
     GLenum err = glGetError();
-    if (err != GL_NO_ERROR) {
-        free(rgba);
-        return false;
-    }
+    if (err != GL_NO_ERROR) return false;
 
     char tmp_path[4096];
     int tmp_len = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%ld", path, (long)getpid());
-    if (tmp_len <= 0 || (size_t)tmp_len >= sizeof(tmp_path)) {
-        free(rgba);
-        return false;
-    }
+    if (tmp_len <= 0 || (size_t)tmp_len >= sizeof(tmp_path)) return false;
 
     FILE *f = fopen(tmp_path, "wb");
-    if (!f) {
-        free(rgba);
-        return false;
-    }
+    if (!f) return false;
     unsigned char header[8] = {
         (unsigned char)(w), (unsigned char)(w >> 8), (unsigned char)(w >> 16), (unsigned char)(w >> 24),
         (unsigned char)(h), (unsigned char)(h >> 8), (unsigned char)(h >> 16), (unsigned char)(h >> 24),
     };
     bool ok = fwrite(header, 1, sizeof(header), f) == sizeof(header) &&
-              fwrite(rgba, 1, pixel_bytes, f) == pixel_bytes;
+              fwrite(ctx->preview_pixels, 1, pixel_bytes, f) == pixel_bytes;
 
     if (fclose(f) != 0) ok = false;
     if (ok && rename(tmp_path, path) != 0) ok = false;
@@ -340,14 +366,41 @@ bool render_gl_write_current_rgba_frame(const char *path, int w, int h) {
         fprintf(stderr, "preview frame write failed for %s: %s\n", path, strerror(errno));
         remove(tmp_path);
     }
-    free(rgba);
     return ok;
+}
+
+bool render_gl_write_preview_frame(render_gl_ctx *ctx, const char *path, GLuint source_tex,
+                                   int source_w, int source_h, int max_edge) {
+    if (!ctx || !path || !source_tex || source_w <= 0 || source_h <= 0 || max_edge <= 0) return false;
+    int out_w = source_w;
+    int out_h = source_h;
+    if (source_w > max_edge || source_h > max_edge) {
+        if (source_w >= source_h) {
+            out_w = max_edge;
+            out_h = (int)(((int64_t)source_h * max_edge) / source_w);
+        } else {
+            out_h = max_edge;
+            out_w = (int)(((int64_t)source_w * max_edge) / source_h);
+        }
+        if (out_w < 1) out_w = 1;
+        if (out_h < 1) out_h = 1;
+    }
+
+    render_gl_ensure_preview_rt(ctx, out_w, out_h);
+    glBindFramebuffer(GL_FRAMEBUFFER, ctx->preview_fbo);
+    render_gl_reset_state_2d();
+    glDisable(GL_BLEND);
+    glViewport(0, 0, out_w, out_h);
+    render_gl_clear_color(0.f, 0.f, 0.f, 1.f);
+    render_gl_draw_tex_fullscreen(ctx, source_tex);
+    return render_gl_write_current_rgba_frame(ctx, path, out_w, out_h);
 }
 
 void render_gl_destroy(render_gl_ctx *ctx) {
     if (!ctx) return;
     render_gl_delete_target(&ctx->rt_tex, &ctx->rt_fbo);
     render_gl_delete_target(&ctx->vid_tex, &ctx->vid_fbo);
+    render_gl_delete_target(&ctx->preview_tex, &ctx->preview_fbo);
     for (int i = 0; i < ctx->pane_vid_cap; ++i) {
         render_gl_delete_target(&ctx->pane_vid_texs[i], &ctx->pane_vid_fbos[i]);
     }
@@ -355,10 +408,13 @@ void render_gl_destroy(render_gl_ctx *ctx) {
     free(ctx->pane_vid_texs);
     free(ctx->pane_vid_ws);
     free(ctx->pane_vid_hs);
+    free(ctx->preview_pixels);
     ctx->pane_vid_fbos = NULL;
     ctx->pane_vid_texs = NULL;
     ctx->pane_vid_ws = NULL;
     ctx->pane_vid_hs = NULL;
+    ctx->preview_pixels = NULL;
+    ctx->preview_pixels_cap = 0;
     ctx->pane_vid_cap = 0;
     if (ctx->blit_vbo) {
         glDeleteBuffers(1, &ctx->blit_vbo);
@@ -372,5 +428,7 @@ void render_gl_destroy(render_gl_ctx *ctx) {
     ctx->rt_h = 0;
     ctx->vid_w = 0;
     ctx->vid_h = 0;
+    ctx->preview_w = 0;
+    ctx->preview_h = 0;
     ctx->blit_u_tex = -1;
 }

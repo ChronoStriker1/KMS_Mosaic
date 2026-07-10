@@ -46,6 +46,8 @@ bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const m
         return false;
     }
     rt->running = true;
+    rt->render_dirty = true;
+    rt->transition_brightness = 1.0f;
     const char *direct_env = getenv("KMS_MPV_DIRECT");
     rt->direct_mode = (direct_env && (*direct_env == '1' || *direct_env == 'y' || *direct_env == 'Y'));
     const char *flip_env = getenv("KMS_MPV_FLIPY");

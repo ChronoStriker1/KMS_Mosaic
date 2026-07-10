@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+if [ -x /mnt/cache/appdata/kms_mosaic/venv/bin/python ]; then
+  exec /mnt/cache/appdata/kms_mosaic/venv/bin/python /usr/local/bin/kms_mosaic_web.py "$@"
+fi
+
 if [ -x /root/.venvs/kms_mosaic_web/bin/python ]; then
   exec /root/.venvs/kms_mosaic_web/bin/python /usr/local/bin/kms_mosaic_web.py "$@"
 fi

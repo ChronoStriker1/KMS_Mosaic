@@ -598,12 +598,15 @@ static void print_usage(const char *exe) {
         "  --pane-mpv-out N FILE   Write pane-local mpv logs/events to FILE or FIFO.\n"
         "  --pane-video-rotate N D Per-pane pass-through to mpv video-rotate.\n"
         "  --pane-panscan N VAL    Per-pane pass-through to mpv panscan.\n"
+        "  --pane-watchdog N SEC   Restart a playing media pane after SEC without progress (0 disables).\n"
+        "  --pane-sync-group N ID  Hold media pane N until every pane in group ID is loaded.\n"
         "  --visibility-mode MODE  Visual pane filter: neither, no-video, or no-terminal.\n"
         "  --pane-model MODEL      Pane indexing model: unified (default) or legacy.\n"
         "  --split-tree SPEC        Explicit split-tree layout override.\n"
         "  --layout M              stack | row | 2x1 | 1x2 | 2over1 | 1over2 | overlay\n"
         "  --roles ORDER           Pane order, using pane indices or letters like ABCD.\n"
         "  --fs-cycle-sec SEC      Fullscreen cycle interval for 'c' key.\n\n"
+        "  --transition-ms MS      Fade displays during startup and config reload (0 disables).\n\n"
         "Display/KMS:\n"
         "  --atomic                Use DRM atomic modesetting (experimental; falls back on failure).\n"
         "  --atomic-nonblock       Use nonblocking atomic flips (event-driven).\n"
@@ -880,6 +883,34 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
                 opt->pane_media[pane_index].panscan = panscan;
             }
         }
+        else if (!strcmp(argv[i], "--pane-watchdog") && i + 2 < argc) {
+            int pane_index = atoi(argv[++i]) - 1;
+            int watchdog_sec = atoi(argv[++i]);
+            if (pane_index >= 0) {
+                if (pane_index + 1 > opt->pane_count) opt->pane_count = pane_index + 1;
+                if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                    !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                    fprintf(stderr, "Failed to allocate pane storage.\n");
+                    return 1;
+                }
+                opt->pane_media[pane_index].enabled = true;
+                opt->pane_media[pane_index].watchdog_sec = watchdog_sec > 0 ? watchdog_sec : 0;
+            }
+        }
+        else if (!strcmp(argv[i], "--pane-sync-group") && i + 2 < argc) {
+            int pane_index = atoi(argv[++i]) - 1;
+            const char *sync_group = argv[++i];
+            if (pane_index >= 0) {
+                if (pane_index + 1 > opt->pane_count) opt->pane_count = pane_index + 1;
+                if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
+                    !options_ensure_role_capacity(opt, options_role_count(opt))) {
+                    fprintf(stderr, "Failed to allocate pane storage.\n");
+                    return 1;
+                }
+                opt->pane_media[pane_index].enabled = true;
+                opt->pane_media[pane_index].sync_group = sync_group;
+            }
+        }
         else if (!strcmp(argv[i], "--list-connectors")) opt->list_connectors = true;
         else if (!strcmp(argv[i], "--no-video")) opt->no_video = true;
         else if (!strcmp(argv[i], "--no-panes")) opt->no_panes = true;
@@ -904,6 +935,11 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
             int mode = parse_layout_mode(argv[++i]);
             if (mode >= 0) opt->layout_mode = mode;
         } else if (!strcmp(argv[i], "--fs-cycle-sec") && i + 1 < argc) opt->fs_cycle_sec = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--transition-ms") && i + 1 < argc) {
+            opt->transition_ms = atoi(argv[++i]);
+            if (opt->transition_ms < 0) opt->transition_ms = 0;
+            if (opt->transition_ms > 5000) opt->transition_ms = 5000;
+        }
         else if (!strcmp(argv[i], "--roles") && i + 1 < argc) roles_arg = argv[++i];
         else if (!strcmp(argv[i], "--loop-file")) opt->loop_file = true;
         else if (!strcmp(argv[i], "--loop")) opt->loop_flag = true;
@@ -1015,6 +1051,7 @@ void save_config(const options_t *opt, const char *path) {
         fputc('\n', f);
     }
     if (opt->fs_cycle_sec) fprintf(f, "--fs-cycle-sec %d\n", opt->fs_cycle_sec);
+    if (opt->transition_ms > 0) fprintf(f, "--transition-ms %d\n", opt->transition_ms);
     if (opt->pane_count != KMS_MOSAIC_DEFAULT_PANE_COUNT) fprintf(f, "--pane-count %d\n", opt->pane_count);
     for (int i = 0; i < opt->pane_count; ++i) {
         if (!opt->pane_cmds[i]) continue;
@@ -1030,6 +1067,8 @@ void save_config(const options_t *opt, const char *path) {
         if (pm->mpv_out_path) fprintf(f, "--pane-mpv-out %d '%s'\n", i + 1, pm->mpv_out_path);
         if (pm->video_rotate >= 0) fprintf(f, "--pane-video-rotate %d %d\n", i + 1, pm->video_rotate);
         if (pm->panscan) fprintf(f, "--pane-panscan %d '%s'\n", i + 1, pm->panscan);
+        if (pm->watchdog_sec > 0) fprintf(f, "--pane-watchdog %d %d\n", i + 1, pm->watchdog_sec);
+        if (pm->sync_group && *pm->sync_group) fprintf(f, "--pane-sync-group %d '%s'\n", i + 1, pm->sync_group);
         for (int vi = 0; vi < pm->video_count; ++vi) fprintf(f, "--pane-video %d '%s'\n", i + 1, pm->videos[vi].path);
         for (int oi = 0; oi < pm->n_mpv_opts; ++oi) fprintf(f, "--pane-mpv-opt %d '%s'\n", i + 1, pm->mpv_opts[oi]);
     }

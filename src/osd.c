@@ -24,6 +24,8 @@ struct osd_ctx {
     font_ctx font;
     char *text;
     GLuint tex; int tw, th; // texture of rendered text
+    int last_max_w;
+    bool texture_dirty;
 };
 
 static void die_local(const char *msg) {
@@ -106,10 +108,10 @@ static char* wrap_text_to_width(font_ctx *f, const char *text, int max_width_px)
     if (oi+1>=cap){cap*=2; out=realloc(out,cap);} out[oi]='\0'; return out;
 }
 
-osd_ctx* osd_create(int font_px){ osd_ctx* o = calloc(1,sizeof *o); font_init(&o->font, font_px>0?font_px:20); glGenTextures(1,&o->tex); return o; }
+osd_ctx* osd_create(int font_px){ osd_ctx* o = calloc(1,sizeof *o); font_init(&o->font, font_px>0?font_px:20); glGenTextures(1,&o->tex); o->texture_dirty=true; return o; }
 void osd_destroy(osd_ctx* o){ if(!o) return; if(o->tex) glDeleteTextures(1,&o->tex); free(o->text); font_destroy(&o->font); free(o);} 
 
-void osd_set_text(osd_ctx* o, const char *text){ if(!o) return; free(o->text); o->text = text?strdup(text):NULL; }
+void osd_set_text(osd_ctx* o, const char *text){ if(!o) return; if((!text&&!o->text)||(text&&o->text&&strcmp(text,o->text)==0)) return; free(o->text); o->text = text?strdup(text):NULL; o->texture_dirty=true; }
 
 static GLuint osd_prog=0, osd_vbo=0; static GLint osd_u_tex=-1;
 static GLuint compile_shader_dbg(GLenum type, const char *src){ GLuint s=glCreateShader(type); glShaderSource(s,1,&src,NULL); glCompileShader(s); GLint ok; glGetShaderiv(s,GL_COMPILE_STATUS,&ok); if(!ok){ char log[512]; GLsizei ln=0; glGetShaderInfoLog(s,sizeof log,&ln,log); fprintf(stderr,"osd shader compile failed (%s): %.*s\nSource:\n%.*s\n", type==GL_VERTEX_SHADER?"vertex":"fragment", ln, log, 200, src); exit(1);} return s; }
@@ -118,20 +120,24 @@ static void ensure_prog(void){ if(osd_prog) return; const char* vs="#version 100
 void osd_draw(osd_ctx* o, int x, int y, int fb_w, int fb_h){
     if(!o||!o->text) return;
     ensure_prog();
-    unsigned char *rgba=NULL; int w=0,h=0;
     int max_w = fb_w - x - 16; if (max_w < o->font.px_size*8) max_w = o->font.px_size*8;
-    char *wrapped = wrap_text_to_width(&o->font, o->text, max_w);
-    render_text_to_rgba(&o->font, wrapped, &rgba, &w, &h);
-    free(wrapped);
-    if(w<=0||h<=0){ free(rgba); return; }
-    glBindTexture(GL_TEXTURE_2D, o->tex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
-    free(rgba);
+    if(o->texture_dirty || o->last_max_w != max_w){
+        unsigned char *rgba=NULL; int w=0,h=0;
+        char *wrapped = wrap_text_to_width(&o->font, o->text, max_w);
+        render_text_to_rgba(&o->font, wrapped, &rgba, &w, &h);
+        free(wrapped);
+        if(w<=0||h<=0){ free(rgba); return; }
+        glBindTexture(GL_TEXTURE_2D, o->tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
+        free(rgba);
+        o->tw=w; o->th=h; o->last_max_w=max_w; o->texture_dirty=false;
+    }
+    int w=o->tw,h=o->th;
     float L = (2.0f * x / fb_w) - 1.0f; float R = (2.0f * (x + w) / fb_w) - 1.0f;
     float T = 1.0f - (2.0f * y / fb_h); float B = 1.0f - (2.0f * (y + h) / fb_h);
     float verts[] = { L,B, 0,0,  R,B, 1,0,  R,T, 1,1,  L,B, 0,0,  R,T, 1,1,  L,T, 0,1 };

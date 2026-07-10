@@ -47,6 +47,7 @@ typedef struct {
     int screen_h;
     int pane_count;
     int *pane_font_px;
+    bool *pane_ready;
     pane_layout *slot_layouts;
     pane_layout *pane_layouts;
 } app_scene;
@@ -75,23 +76,30 @@ typedef struct {
     int stream_interval_ms;
     double stream_next_frame_sec;
     bool stream_active;
+    double next_check_sec;
+    struct timespec lease_last_mtime;
+    off_t lease_last_size;
+    bool lease_exists;
 } snapshot_watch;
 
 static bool app_scene_init(app_scene *scene, int pane_count) {
     memset(scene, 0, sizeof(*scene));
     scene->pane_count = pane_count;
     scene->pane_font_px = calloc((size_t)pane_count, sizeof(*scene->pane_font_px));
+    scene->pane_ready = calloc((size_t)pane_count, sizeof(*scene->pane_ready));
     scene->slot_layouts = calloc((size_t)(KMS_MOSAIC_SLOT_PANE_BASE + pane_count), sizeof(*scene->slot_layouts));
     scene->pane_layouts = calloc((size_t)pane_count, sizeof(*scene->pane_layouts));
-    return scene->pane_font_px && scene->slot_layouts && scene->pane_layouts;
+    return scene->pane_font_px && scene->pane_ready && scene->slot_layouts && scene->pane_layouts;
 }
 
 static void app_scene_destroy(app_scene *scene) {
     if (!scene) return;
     free(scene->pane_font_px);
+    free(scene->pane_ready);
     free(scene->slot_layouts);
     free(scene->pane_layouts);
     scene->pane_font_px = NULL;
+    scene->pane_ready = NULL;
     scene->slot_layouts = NULL;
     scene->pane_layouts = NULL;
     scene->pane_count = 0;
@@ -177,10 +185,107 @@ static void app_die(const char *msg) {
     exit(1);
 }
 
+static double app_now_real_sec(void);
+
 static double app_now_sec(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+static const char *app_control_request_path(void) {
+    const char *path = getenv("KMS_MOSAIC_CONTROL_REQUEST");
+    return path && *path ? path : "/tmp/kms_mosaic_control.request";
+}
+
+static const char *app_control_status_path(void) {
+    const char *path = getenv("KMS_MOSAIC_CONTROL_STATUS");
+    return path && *path ? path : "/tmp/kms_mosaic_control.status";
+}
+
+static void app_write_recovery_status(int pane_index, const char *kind, const char *source, bool ok,
+                                      unsigned int restart_count) {
+    char tmp_path[512];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.%ld", app_control_status_path(), (long)getpid());
+    FILE *fp = fopen(tmp_path, "w");
+    if (!fp) return;
+    fprintf(fp,
+            "{\"timestamp\":%.3f,\"pane\":%d,\"kind\":\"%s\",\"source\":\"%s\","
+            "\"ok\":%s,\"restart_count\":%u}\n",
+            app_now_real_sec(), pane_index, kind, source, ok ? "true" : "false", restart_count);
+    if (fclose(fp) == 0) (void)rename(tmp_path, app_control_status_path());
+    else (void)unlink(tmp_path);
+}
+
+static bool app_restart_pane(int pane_index, const char *source, const options_t *opt,
+                             pane_runtime *panes, media_ctx *pane_media, runtime_state *rt) {
+    if (!opt || pane_index < 0 || pane_index >= opt->pane_count) return false;
+    if (pane_media && pane_media[pane_index].mpv) {
+        bool ok = media_restart(&pane_media[pane_index]);
+        app_write_recovery_status(pane_index, "media", source, ok, pane_media[pane_index].restart_count);
+        if (ok && rt) rt->render_dirty = true;
+        return ok;
+    }
+    term_pane *pane = panes_get_term(panes, pane_index);
+    if (!pane) {
+        app_write_recovery_status(pane_index, "terminal", source, false, 0);
+        return false;
+    }
+    term_pane_respawn(pane);
+    runtime_update_pane_fds(rt, opt, panes, pane_media);
+    rt->render_dirty = true;
+    app_write_recovery_status(pane_index, "terminal", source, true, 0);
+    return true;
+}
+
+static void app_control_poll(const options_t *opt, pane_runtime *panes, media_ctx *pane_media,
+                             runtime_state *rt) {
+    FILE *fp = fopen(app_control_request_path(), "r");
+    if (!fp) return;
+    char line[128] = {0};
+    bool read_ok = fgets(line, sizeof(line), fp) != NULL;
+    fclose(fp);
+    (void)unlink(app_control_request_path());
+    int pane_index = -1;
+    if (read_ok && sscanf(line, "restart-pane %d", &pane_index) == 1) {
+        (void)app_restart_pane(pane_index, "manual", opt, panes, pane_media, rt);
+    }
+}
+
+static void app_media_watchdogs_poll(const options_t *opt, media_ctx *pane_media, runtime_state *rt) {
+    if (!opt || !pane_media) return;
+    for (int i = 0; i < opt->pane_count; ++i) {
+        int timeout_sec = opt->pane_media ? opt->pane_media[i].watchdog_sec : 0;
+        if (timeout_sec > 0 && media_watchdog_poll(&pane_media[i], timeout_sec)) {
+            fprintf(stderr, "Pane %d media watchdog restarted stalled playback.\n", i + 1);
+            app_write_recovery_status(i, "media", "watchdog", true, pane_media[i].restart_count);
+            rt->render_dirty = true;
+        }
+    }
+}
+
+static void app_media_sync_groups_poll(const options_t *opt, media_ctx *pane_media, runtime_state *rt) {
+    if (!opt || !opt->pane_media || !pane_media) return;
+    for (int i = 0; i < opt->pane_count; ++i) {
+        const char *group = opt->pane_media[i].sync_group;
+        if (!group || !*group || pane_media[i].sync_released) continue;
+        bool all_loaded = true;
+        int member_count = 0;
+        for (int j = 0; j < opt->pane_count; ++j) {
+            const char *candidate = opt->pane_media[j].sync_group;
+            if (!candidate || strcmp(candidate, group) != 0) continue;
+            member_count++;
+            if (!pane_media[j].mpv || !pane_media[j].file_loaded) all_loaded = false;
+        }
+        if (!all_loaded || member_count == 0) continue;
+        for (int j = 0; j < opt->pane_count; ++j) {
+            const char *candidate = opt->pane_media[j].sync_group;
+            if (!candidate || strcmp(candidate, group) != 0) continue;
+            if (media_set_paused(&pane_media[j], false)) pane_media[j].sync_released = true;
+        }
+        fprintf(stderr, "Released %d loaded media panes in sync group '%s'.\n", member_count, group);
+        rt->render_dirty = true;
+    }
 }
 
 static const char *app_config_watch_path(const options_t *opt) {
@@ -214,6 +319,7 @@ static void app_snapshot_watch_init(snapshot_watch *watch) {
     watch->lease_path = "/tmp/kms_mosaic_preview.active";
     watch->output_path = "/tmp/kms_mosaic_preview.rgba";
     watch->stream_interval_ms = 16;
+    watch->next_check_sec = app_now_sec();
 }
 
 static double app_now_real_sec(void) {
@@ -231,6 +337,10 @@ static int app_snapshot_watch_interval_ms(const snapshot_watch *watch) {
 
 static void app_snapshot_watch_poll(snapshot_watch *watch) {
     if (!watch) return;
+
+    double now_sec = app_now_sec();
+    if (now_sec < watch->next_check_sec) return;
+    watch->next_check_sec = now_sec + 0.25;
 
     if (watch->request_path) {
         struct stat st;
@@ -255,20 +365,32 @@ static void app_snapshot_watch_poll(snapshot_watch *watch) {
     if (!watch->lease_path) return;
 
     struct stat lease_st;
-    if (stat(watch->lease_path, &lease_st) != 0) return;
+    if (stat(watch->lease_path, &lease_st) != 0) {
+        watch->lease_exists = false;
+        return;
+    }
 
     double age_sec = app_now_real_sec() - (lease_st.st_mtim.tv_sec + lease_st.st_mtim.tv_nsec / 1e9);
     if (age_sec < 0.0) age_sec = 0.0;
     if (age_sec > 2.5) return;
 
-    FILE *fp = fopen(watch->lease_path, "r");
-    if (fp) {
-        char line[64] = {0};
-        if (fgets(line, sizeof(line), fp)) {
-            int parsed = atoi(line);
-            if (parsed > 0) watch->stream_interval_ms = parsed;
+    bool lease_changed = !watch->lease_exists ||
+                         watch->lease_last_size != lease_st.st_size ||
+                         watch->lease_last_mtime.tv_sec != lease_st.st_mtim.tv_sec ||
+                         watch->lease_last_mtime.tv_nsec != lease_st.st_mtim.tv_nsec;
+    watch->lease_exists = true;
+    watch->lease_last_size = lease_st.st_size;
+    watch->lease_last_mtime = lease_st.st_mtim;
+    if (lease_changed) {
+        FILE *fp = fopen(watch->lease_path, "r");
+        if (fp) {
+            char line[64] = {0};
+            if (fgets(line, sizeof(line), fp)) {
+                int parsed = atoi(line);
+                if (parsed > 0) watch->stream_interval_ms = parsed;
+            }
+            fclose(fp);
         }
-        fclose(fp);
     }
     watch->stream_active = true;
 }
@@ -412,9 +534,35 @@ static void app_init_scene(const options_t *opt, bool use_mpv, pane_runtime *pan
 }
 
 static bool app_poll_runtime_with_media(runtime_state *rt, const options_t *opt,
-                                        const pane_runtime *panes, const media_ctx *pane_media) {
+                                        const pane_runtime *panes, const media_ctx *pane_media,
+                                        int timeout_ms) {
     runtime_update_pane_fds(rt, opt, panes, pane_media);
-    return poll(rt->pfds, rt->nfds, 10) >= 0 || errno == EINTR;
+    return poll(rt->pfds, rt->nfds, timeout_ms) >= 0 || errno == EINTR;
+}
+
+static int app_poll_timeout_ms(const config_watch *cfg_watch, const snapshot_watch *snap_watch,
+                               const ui_state *ui, bool display_busy, bool render_dirty) {
+    double now = app_now_sec();
+    if (render_dirty && !display_busy) return 0;
+    double deadline = now + 1.0;
+    if (cfg_watch && cfg_watch->enabled && cfg_watch->next_check_sec < deadline) {
+        deadline = cfg_watch->next_check_sec;
+    }
+    if (snap_watch) {
+        if (snap_watch->request_pending && !display_busy) return 0;
+        if (snap_watch->next_check_sec < deadline) deadline = snap_watch->next_check_sec;
+        if (!display_busy && snap_watch->stream_active && snap_watch->stream_next_frame_sec < deadline) {
+            deadline = snap_watch->stream_next_frame_sec;
+        }
+    }
+    if (ui && ui->fs_cycle) {
+        if (ui->fs_next_switch <= 0.0) return 0;
+        if (ui->fs_next_switch < deadline) deadline = ui->fs_next_switch;
+    }
+    double remaining_ms = (deadline - now) * 1000.0;
+    if (remaining_ms <= 0.0) return 0;
+    if (remaining_ms >= 1000.0) return 1000;
+    return (int)(remaining_ms + 0.999);
 }
 
 static bool app_handle_input_ready(runtime_state *rt, ui_state *ui, options_t *opt, bool use_mpv,
@@ -423,6 +571,7 @@ static bool app_handle_input_ready(runtime_state *rt, ui_state *ui, options_t *o
     char buf[64];
     ssize_t n = read(0, buf, sizeof(buf));
     if (n > 0) {
+        rt->render_dirty = true;
         term_pane **pane_terms = calloc((size_t)opt->pane_count, sizeof(*pane_terms));
         mpv_handle **pane_mpv = calloc((size_t)opt->pane_count, sizeof(*pane_mpv));
         if (!pane_terms || !pane_mpv) {
@@ -441,11 +590,14 @@ static bool app_handle_input_ready(runtime_state *rt, ui_state *ui, options_t *o
     return rt->running;
 }
 
-static void app_collect_pane_ready(const options_t *opt, const runtime_state *rt,
+static bool app_collect_pane_ready(const options_t *opt, const runtime_state *rt,
                                    bool *pane_ready) {
+    bool any_ready = false;
     for (int i = 0; i < opt->pane_count; ++i) {
         pane_ready[i] = !opt->no_panes && runtime_pane_ready(rt, i);
+        any_ready = any_ready || pane_ready[i];
     }
+    return any_ready;
 }
 
 static void app_handle_runtime_events(runtime_state *rt, ui_state *ui, const options_t *opt, media_ctx *m,
@@ -454,10 +606,18 @@ static void app_handle_runtime_events(runtime_state *rt, ui_state *ui, const opt
                                       bool use_mpv, bool debug) {
     struct timespec ts_now;
     clock_gettime(CLOCK_MONOTONIC, &ts_now);
+    bool was_fullscreen = ui->fullscreen;
+    int was_fs_pane = ui->fs_pane;
     ui_update_fs_cycle(ui, opt->pane_count, opt->fs_cycle_sec, ts_now.tv_sec + ts_now.tv_nsec / 1e9);
+    if (was_fullscreen != ui->fullscreen || was_fs_pane != ui->fs_pane) rt->render_dirty = true;
 
     if (use_mpv && (rt->pfds[RUNTIME_POLL_MPV_WAKEUP].revents & POLLIN)) {
-        media_handle_wakeup(m, debug, &rt->mpv_needs_render);
+        int needs_render = 0;
+        media_handle_wakeup(m, debug, &needs_render);
+        if (needs_render) {
+            rt->mpv_needs_render = 1;
+            rt->render_dirty = true;
+        }
     }
     for (int i = 0; i < opt->pane_count; ++i) {
         if (pane_media && pane_media[i].mpv && runtime_pane_media_ready(rt, opt, i)) {
@@ -465,6 +625,7 @@ static void app_handle_runtime_events(runtime_state *rt, ui_state *ui, const opt
             media_handle_wakeup(&pane_media[i], debug, &pane_needs_render);
             if (pane_needs_render && rt->pane_mpv_needs_render) {
                 rt->pane_mpv_needs_render[i] = 1;
+                rt->render_dirty = true;
             }
         }
     }
@@ -487,7 +648,7 @@ static void app_handle_runtime_events(runtime_state *rt, ui_state *ui, const opt
     }
 }
 
-static void app_update_layout(const options_t *opt, ui_state *ui, pane_runtime *panes, app_scene *scene, bool debug) {
+static bool app_update_layout(const options_t *opt, ui_state *ui, pane_runtime *panes, app_scene *scene, bool debug) {
     if (opt->layout_mode == 6) {
         if (ui->last_layout_mode != 6) {
             if (opt->roles_set) {
@@ -521,35 +682,36 @@ static void app_update_layout(const options_t *opt, ui_state *ui, pane_runtime *
         ui->last_fs_pane = ui->fs_pane;
     }
 
-    mosaic_layout active_layout = {0};
-    if (!mosaic_layout_init(&active_layout, KMS_MOSAIC_SLOT_PANE_BASE + scene->pane_count)) app_die("mosaic_layout_init");
+    if (!layout_changed) return false;
+
+    mosaic_layout active_layout = {
+        .role_layouts = scene->slot_layouts,
+        .role_count = KMS_MOSAIC_SLOT_PANE_BASE + scene->pane_count,
+    };
     compute_mosaic_layout(scene->screen_w, scene->screen_h, opt->layout_mode, opt->right_frac_pct,
                           opt->pane_split_pct, scene->pane_count, opt->split_tree_spec,
                           opt->rotation, ui->perm, opt->visibility_mode, opt->pane_media, ui->overlay_swap,
                           ui->fullscreen, ui->fs_pane, &active_layout);
-    for (int i = 0; i < KMS_MOSAIC_SLOT_PANE_BASE + scene->pane_count; ++i) scene->slot_layouts[i] = active_layout.role_layouts[i];
     for (int i = 0; i < scene->pane_count; ++i) scene->pane_layouts[i] = scene->slot_layouts[KMS_MOSAIC_SLOT_PANE_BASE + i];
-    mosaic_layout_destroy(&active_layout);
-    if (layout_changed) {
-        panes_apply_layout_mode_alpha(opt, panes);
-        int default_frames = 3;
-        const char *rf = getenv("KMS_MOSAIC_REINIT_FRAMES");
-        if (rf) {
-            int v = atoi(rf);
-            if (v >= 0 && v <= 30) default_frames = v;
-        }
-        ui->layout_reinit_countdown = default_frames;
-        if (debug) {
-            int perm0 = opt->pane_count > 0 ? ui->perm[0] : -1;
-            int perm1 = opt->pane_count > 1 ? ui->perm[1] : -1;
-            int perm2 = opt->pane_count > 2 ? ui->perm[2] : -1;
-            fprintf(stderr, "Layout changed -> reinit countdown %d (mode=%d, perm=%d/%d/%d, rot=%d)\n",
-                    ui->layout_reinit_countdown, opt->layout_mode,
-                    perm0, perm1, perm2, (int)opt->rotation);
-        }
+    panes_apply_layout_mode_alpha(opt, panes);
+    int default_frames = 3;
+    const char *rf = getenv("KMS_MOSAIC_REINIT_FRAMES");
+    if (rf) {
+        int v = atoi(rf);
+        if (v >= 0 && v <= 30) default_frames = v;
+    }
+    ui->layout_reinit_countdown = default_frames;
+    if (debug) {
+        int perm0 = opt->pane_count > 0 ? ui->perm[0] : -1;
+        int perm1 = opt->pane_count > 1 ? ui->perm[1] : -1;
+        int perm2 = opt->pane_count > 2 ? ui->perm[2] : -1;
+        fprintf(stderr, "Layout changed -> reinit countdown %d (mode=%d, perm=%d/%d/%d, rot=%d)\n",
+                ui->layout_reinit_countdown, opt->layout_mode,
+                perm0, perm1, perm2, (int)opt->rotation);
     }
 
     panes_compute_font_sizes(opt, scene->pane_layouts, scene->pane_count, scene->pane_font_px);
+    return true;
 }
 
 static void app_cleanup(const options_t *opt, media_ctx *m, media_ctx *pane_media, render_gl_ctx *rg, drm_ctx *d,
@@ -568,7 +730,6 @@ static void app_cleanup(const options_t *opt, media_ctx *m, media_ctx *pane_medi
     }
     if (g->bo) {
         gbm_surface_release_buffer(g->surface, g->bo);
-        drmModeRmFB(d->fd, g->fb_id);
     }
     if (e->dpy != EGL_NO_DISPLAY) {
         eglMakeCurrent(e->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -680,6 +841,10 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     if (!runtime_init(&rt, &opt, use_mpv, &m, d.fd)) app_die("runtime_init");
     app_config_watch_init(&cfg_watch, &opt);
     app_snapshot_watch_init(&snap_watch);
+    double transition_started_sec = app_now_sec();
+    bool transition_fading_in = opt.transition_ms > 0;
+    bool transition_fading_out = false;
+    bool reload_pending = false;
 
     while (rt.running) {
         if (*stop_flag) {
@@ -687,8 +852,27 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
             rt.running = false;
             break;
         }
+        if (opt.transition_ms > 0 && (transition_fading_in || transition_fading_out)) {
+            double progress = (app_now_sec() - transition_started_sec) * 1000.0 / opt.transition_ms;
+            if (progress >= 1.0) {
+                if (transition_fading_out) {
+                    rt.transition_brightness = 0.0f;
+                    rc = APP_RUN_RELOAD;
+                    break;
+                }
+                transition_fading_in = false;
+                rt.transition_brightness = 1.0f;
+            } else {
+                if (progress < 0.0) progress = 0.0;
+                rt.transition_brightness = transition_fading_out ? (float)(1.0 - progress) : (float)progress;
+                rt.render_dirty = true;
+            }
+        }
         if (*debug && rt.frame < 5) fprintf(stderr, "Loop frame %d start\n", rt.frame);
-        if (!app_poll_runtime_with_media(&rt, &opt, &panes, pane_media)) app_die("poll");
+        app_snapshot_watch_poll(&snap_watch);
+        int poll_timeout_ms = app_poll_timeout_ms(&cfg_watch, &snap_watch, &ui,
+                                                  g.in_flight != 0, rt.render_dirty);
+        if (!app_poll_runtime_with_media(&rt, &opt, &panes, pane_media, poll_timeout_ms)) app_die("poll");
         if (!app_handle_input_ready(&rt, &ui, &opt, use_mpv, &panes, &m, pane_media, *debug)) {
             fprintf(stderr, "Exiting main loop: input handler requested stop\n");
             break;
@@ -696,18 +880,27 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
         app_handle_runtime_events(&rt, &ui, &opt, &m, pane_media, &d,
                                   pfifo_buf, &pfifo_len, pane_pfifo_bufs, pane_pfifo_lens,
                                   use_mpv, *debug);
-        if (app_config_watch_poll(&cfg_watch)) {
+        app_control_poll(&opt, &panes, pane_media, &rt);
+        app_media_sync_groups_poll(&opt, pane_media, &rt);
+        app_media_watchdogs_poll(&opt, pane_media, &rt);
+        if (!reload_pending && app_config_watch_poll(&cfg_watch)) {
             fprintf(stderr, "Config file changed: %s\n", cfg_watch.path);
-            rc = APP_RUN_RELOAD;
-            break;
+            if (opt.transition_ms > 0) {
+                reload_pending = true;
+                transition_fading_in = false;
+                transition_fading_out = true;
+                transition_started_sec = app_now_sec();
+                rt.transition_brightness = 1.0f;
+                rt.render_dirty = true;
+            } else {
+                rc = APP_RUN_RELOAD;
+                break;
+            }
         }
         app_snapshot_watch_poll(&snap_watch);
 
-        bool *pane_ready = calloc((size_t)scene.pane_count, sizeof(*pane_ready));
-        if (!pane_ready) app_die("calloc pane_ready");
-        app_collect_pane_ready(&opt, &rt, pane_ready);
-        app_update_layout(&opt, &ui, &panes, &scene, *debug);
-        if (!eglMakeCurrent(e.dpy, e.surf, e.surf, e.ctx)) app_die("eglMakeCurrent loop");
+        if (app_collect_pane_ready(&opt, &rt, scene.pane_ready)) rt.render_dirty = true;
+        if (app_update_layout(&opt, &ui, &panes, &scene, *debug)) rt.render_dirty = true;
         bool snapshot_written = false;
         const char *snapshot_path = NULL;
         if (snap_watch.request_pending) {
@@ -715,18 +908,24 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
         } else if (snap_watch.stream_active && app_now_sec() >= snap_watch.stream_next_frame_sec) {
             snapshot_path = snap_watch.output_path;
         }
-        frame_render(&opt, &rt, &rg, &m, pane_media, &d, &g, &e, &panes, &ui,
-                     scene.slot_layouts, scene.pane_layouts, scene.pane_count, scene.logical_w, scene.logical_h,
-                     scene.fb_w, scene.fb_h, scene.screen_w, scene.screen_h, scene.pane_font_px,
-                     use_mpv, pane_ready, *debug,
-                     snapshot_path, &snapshot_written);
+        if (snapshot_path) rt.render_dirty = true;
+        if (rt.render_dirty && !g.in_flight) {
+            if (!eglMakeCurrent(e.dpy, e.surf, e.surf, e.ctx)) app_die("eglMakeCurrent loop");
+            frame_render(&opt, &rt, &rg, &m, pane_media, &d, &g, &e, &panes, &ui,
+                         scene.slot_layouts, scene.pane_layouts, scene.pane_count, scene.logical_w, scene.logical_h,
+                         scene.fb_w, scene.fb_h, scene.screen_w, scene.screen_h, scene.pane_font_px,
+                         use_mpv, scene.pane_ready, *debug,
+                         snapshot_path, &snapshot_written);
+            rt.render_dirty = ui.layout_reinit_countdown > 0;
+        }
         if (snapshot_written) {
             if (snap_watch.request_pending) snap_watch.request_pending = false;
             if (snap_watch.stream_active) {
                 snap_watch.stream_next_frame_sec = app_now_sec() + app_snapshot_watch_interval_ms(&snap_watch) / 1000.0;
             }
+        } else if (snapshot_path) {
+            rt.render_dirty = true;
         }
-        free(pane_ready);
     }
 
     fprintf(stderr, "Main loop exited: rc=%d running=%d stop_flag=%d\n", rc, rt.running ? 1 : 0, *stop_flag ? 1 : 0);
