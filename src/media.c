@@ -15,6 +15,20 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
+enum {
+    MEDIA_OBSERVE_PLAYLIST_POS = 1,
+    MEDIA_OBSERVE_PLAYLIST_COUNT,
+    MEDIA_OBSERVE_PAUSE,
+    MEDIA_OBSERVE_TITLE,
+    MEDIA_OBSERVE_TIME_POS,
+};
+
+static double media_now_sec(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
 static void media_update_wakeup(void *ctx) {
     media_ctx *m = (media_ctx *)ctx;
     if (!m) return;
@@ -109,6 +123,42 @@ static void media_log_event(media_ctx *m, const char *event_name, int64_t playli
     fflush(m->mpv_out);
 }
 
+static bool media_handle_property_change(media_ctx *m, const mpv_event *ev) {
+    if (!m || !ev || ev->event_id != MPV_EVENT_PROPERTY_CHANGE) return false;
+    mpv_event_property *prop = ev->data;
+    if (!prop) return false;
+    switch (ev->reply_userdata) {
+        case MEDIA_OBSERVE_PLAYLIST_POS:
+            m->osd_playlist_pos = prop->data ? *(int64_t *)prop->data : 0;
+            break;
+        case MEDIA_OBSERVE_PLAYLIST_COUNT:
+            m->osd_playlist_count = prop->data ? *(int64_t *)prop->data : 0;
+            break;
+        case MEDIA_OBSERVE_PAUSE:
+            m->osd_paused = prop->data ? *(int *)prop->data : 0;
+            break;
+        case MEDIA_OBSERVE_TITLE: {
+            const char *title = prop->data ? (const char *)prop->data : NULL;
+            if ((title && m->osd_title && strcmp(title, m->osd_title) == 0) ||
+                (!title && !m->osd_title)) {
+                return false;
+            }
+            char *next = title ? strdup(title) : NULL;
+            if (title && !next) return false;
+            free(m->osd_title);
+            m->osd_title = next;
+            break;
+        }
+        case MEDIA_OBSERVE_TIME_POS:
+            if (prop->data) m->last_progress_sec = media_now_sec();
+            return false;
+        default:
+            return false;
+    }
+    m->osd_revision++;
+    return true;
+}
+
 static void media_apply_option_list(media_ctx *m, const char *const *opts, int count,
                                     bool *user_set_hwdec, bool *user_set_vsync,
                                     bool *user_set_keepaspect, bool *user_set_rotate,
@@ -158,7 +208,6 @@ static void media_apply_options(media_ctx *m, const options_t *opt, const pane_m
     bool user_set_keep_open = false;
     bool user_set_prefetch_playlist = false;
     bool user_set_load_scripts = false;
-
     media_apply_option_list(m, opt->mpv_opts, opt->n_mpv_opts,
                             &user_set_hwdec, &user_set_vsync, &user_set_keepaspect,
                             &user_set_rotate, &user_set_panscan, &user_set_interpolation,
@@ -172,6 +221,9 @@ static void media_apply_options(media_ctx *m, const options_t *opt, const pane_m
                                 &user_set_tscale, &user_set_eflush, &user_set_shader_cache,
                                 &user_set_keep_open,
                                 &user_set_prefetch_playlist, &user_set_load_scripts);
+    }
+    if (pane_media && pane_media->sync_group && *pane_media->sync_group) {
+        mpv_set_option_string(m->mpv, "pause", "yes");
     }
 
     if (!user_set_hwdec) mpv_set_option_string(m->mpv, "hwdec", "auto-copy-safe");
@@ -310,9 +362,12 @@ void media_handle_wakeup(media_ctx *m, bool debug, int *mpv_needs_render) {
             media_log_event(m, "START_FILE",
                             start_file ? start_file->playlist_entry_id : -1,
                             NULL, NULL);
+            m->file_loaded = false;
         } else if (ev->event_id == MPV_EVENT_FILE_LOADED) {
             if (debug) fprintf(stderr, "mpv: FILE_LOADED\n");
             media_log_event(m, "FILE_LOADED", -1, NULL, NULL);
+            m->last_progress_sec = media_now_sec();
+            m->file_loaded = true;
             *mpv_needs_render = 1;
         } else if (ev->event_id == MPV_EVENT_VIDEO_RECONFIG) {
             if (debug) fprintf(stderr, "mpv: VIDEO_RECONFIG\n");
@@ -325,6 +380,8 @@ void media_handle_wakeup(media_ctx *m, bool debug, int *mpv_needs_render) {
             mpv_event_end_file *end_file = ev->data;
             if (debug) fprintf(stderr, "mpv: END_FILE\n");
             media_log_event(m, "END_FILE", -1, NULL, end_file);
+        } else if (ev->event_id == MPV_EVENT_PROPERTY_CHANGE) {
+            if (media_handle_property_change(m, ev)) *mpv_needs_render = 1;
         }
     }
     int flags = mpv_render_context_update(m->mpv_gl);
@@ -408,6 +465,12 @@ static bool media_init_source(media_ctx *m, const options_t *opt, const pane_med
         fprintf(stderr, "mpv_initialize failed\n");
         exit(1);
     }
+    mpv_observe_property(m->mpv, MEDIA_OBSERVE_PLAYLIST_POS, "playlist-pos", MPV_FORMAT_INT64);
+    mpv_observe_property(m->mpv, MEDIA_OBSERVE_PLAYLIST_COUNT, "playlist-count", MPV_FORMAT_INT64);
+    mpv_observe_property(m->mpv, MEDIA_OBSERVE_PAUSE, "pause", MPV_FORMAT_FLAG);
+    mpv_observe_property(m->mpv, MEDIA_OBSERVE_TITLE, "media-title", MPV_FORMAT_STRING);
+    mpv_observe_property(m->mpv, MEDIA_OBSERVE_TIME_POS, "time-pos", MPV_FORMAT_DOUBLE);
+    m->last_progress_sec = media_now_sec();
 
     int adv = 1;
     mpv_render_param params[] = {
@@ -447,6 +510,35 @@ bool media_init_pane(media_ctx *m, const options_t *opt, const pane_media_config
     return media_init_source(m, opt, pane_media, debug);
 }
 
+bool media_restart(media_ctx *m) {
+    if (!m || !m->mpv) return false;
+    int64_t index = m->osd_playlist_pos >= 0 ? m->osd_playlist_pos : 0;
+    char index_text[32];
+    snprintf(index_text, sizeof(index_text), "%lld", (long long)index);
+    const char *command[] = {"playlist-play-index", index_text, NULL};
+    int rc = mpv_command_async(m->mpv, 0, command);
+    if (rc < 0) return false;
+    m->last_progress_sec = media_now_sec();
+    m->last_watchdog_check_sec = m->last_progress_sec;
+    m->restart_count++;
+    return true;
+}
+
+bool media_set_paused(media_ctx *m, bool paused) {
+    if (!m || !m->mpv) return false;
+    const char *command[] = {"set", "pause", paused ? "yes" : "no", NULL};
+    return mpv_command_async(m->mpv, 0, command) >= 0;
+}
+
+bool media_watchdog_poll(media_ctx *m, int timeout_sec) {
+    if (!m || !m->mpv || timeout_sec <= 0 || m->osd_paused || m->osd_playlist_count <= 0) return false;
+    double now = media_now_sec();
+    if (now - m->last_watchdog_check_sec < 1.0) return false;
+    m->last_watchdog_check_sec = now;
+    if (m->last_progress_sec <= 0.0 || now - m->last_progress_sec < timeout_sec) return false;
+    return media_restart(m);
+}
+
 void media_shutdown(media_ctx *m) {
     if (!m) return;
     if (m->mpv_gl) mpv_render_context_free(m->mpv_gl);
@@ -458,6 +550,8 @@ void media_shutdown(media_ctx *m) {
     if (m->playlist_fifo_fd >= 0) close(m->playlist_fifo_fd);
     m->playlist_fifo_fd = -1;
     m->playlist_fifo_path = NULL;
+    free(m->osd_title);
+    m->osd_title = NULL;
     if (m->wakeup_fd[0] >= 0) close(m->wakeup_fd[0]);
     if (m->wakeup_fd[1] >= 0) close(m->wakeup_fd[1]);
     m->wakeup_fd[0] = -1;

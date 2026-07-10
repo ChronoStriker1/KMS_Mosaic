@@ -2,6 +2,7 @@
 #define RENDER_GL_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include <GLES2/gl2.h>
 
@@ -15,6 +16,7 @@ typedef struct {
     GLuint blit_prog;
     GLuint blit_vbo;
     GLint blit_u_tex;
+    GLint blit_u_brightness;
     GLuint vid_fbo;
     GLuint vid_tex;
     int vid_w;
@@ -24,6 +26,12 @@ typedef struct {
     int *pane_vid_ws;
     int *pane_vid_hs;
     int pane_vid_cap;
+    GLuint preview_fbo;
+    GLuint preview_tex;
+    int preview_w;
+    int preview_h;
+    unsigned char *preview_pixels;
+    size_t preview_pixels_cap;
 } render_gl_ctx;
 
 void render_gl_reset_state_2d(void);
@@ -37,9 +45,12 @@ bool render_gl_ensure_pane_video_rt(render_gl_ctx *ctx, int pane_index, int w, i
 GLuint render_gl_pane_video_fbo(const render_gl_ctx *ctx, int pane_index);
 GLuint render_gl_pane_video_tex(const render_gl_ctx *ctx, int pane_index);
 void render_gl_blit_rt_to_screen(render_gl_ctx *ctx, rotation_t rot);
+void render_gl_blit_rt_to_screen_brightness(render_gl_ctx *ctx, rotation_t rot, float brightness);
 void render_gl_draw_tex_fullscreen(render_gl_ctx *ctx, GLuint tex);
 void render_gl_draw_tex_to_rt(render_gl_ctx *ctx, GLuint tex, int x, int y, int w, int h, int rt_w, int rt_h);
-bool render_gl_write_current_rgba_frame(const char *path, int w, int h);
+bool render_gl_write_current_rgba_frame(render_gl_ctx *ctx, const char *path, int w, int h);
+bool render_gl_write_preview_frame(render_gl_ctx *ctx, const char *path, GLuint source_tex,
+                                   int source_w, int source_h, int max_edge);
 void render_gl_destroy(render_gl_ctx *ctx);
 
 #endif

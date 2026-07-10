@@ -209,7 +209,20 @@ static const char *egl_err_str(EGLint ecode) {
     }
 }
 
-static uint32_t drm_fb_for_bo(int drm_fd, struct gbm_bo *bo) {
+typedef struct {
+    int drm_fd;
+    uint32_t fb_id;
+} display_bo_fb;
+
+static void display_destroy_bo_fb(struct gbm_bo *bo, void *data) {
+    (void)bo;
+    display_bo_fb *fb = data;
+    if (!fb) return;
+    if (fb->fb_id) drmModeRmFB(fb->drm_fd, fb->fb_id);
+    free(fb);
+}
+
+static uint32_t drm_fb_create_for_bo(int drm_fd, struct gbm_bo *bo) {
     uint32_t fb_id = 0;
     uint32_t width = gbm_bo_get_width(bo);
     uint32_t height = gbm_bo_get_height(bo);
@@ -232,6 +245,17 @@ static uint32_t drm_fb_for_bo(int drm_fd, struct gbm_bo *bo) {
     if (drmModeAddFB2(drm_fd, width, height, format ? format : DRM_FORMAT_XRGB8888, handles, strides, offsets, &fb_id, 0) == 0) return fb_id;
     if (drmModeAddFB(drm_fd, width, height, 24, 32, stride, handle, &fb_id) != 0) display_die("drmModeAddFB");
     return fb_id;
+}
+
+static uint32_t drm_fb_for_bo(int drm_fd, struct gbm_bo *bo) {
+    display_bo_fb *cached = gbm_bo_get_user_data(bo);
+    if (cached) return cached->fb_id;
+    display_bo_fb *fb = calloc(1, sizeof(*fb));
+    if (!fb) display_die("calloc display_bo_fb");
+    fb->drm_fd = drm_fd;
+    fb->fb_id = drm_fb_create_for_bo(drm_fd, bo);
+    gbm_bo_set_user_data(bo, fb, display_destroy_bo_fb);
+    return fb->fb_id;
 }
 
 int display_open_drm_card(void) {
@@ -487,7 +511,7 @@ void display_page_flip(drm_ctx *d, gbm_ctx *g) {
             if (d->atomic.nonblock) {
                 g->pending_bo = g->next_bo; g->pending_fb = fb; g->in_flight = 1; return;
             }
-            if (g->bo) { uint32_t old_fb = g->fb_id; gbm_surface_release_buffer(g->surface, g->bo); drmModeRmFB(d->fd, old_fb); }
+            if (g->bo) gbm_surface_release_buffer(g->surface, g->bo);
             g->bo = g->next_bo; g->fb_id = fb; g->in_flight = 0; return;
         }
         drmModeAtomicFree(req);
@@ -502,7 +526,6 @@ void display_page_flip(drm_ctx *d, gbm_ctx *g) {
     }
 
     fprintf(stderr, "drmModePageFlip failed: %s\n", strerror(errno));
-    drmModeRmFB(d->fd, fb);
     gbm_surface_release_buffer(g->surface, g->next_bo);
     g->next_bo = NULL;
 }
@@ -512,7 +535,6 @@ void display_on_page_flip(int fd, unsigned int sequence, unsigned int tv_sec, un
     gbm_ctx *g = (gbm_ctx *)user_data;
     if (!g || !g->in_flight) return;
     if (g->bo) {
-        drmModeRmFB(fd, g->fb_id);
         gbm_surface_release_buffer(g->surface, g->bo);
     }
     g->bo = g->pending_bo;

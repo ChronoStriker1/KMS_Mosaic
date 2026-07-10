@@ -863,7 +863,7 @@ void term_pane_force_rebuild(term_pane *tp) {
 void term_pane_respawn(term_pane *tp) {
     if (!tp) return;
     if (tp->child_pid > 0) {
-        term_pane_terminate_process_group(tp->child_pid, false);
+        term_pane_terminate_process_group(tp->child_pid, true);
         tp->child_pid = -1;
     }
     if (tp->pty_master>=0) { close(tp->pty_master); tp->pty_master = -1; }
@@ -932,20 +932,45 @@ void term_pane_send_input(term_pane *tp, const char *buf, size_t len) {
 }
 
 bool term_measure_cell(int font_px, int *cell_w, int *cell_h) {
-    font_ctx f = {0};
+    enum { TERM_MEASURE_CACHE_MAX = 512 };
+    static FT_Library measure_ftlib;
+    static FT_Face measure_face;
+    static bool measure_initialized;
+    static bool measure_failed;
+    static int cached_w[TERM_MEASURE_CACHE_MAX + 1];
+    static int cached_h[TERM_MEASURE_CACHE_MAX + 1];
+
     if (font_px <= 0) font_px = 18;
-    // Initialize a temporary freetype face via fontconfig monospace
-    if (FT_Init_FreeType(&f.ftlib)) return false;
-    char *path = kms_font_find_monospace();
-    if (!path) { FT_Done_FreeType(f.ftlib); return false; }
-    if (FT_New_Face(f.ftlib, path, 0, &f.face)) { free(path); FT_Done_FreeType(f.ftlib); return false; }
-    free(path);
-    FT_Set_Pixel_Sizes(f.face, 0, font_px);
-    FT_Load_Char(f.face, 'M', FT_LOAD_RENDER);
-    int cw = (f.face->glyph->advance.x + 31) / 64;
+    if (font_px <= TERM_MEASURE_CACHE_MAX && cached_w[font_px] > 0) {
+        if (cell_w) *cell_w = cached_w[font_px];
+        if (cell_h) *cell_h = cached_h[font_px];
+        return true;
+    }
+    if (!measure_initialized && !measure_failed) {
+        if (FT_Init_FreeType(&measure_ftlib)) {
+            measure_failed = true;
+        } else {
+            char *path = kms_font_find_monospace();
+            if (!path || FT_New_Face(measure_ftlib, path, 0, &measure_face)) {
+                measure_failed = true;
+                FT_Done_FreeType(measure_ftlib);
+                measure_ftlib = NULL;
+            } else {
+                measure_initialized = true;
+            }
+            free(path);
+        }
+    }
+    if (!measure_initialized || !measure_face) return false;
+    if (FT_Set_Pixel_Sizes(measure_face, 0, font_px) || FT_Load_Char(measure_face, 'M', FT_LOAD_DEFAULT)) {
+        return false;
+    }
+    int cw = (measure_face->glyph->advance.x + 31) / 64;
     int ch = font_px + 2;
-    FT_Done_Face(f.face);
-    FT_Done_FreeType(f.ftlib);
+    if (font_px <= TERM_MEASURE_CACHE_MAX) {
+        cached_w[font_px] = cw;
+        cached_h[font_px] = ch;
+    }
     if (cell_w) *cell_w = cw;
     if (cell_h) *cell_h = ch;
     return true;

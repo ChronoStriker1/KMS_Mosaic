@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import difflib
+import fcntl
 from fractions import Fraction
 import hashlib
 import io
@@ -21,18 +23,23 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import re
+import secrets
 from urllib.parse import parse_qs, urlparse
 from typing import Any
 
 try:
     import av
     from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+    from aiortc.contrib.media import MediaRelay
+    from aiortc.mediastreams import MediaStreamError
     from aiortc.rtcrtpsender import RTCRtpSender
 except ImportError:  # pragma: no cover
     av = None
     RTCPeerConnection = None
     RTCSessionDescription = None
     VideoStreamTrack = object
+    MediaRelay = None
+    MediaStreamError = RuntimeError
     RTCRtpSender = None
 
 
@@ -43,6 +50,17 @@ DEFAULT_PANE_COMMANDS = [
 ]
 KNOWN_PANE_TYPES = {"terminal", "mpv"}
 WEB_STATE_PREFIX = "# kms_mosaic_web_state "
+THUMB_CACHE_MAX_BYTES = 64 * 1024 * 1024
+THUMB_CACHE_MAX_FILES = 512
+THUMB_CACHE_MAX_AGE_SEC = 7 * 24 * 60 * 60
+DDC_I2C_ADDRESS = 0x37
+DDC_I2C_SLAVE_FORCE = 0x0706
+DDC_CONTROL_CODES = {
+    "brightness": (0x10, 0, 100),
+    "contrast": (0x12, 0, 100),
+    "input": (0x14, 1, 255),
+    "power": (0xD6, 1, 5),
+}
 
 
 def default_config_path() -> str:
@@ -110,6 +128,79 @@ def list_connectors() -> list[dict[str, Any]]:
     return []
 
 
+def _edid_monitor_name(data: bytes) -> str:
+    for offset in range(54, min(len(data), 126), 18):
+        descriptor = data[offset:offset + 18]
+        if len(descriptor) == 18 and descriptor[:3] == b"\0\0\0" and descriptor[3] == 0xFC:
+            return descriptor[5:18].decode("ascii", errors="ignore").strip(" \0\n\r")
+    return ""
+
+
+def list_ddc_monitors(
+    sysfs_root: Path = Path("/sys/class/drm"),
+    dev_root: Path = Path("/dev"),
+) -> list[dict[str, Any]]:
+    monitors: list[dict[str, Any]] = []
+    for status_path in sorted(sysfs_root.glob("card*-*/status")):
+        try:
+            if status_path.read_text(encoding="utf-8").strip() != "connected":
+                continue
+        except OSError:
+            continue
+        connector_dir = status_path.parent
+        connector = connector_dir.name.split("-", 1)[-1]
+        ddc_path = connector_dir / "ddc"
+        try:
+            bus_name = Path(os.path.realpath(ddc_path)).name
+        except OSError:
+            continue
+        if not re.fullmatch(r"i2c-\d+", bus_name):
+            continue
+        bus_path = dev_root / bus_name
+        try:
+            edid = (connector_dir / "edid").read_bytes()
+        except OSError:
+            edid = b""
+        model = _edid_monitor_name(edid)
+        monitors.append({
+            "connector": connector,
+            "model": model,
+            "label": f"{connector} · {model}" if model else connector,
+            "bus": str(bus_path),
+            "available": bus_path.exists() and os.access(bus_path, os.R_OK | os.W_OK),
+        })
+    return monitors
+
+
+def build_ddc_vcp_message(control: str, value: int) -> bytes:
+    if control not in DDC_CONTROL_CODES:
+        raise ValueError("Unsupported monitor control")
+    code, minimum, maximum = DDC_CONTROL_CODES[control]
+    value = int(value)
+    if value < minimum or value > maximum:
+        raise ValueError(f"{control.capitalize()} must be between {minimum} and {maximum}")
+    if control == "power" and value not in (1, 4, 5):
+        raise ValueError("Power must be on, off, or standby")
+    payload = [0x51, 0x84, 0x03, code, (value >> 8) & 0xFF, value & 0xFF]
+    checksum = 0x6E
+    for byte in payload:
+        checksum ^= byte
+    return bytes(payload + [checksum])
+
+
+def write_ddc_control(bus_path: str, control: str, value: int) -> None:
+    if not re.fullmatch(r"/dev/i2c-\d+", bus_path):
+        raise ValueError("Invalid DDC bus")
+    message = build_ddc_vcp_message(control, value)
+    fd = os.open(bus_path, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, DDC_I2C_SLAVE_FORCE, DDC_I2C_ADDRESS)
+        if os.write(fd, message) != len(message):
+            raise OSError("Incomplete DDC/CI write")
+    finally:
+        os.close(fd)
+
+
 def write_text_atomic(target_path: Path, text: str) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd, tmp_name = tempfile.mkstemp(prefix=target_path.name + ".", dir=str(target_path.parent))
@@ -139,6 +230,7 @@ def empty_state() -> dict[str, Any]:
         "layout": "stack",
         "roles": "",
         "fs_cycle_sec": 5,
+        "transition_ms": 0,
         "visibility_mode": "neither",
         "pane_types": ["terminal", "terminal"],
         "pane_type_raw": ["", ""],
@@ -150,6 +242,8 @@ def empty_state() -> dict[str, Any]:
         "pane_mpv_outs": ["", ""],
         "pane_video_rotate": ["", ""],
         "pane_panscan": ["", ""],
+        "pane_watchdogs": [0, 0],
+        "pane_sync_groups": ["", ""],
         "pane_video_paths": [[], []],
         "pane_mpv_opts": [[], []],
         "video_paths": [],
@@ -212,6 +306,8 @@ def ensure_panes(state: dict[str, Any]) -> None:
     pane_mpv_outs = list(state.get("pane_mpv_outs", []))
     pane_video_rotate = list(state.get("pane_video_rotate", []))
     pane_panscan = list(state.get("pane_panscan", []))
+    pane_watchdogs = list(state.get("pane_watchdogs", []))
+    pane_sync_groups = list(state.get("pane_sync_groups", []))
     pane_video_paths = [list(paths) for paths in state.get("pane_video_paths", [])]
     pane_mpv_opts = [list(opts) for opts in state.get("pane_mpv_opts", [])]
     while len(pane_commands) < pane_count:
@@ -234,6 +330,10 @@ def ensure_panes(state: dict[str, Any]) -> None:
         pane_video_rotate.append("")
     while len(pane_panscan) < pane_count:
         pane_panscan.append("")
+    while len(pane_watchdogs) < pane_count:
+        pane_watchdogs.append(0)
+    while len(pane_sync_groups) < pane_count:
+        pane_sync_groups.append("")
     while len(pane_video_paths) < pane_count:
         pane_video_paths.append([])
     while len(pane_mpv_opts) < pane_count:
@@ -248,6 +348,8 @@ def ensure_panes(state: dict[str, Any]) -> None:
     state["pane_mpv_outs"] = pane_mpv_outs[:pane_count]
     state["pane_video_rotate"] = pane_video_rotate[:pane_count]
     state["pane_panscan"] = pane_panscan[:pane_count]
+    state["pane_watchdogs"] = [max(0, _safe_int(value, 0)) for value in pane_watchdogs[:pane_count]]
+    state["pane_sync_groups"] = [str(value or "") for value in pane_sync_groups[:pane_count]]
     state["pane_video_paths"] = pane_video_paths[:pane_count]
     state["pane_mpv_opts"] = pane_mpv_opts[:pane_count]
 
@@ -293,6 +395,8 @@ def _pane_type_payload(state: dict[str, Any], index: int) -> dict[str, Any]:
         "mpv_out": state["pane_mpv_outs"][index],
         "video_rotate": state["pane_video_rotate"][index],
         "panscan": state["pane_panscan"][index],
+        "watchdog": state["pane_watchdogs"][index],
+        "sync_group": state["pane_sync_groups"][index],
         "video_paths": list(state["pane_video_paths"][index]),
         "mpv_opts": list(state["pane_mpv_opts"][index]),
     }
@@ -309,6 +413,8 @@ def _write_pane_payload(state: dict[str, Any], index: int, payload: dict[str, An
     state["pane_mpv_outs"][index] = str(payload.get("mpv_out") or "")
     state["pane_video_rotate"][index] = str(payload.get("video_rotate") or "")
     state["pane_panscan"][index] = str(payload.get("panscan") or "")
+    state["pane_watchdogs"][index] = max(0, _safe_int(payload.get("watchdog"), 0))
+    state["pane_sync_groups"][index] = str(payload.get("sync_group") or "")
     state["pane_video_paths"][index] = list(payload.get("video_paths") or [])
     state["pane_mpv_opts"][index] = list(payload.get("mpv_opts") or [])
 
@@ -537,7 +643,7 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
     normalized = empty_state()
     for key in (
         "connector", "mode", "rotation", "font_size", "right_frac", "video_frac",
-        "pane_split", "layout", "fs_cycle_sec", "extra_lines",
+        "pane_split", "layout", "fs_cycle_sec", "transition_ms", "extra_lines",
     ):
         normalized[key] = state.get(key, normalized.get(key))
     normalized["flags"] = dict(state.get("flags", {}))
@@ -733,6 +839,16 @@ def parse_config_text(text: str) -> dict[str, Any]:
                 _ensure_pane_media_slot(state, pane_index)
                 state["pane_panscan"][pane_index] = tokens[i + 2]
                 i += 3
+            elif tok == "--pane-watchdog" and i + 2 < len(tokens):
+                pane_index = max(0, int(tokens[i + 1]) - 1)
+                _ensure_pane_media_slot(state, pane_index)
+                state["pane_watchdogs"][pane_index] = max(0, int(tokens[i + 2]))
+                i += 3
+            elif tok == "--pane-sync-group" and i + 2 < len(tokens):
+                pane_index = max(0, int(tokens[i + 1]) - 1)
+                _ensure_pane_media_slot(state, pane_index)
+                state["pane_sync_groups"][pane_index] = tokens[i + 2]
+                i += 3
             elif tok == "--pane-video" and i + 2 < len(tokens):
                 pane_index = max(0, int(tokens[i + 1]) - 1)
                 _ensure_pane_media_slot(state, pane_index)
@@ -751,6 +867,9 @@ def parse_config_text(text: str) -> dict[str, Any]:
                 i += 2
             elif tok == "--fs-cycle-sec" and nxt is not None:
                 state["fs_cycle_sec"] = int(nxt)
+                i += 2
+            elif tok == "--transition-ms" and nxt is not None:
+                state["transition_ms"] = max(0, min(5000, int(nxt)))
                 i += 2
             elif tok == "--video" and nxt is not None:
                 state["video_paths"].append(nxt)
@@ -848,6 +967,10 @@ def build_config_text(state: dict[str, Any]) -> str:
             return True
         if str(pane_panscan[index]).strip():
             return True
+        if int(pane_watchdogs[index] or 0) > 0:
+            return True
+        if str(pane_sync_groups[index]).strip():
+            return True
         if pane_video_paths[index]:
             return True
         if pane_mpv_opts[index]:
@@ -869,6 +992,8 @@ def build_config_text(state: dict[str, Any]) -> str:
     if roles:
         add_opt("--roles", roles)
     add_opt("--fs-cycle-sec", state.get("fs_cycle_sec", 5))
+    if int(state.get("transition_ms", 0) or 0) > 0:
+        add_opt("--transition-ms", min(5000, int(state["transition_ms"])))
 
     pane_count = int(state.get("pane_count", 2))
     if pane_count != 2:
@@ -883,6 +1008,8 @@ def build_config_text(state: dict[str, Any]) -> str:
     pane_mpv_outs = list(state.get("pane_mpv_outs", []))
     pane_video_rotate = list(state.get("pane_video_rotate", []))
     pane_panscan = list(state.get("pane_panscan", []))
+    pane_watchdogs = list(state.get("pane_watchdogs", []))
+    pane_sync_groups = list(state.get("pane_sync_groups", []))
     pane_video_paths = [list(paths) for paths in state.get("pane_video_paths", [])]
     pane_mpv_opts = [list(opts) for opts in state.get("pane_mpv_opts", [])]
     for idx, cmd in enumerate(pane_commands):
@@ -896,6 +1023,8 @@ def build_config_text(state: dict[str, Any]) -> str:
             pane_mpv_out = pane_mpv_outs[idx] if idx < len(pane_mpv_outs) else ""
             pane_rotate = pane_video_rotate[idx] if idx < len(pane_video_rotate) else ""
             pane_panscan_value = pane_panscan[idx] if idx < len(pane_panscan) else ""
+            pane_watchdog = pane_watchdogs[idx] if idx < len(pane_watchdogs) else 0
+            pane_sync_group = pane_sync_groups[idx] if idx < len(pane_sync_groups) else ""
             videos = pane_video_paths[idx] if idx < len(pane_video_paths) else []
             mpv_opts = pane_mpv_opts[idx] if idx < len(pane_mpv_opts) else []
             if playlist:
@@ -910,6 +1039,10 @@ def build_config_text(state: dict[str, Any]) -> str:
                 lines.append(f"--pane-video-rotate {idx + 1} {str(pane_rotate).strip()}")
             if str(pane_panscan_value).strip():
                 lines.append(f"--pane-panscan {idx + 1} {shlex.quote(str(pane_panscan_value))}")
+            if int(pane_watchdog or 0) > 0:
+                lines.append(f"--pane-watchdog {idx + 1} {int(pane_watchdog)}")
+            if str(pane_sync_group).strip():
+                lines.append(f"--pane-sync-group {idx + 1} {shlex.quote(str(pane_sync_group).strip())}")
             for video_path in videos:
                 if str(video_path).strip():
                     lines.append(f"--pane-video {idx + 1} {shlex.quote(str(video_path))}")
@@ -1001,6 +1134,9 @@ class WebConfig:
     preview_lease_path: Path
     snapshot_output_path: Path
     thumb_cache_dir: Path
+    scenes_path: Path | None = None
+    control_request_path: Path = Path("/tmp/kms_mosaic_control.request")
+    control_status_path: Path = Path("/tmp/kms_mosaic_control.status")
     verbose: bool = False
 
 
@@ -1010,6 +1146,460 @@ def write_text_atomic(path: Path, text: str) -> None:
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(text)
     os.replace(temp_path, path)
+
+
+class ConfigHistory:
+    MAX_ENTRIES = 20
+    MAX_BYTES = 4 * 1024 * 1024
+
+    def __init__(self, config_path: Path, history_dir: Path | None = None) -> None:
+        self.config_path = config_path
+        if history_dir is not None:
+            self.path = history_dir
+        elif str(config_path).startswith("/boot/config/"):
+            self.path = Path("/boot/config/plugins/kms.mosaic/history")
+        else:
+            self.path = config_path.with_name(f".{config_path.name}.history")
+        self.lock = threading.RLock()
+
+    def _entry_path(self, entry_id: str) -> Path:
+        if not re.fullmatch(r"\d+-[a-z-]+-[0-9a-f]{12}\.conf", entry_id):
+            raise ValueError("Invalid history entry")
+        path = self.path / entry_id
+        if not path.is_file():
+            raise ValueError("History entry not found")
+        return path
+
+    def _snapshot_unlocked(self, text: str, reason: str) -> None:
+        if not text:
+            return
+        clean_reason = re.sub(r"[^a-z-]", "-", reason.lower()).strip("-") or "change"
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        entry = self.path / f"{time.time_ns()}-{clean_reason}-{digest}.conf"
+        write_text_atomic(entry, text)
+
+    def _prune_unlocked(self) -> None:
+        entries = sorted(self.path.glob("*.conf"), key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        retained_bytes = 0
+        for index, entry in enumerate(entries):
+            try:
+                size = entry.stat().st_size
+                if index >= self.MAX_ENTRIES or retained_bytes + size > self.MAX_BYTES:
+                    entry.unlink(missing_ok=True)
+                else:
+                    retained_bytes += size
+            except OSError:
+                continue
+
+    def write(self, text: str, reason: str = "editor") -> bool:
+        with self.lock:
+            current = read_raw_config_text(self.config_path)
+            if current == text:
+                return False
+            self.path.mkdir(parents=True, exist_ok=True)
+            self._snapshot_unlocked(current, reason)
+            write_text_atomic(self.config_path, text)
+            self._prune_unlocked()
+            return True
+
+    def entries(self) -> list[dict[str, Any]]:
+        with self.lock:
+            if not self.path.exists():
+                return []
+            result: list[dict[str, Any]] = []
+            for entry in sorted(self.path.glob("*.conf"), key=lambda path: path.stat().st_mtime_ns, reverse=True):
+                try:
+                    stat = entry.stat()
+                except OSError:
+                    continue
+                match = re.fullmatch(r"\d+-([a-z-]+)-[0-9a-f]{12}\.conf", entry.name)
+                result.append({
+                    "id": entry.name,
+                    "created": stat.st_mtime,
+                    "size": stat.st_size,
+                    "reason": match.group(1).replace("-", " ") if match else "change",
+                })
+            return result
+
+    def diff(self, entry_id: str) -> str:
+        with self.lock:
+            previous = self._entry_path(entry_id).read_text(encoding="utf-8")
+            current = read_raw_config_text(self.config_path)
+        return "".join(difflib.unified_diff(
+            previous.splitlines(keepends=True),
+            current.splitlines(keepends=True),
+            fromfile="saved snapshot",
+            tofile="current config",
+        ))
+
+    def rollback(self, entry_id: str) -> bool:
+        with self.lock:
+            previous = self._entry_path(entry_id).read_text(encoding="utf-8")
+            current = read_raw_config_text(self.config_path)
+            if previous == current:
+                return False
+            self.path.mkdir(parents=True, exist_ok=True)
+            self._snapshot_unlocked(current, "pre-rollback")
+            write_text_atomic(self.config_path, previous)
+            self._prune_unlocked()
+            return True
+
+
+class PaneTemplateManager:
+    MAX_TEMPLATES = 50
+    MAX_TEMPLATE_BYTES = 256 * 1024
+
+    def __init__(self, app_config: WebConfig, path: Path | None = None) -> None:
+        self.app_config = app_config
+        if path is not None:
+            self.path = path
+        elif str(app_config.config_path).startswith("/boot/config/"):
+            self.path = Path("/boot/config/plugins/kms.mosaic/pane-templates.json")
+        else:
+            self.path = app_config.config_path.with_suffix(".pane-templates.json")
+        self.lock = threading.RLock()
+
+    def _empty(self) -> dict[str, Any]:
+        return {"version": 1, "templates": []}
+
+    def _read_unlocked(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return self._empty()
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return self._empty()
+        templates = payload.get("templates") if isinstance(payload, dict) else []
+        return {"version": 1, "templates": list(templates or [])[:self.MAX_TEMPLATES]}
+
+    def _write_unlocked(self, payload: dict[str, Any]) -> None:
+        write_text_atomic(self.path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    def _normalize_pane(self, pane: Any) -> dict[str, Any]:
+        if not isinstance(pane, dict):
+            raise ValueError("Pane template data is invalid")
+        state = empty_state()
+        _write_pane_payload(state, 0, pane)
+        normalized = _pane_type_payload(state, 0)
+        normalized["video_paths"] = [str(value) for value in normalized["video_paths"]]
+        normalized["mpv_opts"] = [str(value) for value in normalized["mpv_opts"]]
+        if len(json.dumps(normalized).encode("utf-8")) > self.MAX_TEMPLATE_BYTES:
+            raise ValueError("Pane template is too large")
+        return normalized
+
+    def read(self) -> dict[str, Any]:
+        with self.lock:
+            return self._read_unlocked()
+
+    def save(self, name: str, pane: Any, template_id: str = "") -> dict[str, Any]:
+        clean_name = " ".join(str(name or "").split()).strip()
+        if not clean_name or len(clean_name) > 80:
+            raise ValueError("Template name must be 1 to 80 characters")
+        normalized = self._normalize_pane(pane)
+        with self.lock:
+            payload = self._read_unlocked()
+            existing = next((item for item in payload["templates"] if item.get("id") == template_id), None)
+            if existing is None:
+                if len(payload["templates"]) >= self.MAX_TEMPLATES:
+                    raise ValueError("Pane template limit reached")
+                existing = {"id": secrets.token_urlsafe(9)}
+                payload["templates"].append(existing)
+            existing.update({"name": clean_name, "pane": normalized, "updated": time.time()})
+            self._write_unlocked(payload)
+            return dict(existing)
+
+    def delete(self, template_id: str) -> bool:
+        with self.lock:
+            payload = self._read_unlocked()
+            before = len(payload["templates"])
+            payload["templates"] = [item for item in payload["templates"] if item.get("id") != template_id]
+            changed = len(payload["templates"]) != before
+            if changed:
+                self._write_unlocked(payload)
+            return changed
+
+class SceneManager:
+    def __init__(self, app_config: WebConfig, history: ConfigHistory | None = None) -> None:
+        self.app_config = app_config
+        self.history = history or ConfigHistory(app_config.config_path)
+        self.path = app_config.scenes_path or app_config.config_path.with_suffix(".scenes.json")
+        self.lock = threading.RLock()
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.schedule_minute = ""
+        self.applied_schedule_keys: set[str] = set()
+
+    def _empty(self) -> dict[str, Any]:
+        return {"version": 1, "scenes": [], "schedules": []}
+
+    def _read_unlocked(self) -> dict[str, Any]:
+        if not self.path.exists():
+            return self._empty()
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return self._empty()
+        if not isinstance(payload, dict):
+            return self._empty()
+        return {
+            "version": 1,
+            "scenes": list(payload.get("scenes") or []),
+            "schedules": list(payload.get("schedules") or []),
+        }
+
+    def read(self) -> dict[str, Any]:
+        with self.lock:
+            return self._read_unlocked()
+
+    def _write_unlocked(self, payload: dict[str, Any]) -> None:
+        write_text_atomic(self.path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+    def save_scene(self, name: str, state: dict[str, Any], scene_id: str = "") -> dict[str, Any]:
+        clean_name = " ".join(str(name or "").split()).strip()
+        if not clean_name:
+            raise ValueError("Scene name is required")
+        now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        with self.lock:
+            payload = self._read_unlocked()
+            existing = next((item for item in payload["scenes"] if item.get("id") == scene_id), None)
+            if existing is None:
+                existing = {
+                    "id": secrets.token_urlsafe(9),
+                    "created_at": now,
+                }
+                payload["scenes"].append(existing)
+            existing.update({
+                "name": clean_name,
+                "updated_at": now,
+                "config": serialize_config(state),
+            })
+            self._write_unlocked(payload)
+            return dict(existing)
+
+    def delete_scene(self, scene_id: str) -> bool:
+        with self.lock:
+            payload = self._read_unlocked()
+            before = len(payload["scenes"])
+            payload["scenes"] = [item for item in payload["scenes"] if item.get("id") != scene_id]
+            payload["schedules"] = [item for item in payload["schedules"] if item.get("scene_id") != scene_id]
+            changed = len(payload["scenes"]) != before
+            if changed:
+                self._write_unlocked(payload)
+            return changed
+
+    def apply_scene(self, scene_id: str) -> dict[str, Any]:
+        with self.lock:
+            payload = self._read_unlocked()
+            scene = next((item for item in payload["scenes"] if item.get("id") == scene_id), None)
+            if scene is None:
+                raise ValueError("Scene not found")
+            config_text = str(scene.get("config") or "")
+            if not config_text.strip():
+                raise ValueError("Scene has no configuration")
+        self.history.write(config_text, "scene")
+        return dict(scene)
+
+    def save_schedule(self, scene_id: str, at_time: str, days: list[int], enabled: bool = True,
+                      schedule_id: str = "") -> dict[str, Any]:
+        if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", str(at_time or "")):
+            raise ValueError("Schedule time must use HH:MM")
+        clean_days = sorted({int(day) for day in days if 0 <= int(day) <= 6})
+        if not clean_days:
+            raise ValueError("Select at least one schedule day")
+        with self.lock:
+            payload = self._read_unlocked()
+            if not any(item.get("id") == scene_id for item in payload["scenes"]):
+                raise ValueError("Scene not found")
+            existing = next((item for item in payload["schedules"] if item.get("id") == schedule_id), None)
+            if existing is None:
+                existing = {"id": secrets.token_urlsafe(9)}
+                payload["schedules"].append(existing)
+            existing.update({
+                "scene_id": scene_id,
+                "time": at_time,
+                "days": clean_days,
+                "enabled": bool(enabled),
+            })
+            self._write_unlocked(payload)
+            return dict(existing)
+
+    def delete_schedule(self, schedule_id: str) -> bool:
+        with self.lock:
+            payload = self._read_unlocked()
+            before = len(payload["schedules"])
+            payload["schedules"] = [item for item in payload["schedules"] if item.get("id") != schedule_id]
+            changed = len(payload["schedules"]) != before
+            if changed:
+                self._write_unlocked(payload)
+            return changed
+
+    def _scheduler_loop(self) -> None:
+        while not self.stop_event.wait(5):
+            now = time.localtime()
+            minute = time.strftime("%Y-%m-%d %H:%M", now)
+            current_time = time.strftime("%H:%M", now)
+            if minute != self.schedule_minute:
+                self.schedule_minute = minute
+                self.applied_schedule_keys.clear()
+            payload = self.read()
+            for schedule in payload["schedules"]:
+                key = f"{minute}:{schedule.get('id', '')}"
+                if (
+                    schedule.get("enabled", True)
+                    and current_time == schedule.get("time")
+                    and now.tm_wday in schedule.get("days", [])
+                    and key not in self.applied_schedule_keys
+                ):
+                    try:
+                        self.apply_scene(str(schedule.get("scene_id") or ""))
+                        self.applied_schedule_keys.add(key)
+                    except (OSError, ValueError):
+                        pass
+
+    def start(self) -> None:
+        if self.thread is not None:
+            return
+        self.thread = threading.Thread(target=self._scheduler_loop, name="kms-mosaic-scenes", daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=2)
+            self.thread = None
+
+
+class HealthMonitor:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.previous_cpu: dict[int, tuple[int, float]] = {}
+        self.clock_ticks = int(os.sysconf("SC_CLK_TCK"))
+        self.page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        self.started_at = time.monotonic()
+        self.compositor_pid = -1
+
+    def _process(self, pid: int) -> dict[str, Any] | None:
+        try:
+            stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+            comm = stat_text[stat_text.index("(") + 1:stat_text.rindex(")")]
+            fields = stat_text[stat_text.rindex(")") + 2:].split()
+            ticks = int(fields[11]) + int(fields[12])
+            ppid = int(fields[1])
+            threads = int(fields[17])
+            rss_bytes = int(fields[21]) * self.page_size
+        except (OSError, ValueError, IndexError):
+            return None
+        now = time.monotonic()
+        with self.lock:
+            previous = self.previous_cpu.get(pid)
+            self.previous_cpu[pid] = (ticks, now)
+        cpu_percent = 0.0
+        if previous and now > previous[1]:
+            cpu_percent = max(0.0, (ticks - previous[0]) / self.clock_ticks / (now - previous[1]) * 100)
+        return {
+            "pid": pid,
+            "ppid": ppid,
+            "name": comm,
+            "cpu_percent": round(cpu_percent, 1),
+            "rss_bytes": rss_bytes,
+            "threads": threads,
+        }
+
+    def _find_compositor_pid(self) -> int:
+        if self.compositor_pid > 0:
+            try:
+                if Path(f"/proc/{self.compositor_pid}/comm").read_text(encoding="utf-8").strip() == "kms_mosaic.bin":
+                    return self.compositor_pid
+            except OSError:
+                pass
+        self.compositor_pid = -1
+        entries = Path("/proc").iterdir() if Path("/proc").exists() else []
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                if (entry / "comm").read_text(encoding="utf-8").strip() == "kms_mosaic.bin":
+                    self.compositor_pid = int(entry.name)
+                    return self.compositor_pid
+            except OSError:
+                continue
+        return -1
+
+    def _children(self, pid: int) -> list[dict[str, Any]]:
+        if pid <= 0:
+            return []
+        try:
+            child_ids = (Path(f"/proc/{pid}/task/{pid}/children")
+                         .read_text(encoding="utf-8").split())
+        except OSError:
+            child_ids = []
+            entries = Path("/proc").iterdir() if Path("/proc").exists() else []
+            for entry in entries:
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    stat_text = (entry / "stat").read_text(encoding="utf-8")
+                    fields = stat_text[stat_text.rindex(")") + 2:].split()
+                    if int(fields[1]) == pid:
+                        child_ids.append(entry.name)
+                except (OSError, ValueError, IndexError):
+                    continue
+        return [process for child in child_ids if (process := self._process(int(child))) is not None]
+
+    def _gpu(self) -> list[dict[str, Any]]:
+        devices: list[dict[str, Any]] = []
+        for card in sorted(Path("/sys/class/drm").glob("card[0-9]*")):
+            device = card / "device"
+            item: dict[str, Any] = {"name": card.name}
+            for key, filename in (
+                ("busy_percent", "gpu_busy_percent"),
+                ("vram_used_bytes", "mem_info_vram_used"),
+                ("vram_total_bytes", "mem_info_vram_total"),
+            ):
+                try:
+                    item[key] = int((device / filename).read_text(encoding="utf-8").strip())
+                except (OSError, ValueError):
+                    item[key] = None
+            if any(value is not None for key, value in item.items() if key != "name"):
+                devices.append(item)
+        return devices
+
+    def _recent_errors(self) -> list[str]:
+        for candidate in (Path("/tmp/start_kms_mosaic.log"), Path("/tmp/kms_mosaic_web.log")):
+            if not candidate.exists():
+                continue
+            try:
+                lines = candidate.read_text(encoding="utf-8", errors="replace").splitlines()[-300:]
+            except OSError:
+                continue
+            errors = [line[-500:] for line in lines if re.search(r"error|failed|fatal|denied", line, re.I)]
+            if errors:
+                return errors[-8:]
+        return []
+
+    def _recovery(self) -> dict[str, Any] | None:
+        try:
+            value = json.loads(Path("/tmp/kms_mosaic_control.status").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def snapshot(self, preview_peers: int = 0) -> dict[str, Any]:
+        compositor_pid = self._find_compositor_pid()
+        compositor = self._process(compositor_pid) if compositor_pid > 0 else None
+        children = self._children(compositor_pid)
+        web = self._process(os.getpid())
+        return {
+            "timestamp": time.time(),
+            "uptime_sec": round(time.monotonic() - self.started_at, 1),
+            "compositor": compositor,
+            "web": web,
+            "pane_processes": children,
+            "gpu": self._gpu(),
+            "preview_peers": preview_peers,
+            "recent_errors": self._recent_errors(),
+            "last_recovery": self._recovery(),
+        }
 
 
 def write_preview_lease(app_config: WebConfig, interval_ms: int) -> None:
@@ -1048,6 +1638,28 @@ def decode_raw_preview_frame(frame_bytes: bytes) -> tuple[int, int, bytes]:
     if len(payload) < expected:
         raise ValueError("Preview frame payload truncated")
     return width, height, payload
+
+
+def pack_rgba_rows(rgba: bytes, width: int, height: int, line_size: int,
+                   scratch: bytearray | None = None) -> bytes | bytearray:
+    row_bytes = width * 4
+    if line_size == row_bytes:
+        return rgba
+    required = line_size * height
+    if scratch is None or len(scratch) != required:
+        scratch = bytearray(required)
+    for row in range(height):
+        source_start = row * row_bytes
+        dest_start = row * line_size
+        scratch[dest_start:dest_start + row_bytes] = rgba[source_start:source_start + row_bytes]
+    return scratch
+
+
+def preview_encode_dimensions(width: int, height: int, max_edge: int) -> tuple[int, int]:
+    scale = min(1.0, max_edge / max(width, height))
+    scaled_w = max(2, int(round(width * scale)))
+    scaled_h = max(2, int(round(height * scale)))
+    return scaled_w - scaled_w % 2, scaled_h - scaled_h % 2
 
 
 def boost_h264_bitrate_sdp(sdp: str, start_kbps: int = 8000, max_kbps: int = 12000, min_kbps: int = 2000) -> str:
@@ -1110,12 +1722,25 @@ class RawPreviewVideoTrack(VideoStreamTrack):
         self.interval_ms = 16
         self.last_mtime_ns = 0
         self.last_frame: av.VideoFrame | None = None
+        self.padded_rgba = bytearray()
         self.timestamp = 0
         self.time_base = Fraction(1, 90000)
         self.last_timestamp_time = time.monotonic()
         self.max_edge = 720
 
+    def configure(self, profile: str) -> str:
+        profiles = {
+            "quality": (16, 720),
+            "balanced": (33, 720),
+            "economy": (100, 480),
+        }
+        selected = profile if profile in profiles else "balanced"
+        self.interval_ms, self.max_edge = profiles[selected]
+        return selected
+
     async def recv(self) -> av.VideoFrame:
+        if self.readyState != "live":
+            raise MediaStreamError
         try:
             frame_bytes, self.last_mtime_ns = await asyncio.to_thread(
                 read_latest_raw_preview_frame,
@@ -1126,16 +1751,18 @@ class RawPreviewVideoTrack(VideoStreamTrack):
             )
             width, height, rgba = decode_raw_preview_frame(frame_bytes)
             frame = av.VideoFrame(width, height, "rgba")
-            frame.planes[0].update(rgba)
-            if max(width, height) > self.max_edge:
-                scale = self.max_edge / max(width, height)
-                scaled_w = max(2, int(round(width * scale)))
-                scaled_h = max(2, int(round(height * scale)))
-                scaled_w -= scaled_w % 2
-                scaled_h -= scaled_h % 2
-                self.last_frame = frame.reformat(width=scaled_w, height=scaled_h, format="yuv420p")
-            else:
-                self.last_frame = frame.reformat(format="yuv420p")
+            packed = pack_rgba_rows(rgba, width, height, frame.planes[0].line_size,
+                                    self.padded_rgba)
+            if isinstance(packed, bytearray):
+                self.padded_rgba = packed
+            frame.planes[0].update(packed)
+            # H.264 and other YUV 4:2:0 encoders require even dimensions.
+            # The compositor can produce odd portrait widths (for example 405px),
+            # so normalize every frame rather than only downscaled frames.
+            scaled_w, scaled_h = preview_encode_dimensions(width, height, self.max_edge)
+            self.last_frame = frame.reformat(width=scaled_w, height=scaled_h, format="yuv420p")
+        except MediaStreamError:
+            raise
         except Exception:
             if self.last_frame is None:
                 fallback = av.VideoFrame(16, 9, "rgba")
@@ -1157,6 +1784,11 @@ class WebRTCBridge:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.thread: threading.Thread | None = None
         self.peers: set[RTCPeerConnection] = set()
+        self.peer_ids: dict[str, RTCPeerConnection] = {}
+        self.peer_last_seen: dict[str, float] = {}
+        self.peer_expiry: dict[RTCPeerConnection, asyncio.Task[Any]] = {}
+        self.preview_source: RawPreviewVideoTrack | None = RawPreviewVideoTrack(app_config) if self.available else None
+        self.relay = MediaRelay() if self.available and MediaRelay is not None else None
 
     @property
     def available(self) -> bool:
@@ -1189,59 +1821,130 @@ class WebRTCBridge:
     async def _close_peer(self, pc: RTCPeerConnection) -> None:
         if pc in self.peers:
             self.peers.discard(pc)
+        for peer_id, candidate in list(self.peer_ids.items()):
+            if candidate is pc:
+                self.peer_ids.pop(peer_id, None)
+                self.peer_last_seen.pop(peer_id, None)
+        expiry = self.peer_expiry.pop(pc, None)
+        if expiry is not None and expiry is not asyncio.current_task():
+            expiry.cancel()
         if pc.connectionState != "closed":
             await pc.close()
+        if not self.peers and self.preview_source is not None:
+            # aiortc's MediaRelay keeps polling its source after the last proxy
+            # stops. End that worker and make a fresh lazy source for the next
+            # viewer so compositor preview readback returns to idle immediately.
+            self.preview_source.stop()
+            self.preview_source = RawPreviewVideoTrack(self.app_config)
+            self.relay = MediaRelay() if MediaRelay is not None else None
 
-    async def _create_answer(self, offer_sdp: str, offer_type: str) -> dict[str, str]:
+    async def _expire_peer(self, pc: RTCPeerConnection, peer_id: str) -> None:
+        while self.peer_ids.get(peer_id) is pc:
+            await asyncio.sleep(5)
+            if time.monotonic() - self.peer_last_seen.get(peer_id, 0.0) > 20:
+                await self._close_peer(pc)
+                return
+
+    async def _create_answer(self, offer_sdp: str, offer_type: str, preview_profile: str = "balanced") -> dict[str, str]:
         if not self.available:
             raise RuntimeError("WebRTC preview dependencies are not installed")
         pc = RTCPeerConnection()
+        peer_id = secrets.token_urlsafe(18)
         self.peers.add(pc)
+        self.peer_ids[peer_id] = pc
+        self.peer_last_seen[peer_id] = time.monotonic()
 
-        @pc.on("connectionstatechange")
-        async def _on_connectionstatechange() -> None:
-            if pc.connectionState in {"failed", "closed", "disconnected"}:
-                await self._close_peer(pc)
+        try:
+            @pc.on("connectionstatechange")
+            async def _on_connectionstatechange() -> None:
+                if pc.connectionState in {"failed", "closed", "disconnected"}:
+                    await self._close_peer(pc)
 
-        transceiver = pc.addTransceiver("video", direction="sendonly")
-        if RTCRtpSender is not None:
-            capabilities = RTCRtpSender.getCapabilities("video")
-            codecs = list(capabilities.codecs) if capabilities else []
-            if codecs:
-                preferred = sorted(codecs, key=codec_preference_key)
-                if preferred:
-                    transceiver.setCodecPreferences(preferred)
-        pc.addTrack(RawPreviewVideoTrack(self.app_config))
-        sender = transceiver.sender
-        if sender is not None and hasattr(sender, "getParameters") and hasattr(sender, "setParameters"):
-            params = sender.getParameters()
-            if params.encodings:
-                for encoding in params.encodings:
-                    encoding.maxBitrate = 50_000_000
-            try:
-                await sender.setParameters(params)
-            except Exception:
-                pass
-        await pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type=offer_type))
-        answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
-        await self._wait_for_ice_complete(pc)
-        assert pc.localDescription is not None
-        return {
-            "sdp": boost_h264_bitrate_sdp(pc.localDescription.sdp),
-            "type": pc.localDescription.type,
-        }
+            await pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type=offer_type))
+            if self.preview_source is None:
+                raise RuntimeError("WebRTC preview source is unavailable")
+            selected_profile = self.preview_source.configure(preview_profile)
+            track = self.relay.subscribe(self.preview_source) if self.relay is not None else self.preview_source
+            sender = pc.addTrack(track)
+            transceiver = next(
+                (candidate for candidate in pc.getTransceivers() if candidate.sender is sender),
+                None,
+            )
+            if RTCRtpSender is not None:
+                capabilities = RTCRtpSender.getCapabilities("video")
+                codecs = list(capabilities.codecs) if capabilities else []
+                if codecs and transceiver is not None:
+                    preferred = sorted(codecs, key=codec_preference_key)
+                    if preferred:
+                        transceiver.setCodecPreferences(preferred)
+            if sender is not None and hasattr(sender, "getParameters") and hasattr(sender, "setParameters"):
+                params = sender.getParameters()
+                if params.encodings:
+                    for encoding in params.encodings:
+                        encoding.maxBitrate = 50_000_000
+                try:
+                    await sender.setParameters(params)
+                except Exception:
+                    pass
+            answer = await pc.createAnswer()
+            await pc.setLocalDescription(answer)
+            await self._wait_for_ice_complete(pc)
+            assert pc.localDescription is not None
+            self.peer_expiry[pc] = asyncio.create_task(self._expire_peer(pc, peer_id))
+            bitrate_profiles = {
+                "quality": (8000, 12000, 2000),
+                "balanced": (5000, 8000, 1200),
+                "economy": (1800, 3000, 500),
+            }
+            start_kbps, max_kbps, min_kbps = bitrate_profiles[selected_profile]
+            return {
+                "sdp": boost_h264_bitrate_sdp(pc.localDescription.sdp, start_kbps, max_kbps, min_kbps),
+                "type": pc.localDescription.type,
+                "peer_id": peer_id,
+                "preview_profile": selected_profile,
+            }
+        except Exception:
+            await self._close_peer(pc)
+            raise
 
-    def create_answer(self, offer_sdp: str, offer_type: str) -> dict[str, str]:
+    def create_answer(self, offer_sdp: str, offer_type: str, preview_profile: str = "balanced") -> dict[str, str]:
         if not self.available or self.loop is None:
             raise RuntimeError("WebRTC preview bridge is unavailable")
-        future = asyncio.run_coroutine_threadsafe(self._create_answer(offer_sdp, offer_type), self.loop)
+        future = asyncio.run_coroutine_threadsafe(
+            self._create_answer(offer_sdp, offer_type, preview_profile), self.loop
+        )
         return future.result(timeout=15.0)
+
+    def close_peer(self, peer_id: str) -> None:
+        if self.loop is None:
+            return
+
+        async def close_requested_peer() -> None:
+            pc = self.peer_ids.get(peer_id)
+            if pc is not None:
+                await self._close_peer(pc)
+
+        asyncio.run_coroutine_threadsafe(close_requested_peer(), self.loop).result(timeout=5.0)
+
+    def keep_peer_alive(self, peer_id: str) -> bool:
+        if self.loop is None:
+            return False
+
+        async def refresh_peer() -> bool:
+            if peer_id not in self.peer_ids:
+                return False
+            self.peer_last_seen[peer_id] = time.monotonic()
+            return True
+
+        return bool(asyncio.run_coroutine_threadsafe(refresh_peer(), self.loop).result(timeout=5.0))
 
     async def _shutdown(self) -> None:
         peers = list(self.peers)
         for pc in peers:
             await self._close_peer(pc)
+        if self.preview_source is not None:
+            self.preview_source.stop()
+            self.preview_source = None
         if self.loop is not None:
             self.loop.stop()
 
@@ -1700,6 +2403,88 @@ HTML = r"""<!doctype html>
       gap: 10px;
       align-items: start;
     }
+    .scene-toolbar {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+    }
+    .scene-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .scene-days { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+    .scene-day {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .scene-schedule-list { display: grid; gap: 6px; margin-top: 10px; }
+    .scene-schedule-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-high);
+      font-size: 11px;
+    }
+    .health-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 8px;
+    }
+    .health-card {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface-high);
+    }
+    .health-label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .health-value { margin-top: 4px; font-size: 17px; font-weight: 700; }
+    .health-processes, .health-errors { margin-top: 10px; font: 11px/1.5 "Menlo", "Consolas", monospace; white-space: pre-wrap; }
+    .health-ok { color: #4a8c5c; }
+    .health-bad { color: var(--danger); }
+    .monitor-controls { display: grid; gap: 10px; }
+    .monitor-control-row {
+      display: grid;
+      grid-template-columns: minmax(150px, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+    }
+    .monitor-power-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .remote-shell { display: none; max-width: 620px; margin: 0 auto; padding: 12px; }
+    body.remote-mode .shell { display: none; }
+    body.remote-mode .remote-shell { display: grid; gap: 12px; }
+    .remote-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .remote-header h1 { margin: 0; font-size: 24px; }
+    .remote-card {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .remote-card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; }
+    .remote-button-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .remote-button-grid button { min-height: 48px; font-size: 14px; }
+    .remote-health { color: var(--muted); font: 12px/1.5 "Menlo", "Consolas", monospace; }
+    .remote-link { color: var(--accent-dark); text-decoration: none; font: 11px/1.4 "Menlo", "Consolas", monospace; }
+    .history-list { display: grid; gap: 7px; }
+    .history-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-high);
+    }
+    .history-label { font: 11px/1.4 "Menlo", "Consolas", monospace; }
+    .history-item-actions { display: flex; gap: 6px; }
+    .history-diff { max-height: 280px; overflow: auto; white-space: pre; font: 10px/1.45 "Menlo", "Consolas", monospace; }
     .studio-board {
       position: relative;
       aspect-ratio: 16 / 9;
@@ -1725,6 +2510,15 @@ HTML = r"""<!doctype html>
     .studio-board.resizing .studio-card {
       cursor: inherit;
     }
+    .studio-guide {
+      position: absolute;
+      z-index: 8;
+      pointer-events: none;
+      background: rgba(255, 218, 150, 0.95);
+      box-shadow: 0 0 0 1px rgba(93, 38, 18, 0.35), 0 0 12px rgba(255, 190, 106, 0.55);
+    }
+    .studio-guide.vertical { top: 0; bottom: 0; width: 1px; }
+    .studio-guide.horizontal { left: 0; right: 0; height: 1px; }
     .studio-card {
       position: absolute;
       border-radius: 14px;
@@ -2341,6 +3135,7 @@ HTML = r"""<!doctype html>
       .shell { grid-template-columns: 1fr; }
       .left-rail { position: static; }
       .studio-grid { grid-template-columns: 1fr; }
+      .scene-toolbar { grid-template-columns: 1fr; }
     }
     @media (max-width: 680px) {
       .shell { margin: 8px auto 16px; }
@@ -2373,6 +3168,17 @@ HTML = r"""<!doctype html>
               <video id="previewVideo" class="preview-video" autoplay playsinline muted></video>
             </div>
           </div>
+          <div class="preview-bar">
+            <label>Preview
+              <select id="previewProfile">
+                <option value="auto">Auto</option>
+                <option value="quality">Quality · 60 fps</option>
+                <option value="balanced">Balanced · 30 fps</option>
+                <option value="economy">Economy · 10 fps</option>
+              </select>
+            </label>
+            <a class="remote-link" href="?remote=1">Open Mobile Remote</a>
+          </div>
         </div>
         <div class="status" id="status"></div>
       </div>
@@ -2381,10 +3187,105 @@ HTML = r"""<!doctype html>
     <section class="card">
       <div class="panel-body">
         <div class="panel-wide">
+          <h2 class="section-title">Scene Profiles</h2>
+          <div class="scene-toolbar">
+            <label>Saved Scene
+              <select id="sceneSelect"><option value="">New scene…</option></select>
+            </label>
+            <label>Scene Name
+              <input id="sceneName" type="text" maxlength="80" placeholder="Morning dashboard" />
+            </label>
+            <div class="scene-actions">
+              <button type="button" class="primary" id="sceneSaveBtn">Save Scene</button>
+              <button type="button" class="secondary" id="sceneApplyBtn" disabled>Apply</button>
+              <button type="button" class="secondary" id="sceneDeleteBtn" disabled>Delete</button>
+            </div>
+          </div>
+          <details class="advanced-block" style="margin-top:10px;">
+            <summary>Scene Schedule</summary>
+            <div class="advanced-body">
+              <label>Switch Time <input id="sceneScheduleTime" type="time" value="08:00" /></label>
+              <div class="scene-days" id="sceneScheduleDays">
+                <label class="scene-day"><input type="checkbox" value="0" checked /> Mon</label>
+                <label class="scene-day"><input type="checkbox" value="1" checked /> Tue</label>
+                <label class="scene-day"><input type="checkbox" value="2" checked /> Wed</label>
+                <label class="scene-day"><input type="checkbox" value="3" checked /> Thu</label>
+                <label class="scene-day"><input type="checkbox" value="4" checked /> Fri</label>
+                <label class="scene-day"><input type="checkbox" value="5" /> Sat</label>
+                <label class="scene-day"><input type="checkbox" value="6" /> Sun</label>
+              </div>
+              <button type="button" class="secondary" id="sceneScheduleAddBtn" disabled>Add Schedule</button>
+              <div class="scene-schedule-list" id="sceneScheduleList"></div>
+            </div>
+          </details>
+        </div>
+
+        <details class="advanced-block panel-wide" id="healthPanel">
+          <summary>System Health</summary>
+          <div class="advanced-body">
+            <div class="health-grid" id="healthGrid"></div>
+            <div class="health-processes" id="healthProcesses"></div>
+            <div class="health-errors" id="healthErrors"></div>
+          </div>
+        </details>
+
+        <details class="advanced-block panel-wide" id="monitorPanel">
+          <summary>Monitor Controls</summary>
+          <div class="advanced-body monitor-controls">
+            <label>Connected Display
+              <select id="monitorConnector"><option value="">Open panel to discover displays…</option></select>
+            </label>
+            <div class="monitor-control-row">
+              <label>Brightness
+                <input id="monitorBrightness" type="number" min="0" max="100" value="100" />
+              </label>
+              <button type="button" class="secondary" data-monitor-control="brightness" data-monitor-value-id="monitorBrightness">Apply</button>
+            </div>
+            <div class="monitor-control-row">
+              <label>Contrast
+                <input id="monitorContrast" type="number" min="0" max="100" value="100" />
+              </label>
+              <button type="button" class="secondary" data-monitor-control="contrast" data-monitor-value-id="monitorContrast">Apply</button>
+            </div>
+            <div class="monitor-control-row">
+              <label>Input Source
+                <select id="monitorInput">
+                  <option value="17">HDMI 1 (0x11)</option>
+                  <option value="18">HDMI 2 (0x12)</option>
+                  <option value="15">DisplayPort 1 (0x0F)</option>
+                  <option value="16">DisplayPort 2 (0x10)</option>
+                  <option value="6">Legacy / monitor-specific (0x06)</option>
+                </select>
+              </label>
+              <button type="button" class="secondary" data-monitor-control="input" data-monitor-value-id="monitorInput">Apply</button>
+            </div>
+            <div class="monitor-power-actions">
+              <button type="button" class="secondary" data-monitor-control="power" data-monitor-value="1">Power On</button>
+              <button type="button" class="secondary danger" data-monitor-control="power" data-monitor-value="4">Power Off</button>
+              <button type="button" class="secondary" data-monitor-control="power" data-monitor-value="5">Standby</button>
+            </div>
+            <p class="muted-note" id="monitorStatus">Controls are sent only when a button is pressed. Unsupported values may be ignored by the monitor.</p>
+          </div>
+        </details>
+
+        <details class="advanced-block panel-wide" id="configHistoryPanel">
+          <summary>Config History</summary>
+          <div class="advanced-body">
+            <div class="actions tight"><button type="button" class="secondary" id="historyRefreshBtn">Refresh</button></div>
+            <div class="history-list" id="historyList">Open panel to load snapshots…</div>
+            <pre class="history-diff" id="historyDiff"></pre>
+          </div>
+        </details>
+
+        <div class="panel-wide">
           <h2 class="section-title">Pane Layout</h2>
           <div class="studio-grid">
             <div>
-              <div class="actions tight" style="margin-bottom:10px;"></div>
+              <div class="actions tight" style="margin-bottom:10px;">
+                <button type="button" class="secondary" id="studioUndoBtn" title="Undo layout change (Ctrl/Cmd+Z)" disabled>Undo</button>
+                <button type="button" class="secondary" id="studioRedoBtn" title="Redo layout change (Ctrl/Cmd+Shift+Z)" disabled>Redo</button>
+                <span class="hint">Drag handles to resize. Hold Alt to bypass snapping.</span>
+              </div>
               <div class="studio-board" id="studioBoard"></div>
             </div>
           </div>
@@ -2434,6 +3335,9 @@ HTML = r"""<!doctype html>
                 <label>Fullscreen Cycle Sec
                   <input id="fsCycleSec" type="number" min="0" max="600" />
                 </label>
+                <label>Scene Fade (ms)
+                  <input id="transitionMs" type="number" min="0" max="5000" step="50" />
+                </label>
               </div>
             </div>
 
@@ -2465,7 +3369,38 @@ HTML = r"""<!doctype html>
     </section>
   </div>
 
+  <main class="remote-shell" id="remoteShell">
+    <div class="remote-header">
+      <h1>KMS Mosaic Remote</h1>
+      <a class="remote-link" href="?">Full Editor</a>
+    </div>
+    <div class="remote-card">
+      <h2>System</h2>
+      <div class="remote-health" id="remoteHealth">Loading…</div>
+      <button type="button" class="secondary" id="remoteRefreshBtn">Refresh</button>
+    </div>
+    <div class="remote-card">
+      <h2>Scenes</h2>
+      <div class="remote-button-grid" id="remoteScenes"></div>
+    </div>
+    <div class="remote-card">
+      <h2>Visible Content</h2>
+      <div class="remote-button-grid" id="remoteVisibility">
+        <button type="button" class="secondary" data-remote-visibility="neither">Show Everything</button>
+        <button type="button" class="secondary" data-remote-visibility="no-terminal">Media Only</button>
+        <button type="button" class="secondary" data-remote-visibility="no-video">Terminal Only</button>
+      </div>
+    </div>
+    <div class="remote-card">
+      <h2>Restart Pane</h2>
+      <div class="remote-button-grid" id="remotePanes"></div>
+    </div>
+    <div class="status" id="remoteStatus"></div>
+  </main>
+
   <script>
+    const remoteMode = new URLSearchParams(window.location.search).get("remote") === "1";
+    document.body.classList.toggle("remote-mode", remoteMode);
     const layoutNames = ["stack", "row", "2x1", "1x2", "2over1", "1over2", "overlay"];
     const previewVideo = document.getElementById("previewVideo");
     const previewStage = document.querySelector(".preview-stage");
@@ -2476,11 +3411,16 @@ HTML = r"""<!doctype html>
     const statusEl = document.getElementById("status");
     const STUDIO_SIZE_MIN = 5;
     const STUDIO_SIZE_MAX = 95;
+    const STUDIO_HISTORY_LIMIT = 50;
+    const STUDIO_SNAP_POINTS = [20, 25, 33, 40, 50, 60, 67, 75, 80];
     let state = null;
     let rawConfigText = "";
     let selectedRole = -1;
     let draggedStudioRole = null;
     let studioResizeDrag = null;
+    let studioUndoStack = [];
+    let studioRedoStack = [];
+    let activeConfigPath = "";
     let livePreviewTimer = null;
     let livePreviewController = null;
     let livePreviewUrl = null;
@@ -2488,9 +3428,37 @@ HTML = r"""<!doctype html>
     let playlistPreviewObserver = null;
     let previewFrameWidth = 16;
     let previewFrameHeight = 9;
+    const previewProfileSelect = document.getElementById("previewProfile");
+
+    function selectedPreviewProfile() {
+      return previewProfileSelect?.value || "auto";
+    }
+
+    function resolvedPreviewProfile() {
+      const selected = selectedPreviewProfile();
+      if (selected !== "auto") return selected;
+      const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      if (connection?.saveData || ["slow-2g", "2g"].includes(connection?.effectiveType)) return "economy";
+      if (Number(navigator.deviceMemory || 8) <= 2) return "economy";
+      return "balanced";
+    }
+
+    try {
+      const savedPreviewProfile = localStorage.getItem("kmsMosaicPreviewProfile");
+      if (["auto", "quality", "balanced", "economy"].includes(savedPreviewProfile)) {
+        previewProfileSelect.value = savedPreviewProfile;
+      }
+    } catch (err) {}
     let webrtcPeer = null;
+    let webrtcPeerId = null;
     let webrtcStream = null;
     let webrtcRetryTimer = null;
+    let webrtcHeartbeatTimer = null;
+    let sceneCatalog = { scenes: [], schedules: [] };
+    let paneTemplateCatalog = { templates: [] };
+    let selectedPaneTemplateId = "";
+    let remoteState = null;
+    let healthTimer = null;
     if (layoutSelect) {
       layoutNames.forEach(name => {
         const option = document.createElement("option");
@@ -2712,7 +3680,17 @@ HTML = r"""<!doctype html>
     }
 
     function parseMpvOptionGroups(opts) {
-      const groups = { videoMode: "", shaders: [], other: [] };
+      const groups = {
+        videoMode: "", shaders: [], other: [], hwdec: "", scale: "",
+        deband: "", interpolation: "", videoSync: "",
+      };
+      const structuredValues = {
+        hwdec: new Set(["auto-copy-safe", "no"]),
+        scale: new Set(["bilinear", "bicubic", "lanczos"]),
+        deband: new Set(["yes", "no"]),
+        interpolation: new Set(["yes", "no"]),
+        "video-sync": new Set(["audio", "display-resample", "display-vdrop"]),
+      };
       (Array.isArray(opts) ? opts : []).forEach((opt) => {
         const value = String(opt || "").trim();
         if (!value) return;
@@ -2724,6 +3702,16 @@ HTML = r"""<!doctype html>
         if (value === "vid=no") {
           groups.videoMode = "audio-only";
           return;
+        }
+        const separator = value.indexOf("=");
+        if (separator > 0) {
+          const key = value.slice(0, separator);
+          const optionValue = value.slice(separator + 1);
+          if (structuredValues[key]?.has(optionValue)) {
+            if (key === "video-sync") groups.videoSync = optionValue;
+            else groups[key] = optionValue;
+            return;
+          }
         }
         const shaderMarker = "glsl-shaders=";
         const shaderIndex = value.indexOf(shaderMarker);
@@ -2741,6 +3729,11 @@ HTML = r"""<!doctype html>
       if (parts.videoMode === "audio-only") {
         opts.push("vid=no");
       }
+      if (parts.hwdec) opts.push(`hwdec=${parts.hwdec}`);
+      if (parts.scale) opts.push(`scale=${parts.scale}`);
+      if (parts.deband) opts.push(`deband=${parts.deband}`);
+      if (parts.interpolation) opts.push(`interpolation=${parts.interpolation}`);
+      if (parts.videoSync) opts.push(`video-sync=${parts.videoSync}`);
       String(parts.shadersText || "")
         .split("\n")
         .map(v => v.trim())
@@ -2759,12 +3752,32 @@ HTML = r"""<!doctype html>
       const panscanEl = document.getElementById("inspectorPanePanscan");
       const shadersEl = document.getElementById("inspectorPaneShaders");
       const otherEl = document.getElementById("inspectorPaneMpvOpts");
-      if (!panscanEl || !shadersEl || !otherEl) return;
+      const watchdogEl = document.getElementById("inspectorPaneWatchdog");
+      if (!panscanEl || !shadersEl || !otherEl || !watchdogEl) return;
       state.pane_mpv_opts[paneIndex] = buildMpvOptsFromParts({
+        hwdec: document.getElementById("inspectorPaneHwdec")?.value || "",
+        scale: document.getElementById("inspectorPaneScale")?.value || "",
+        deband: document.getElementById("inspectorPaneDeband")?.value || "",
+        interpolation: document.getElementById("inspectorPaneInterpolation")?.value || "",
+        videoSync: document.getElementById("inspectorPaneVideoSync")?.value || "",
         shadersText: shadersEl.value,
         otherText: otherEl.value,
       });
       state.pane_panscan[paneIndex] = panscanEl.value;
+      state.pane_watchdogs[paneIndex] = Math.max(0, parseInt(watchdogEl.value || "0", 10) || 0);
+      state.pane_sync_groups[paneIndex] = document.getElementById("inspectorPaneSyncGroup")?.value.trim() || "";
+    }
+
+    async function restartPane(paneIndex) {
+      const response = await fetch("/api/panes/restart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pane: paneIndex }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      setStatus(`Restart requested for ${roleTitle(paneIndex)}.`, false, true);
+      return payload;
     }
 
     function roleType(role) {
@@ -3067,6 +4080,8 @@ HTML = r"""<!doctype html>
       nextState.pane_mpv_outs = Array.isArray(nextState.pane_mpv_outs) ? nextState.pane_mpv_outs.slice(0, count) : [];
       nextState.pane_video_rotate = Array.isArray(nextState.pane_video_rotate) ? nextState.pane_video_rotate.slice(0, count) : [];
       nextState.pane_panscan = Array.isArray(nextState.pane_panscan) ? nextState.pane_panscan.slice(0, count) : [];
+      nextState.pane_watchdogs = Array.isArray(nextState.pane_watchdogs) ? nextState.pane_watchdogs.slice(0, count) : [];
+      nextState.pane_sync_groups = Array.isArray(nextState.pane_sync_groups) ? nextState.pane_sync_groups.slice(0, count) : [];
       nextState.pane_video_paths = Array.isArray(nextState.pane_video_paths)
         ? nextState.pane_video_paths.slice(0, count).map(paths => Array.isArray(paths) ? paths.slice() : [])
         : [];
@@ -3083,6 +4098,8 @@ HTML = r"""<!doctype html>
       while (nextState.pane_mpv_outs.length < count) nextState.pane_mpv_outs.push("");
       while (nextState.pane_video_rotate.length < count) nextState.pane_video_rotate.push("");
       while (nextState.pane_panscan.length < count) nextState.pane_panscan.push("");
+      while (nextState.pane_watchdogs.length < count) nextState.pane_watchdogs.push(0);
+      while (nextState.pane_sync_groups.length < count) nextState.pane_sync_groups.push("");
       while (nextState.pane_video_paths.length < count) nextState.pane_video_paths.push([]);
       while (nextState.pane_mpv_opts.length < count) nextState.pane_mpv_opts.push([]);
     }
@@ -3177,6 +4194,79 @@ HTML = r"""<!doctype html>
     function syncSplitTreeState() {
       if (!state) return;
       state.split_tree = state.splitTreeModel ? serializeSplitTree(state.splitTreeModel) : "";
+    }
+
+    function captureStudioHistorySnapshot() {
+      if (!state) return null;
+      syncSplitTreeState();
+      return JSON.stringify(state);
+    }
+
+    function updateStudioHistoryButtons() {
+      const undoButton = document.getElementById("studioUndoBtn");
+      const redoButton = document.getElementById("studioRedoBtn");
+      if (undoButton) undoButton.disabled = studioUndoStack.length === 0;
+      if (redoButton) redoButton.disabled = studioRedoStack.length === 0;
+    }
+
+    function commitStudioHistory(previousSnapshot) {
+      if (!previousSnapshot) return false;
+      const currentSnapshot = captureStudioHistorySnapshot();
+      if (!currentSnapshot || currentSnapshot === previousSnapshot) return false;
+      studioUndoStack.push(previousSnapshot);
+      if (studioUndoStack.length > STUDIO_HISTORY_LIMIT) studioUndoStack.shift();
+      studioRedoStack = [];
+      updateStudioHistoryButtons();
+      return true;
+    }
+
+    function restoreStudioHistorySnapshot(snapshot) {
+      if (!snapshot) return false;
+      try {
+        const restored = JSON.parse(snapshot);
+        fillForm(restored, activeConfigPath, rawConfigText);
+        updateStudioHistoryButtons();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function undoStudioLayout() {
+      if (!state || !studioUndoStack.length) return false;
+      const currentSnapshot = captureStudioHistorySnapshot();
+      const previousSnapshot = studioUndoStack.pop();
+      if (currentSnapshot) studioRedoStack.push(currentSnapshot);
+      const restored = restoreStudioHistorySnapshot(previousSnapshot);
+      setStatus(restored ? "Undid layout change." : "Could not undo the layout change.", !restored);
+      return restored;
+    }
+
+    function redoStudioLayout() {
+      if (!state || !studioRedoStack.length) return false;
+      const currentSnapshot = captureStudioHistorySnapshot();
+      const nextSnapshot = studioRedoStack.pop();
+      if (currentSnapshot) studioUndoStack.push(currentSnapshot);
+      const restored = restoreStudioHistorySnapshot(nextSnapshot);
+      setStatus(restored ? "Redid layout change." : "Could not redo the layout change.", !restored);
+      return restored;
+    }
+
+    function snapStudioSize(value, bypassSnap = false) {
+      const normalized = Math.max(STUDIO_SIZE_MIN, Math.min(STUDIO_SIZE_MAX, Number(value) || 0));
+      if (bypassSnap) return { value: normalized, snapped: false };
+      let nearest = normalized;
+      let distance = Infinity;
+      STUDIO_SNAP_POINTS.forEach((point) => {
+        const nextDistance = Math.abs(point - normalized);
+        if (nextDistance < distance) {
+          nearest = point;
+          distance = nextDistance;
+        }
+      });
+      return distance <= 1.75
+        ? { value: nearest, snapped: true }
+        : { value: normalized, snapped: false };
     }
 
     function splitTreeCollectRoles(node, out) {
@@ -3580,6 +4670,7 @@ HTML = r"""<!doctype html>
           selectRole(role);
           const axis = input.dataset.axis === "h" ? "h" : "w";
           const parsed = parseInt(input.value, 10);
+          const historySnapshot = captureStudioHistorySnapshot();
           const result = resizePaneAxis(role, axis, parsed);
           if (!result.ok) {
             input.value = String(result.value);
@@ -3596,6 +4687,7 @@ HTML = r"""<!doctype html>
             );
             return;
           }
+          commitStudioHistory(historySnapshot);
           renderPlaylistEditor();
           renderStudioBoard();
           renderStudioInspector();
@@ -3629,6 +4721,8 @@ HTML = r"""<!doctype html>
         mpvOut: String(nextState.pane_mpv_outs?.[paneIndex] || ""),
         videoRotate: String(nextState.pane_video_rotate?.[paneIndex] || ""),
         panscan: String(nextState.pane_panscan?.[paneIndex] || ""),
+        watchdog: Number(nextState.pane_watchdogs?.[paneIndex] || 0),
+        syncGroup: String(nextState.pane_sync_groups?.[paneIndex] || ""),
         videoPaths: Array.isArray(nextState.pane_video_paths?.[paneIndex]) ? nextState.pane_video_paths[paneIndex].slice() : [],
         mpvOpts: Array.isArray(nextState.pane_mpv_opts?.[paneIndex]) ? nextState.pane_mpv_opts[paneIndex].slice() : [],
       };
@@ -3887,26 +4981,61 @@ HTML = r"""<!doctype html>
       const ctx = splitTreeResizeContext(state, studioResizeDrag.role);
       if (!ctx) return;
       let changed = false;
+      studioResizeDrag.snapAxes = {};
       if (studioResizeDrag.mode === "w" || studioResizeDrag.mode === "corner") {
         const desiredWidth = desiredStudioSizeFromPointer(ctx.rect, "w", ctx.colAncestor?.logicalEdge, logicalPointer);
-        if (desiredWidth != null && resizePaneAxis(studioResizeDrag.role, "w", desiredWidth).ok) changed = true;
+        const snappedWidth = desiredWidth == null ? null : snapStudioSize(desiredWidth, event.altKey);
+        if (snappedWidth && resizePaneAxis(studioResizeDrag.role, "w", snappedWidth.value).ok) {
+          studioResizeDrag.snapAxes.w = snappedWidth.snapped;
+          changed = true;
+        }
       }
       if (studioResizeDrag.mode === "h" || studioResizeDrag.mode === "corner") {
         const latestCtx = splitTreeResizeContext(state, studioResizeDrag.role) || ctx;
         const desiredHeight = desiredStudioSizeFromPointer(latestCtx.rect, "h", latestCtx.rowAncestor?.logicalEdge, logicalPointer);
-        if (desiredHeight != null && resizePaneAxis(studioResizeDrag.role, "h", desiredHeight).ok) changed = true;
+        const snappedHeight = desiredHeight == null ? null : snapStudioSize(desiredHeight, event.altKey);
+        if (snappedHeight && resizePaneAxis(studioResizeDrag.role, "h", snappedHeight.value).ok) {
+          studioResizeDrag.snapAxes.h = snappedHeight.snapped;
+          changed = true;
+        }
       }
       if (changed) renderStudioBoard();
     }
 
+    function renderStudioResizeGuides() {
+      if (!studioResizeDrag || !studioBoard) return;
+      const ctx = splitTreeResizeContext(state, studioResizeDrag.role);
+      if (!ctx) return;
+      const addGuide = (axis, edge) => {
+        const rect = ctx.displayRect;
+        const guide = document.createElement("div");
+        if (axis === "w") {
+          const x = edge === "left" ? rect.x : rect.x + rect.w;
+          guide.className = "studio-guide vertical";
+          guide.style.left = `${x}%`;
+        } else {
+          const y = edge === "top" ? rect.y : rect.y + rect.h;
+          guide.className = "studio-guide horizontal";
+          guide.style.top = `${y}%`;
+        }
+        studioBoard.appendChild(guide);
+      };
+      if (studioResizeDrag.snapAxes?.w && ctx.colAncestor?.edge) addGuide("w", ctx.colAncestor.edge);
+      if (studioResizeDrag.snapAxes?.h && ctx.rowAncestor?.edge) addGuide("h", ctx.rowAncestor.edge);
+    }
+
     function stopStudioResizeDrag() {
       if (!studioResizeDrag) return;
+      const historySnapshot = studioResizeDrag.historySnapshot;
       studioResizeDrag = null;
       studioBoard?.classList.remove("resizing");
       if (studioBoard) studioBoard.style.cursor = "";
       window.removeEventListener("pointermove", applyStudioResizeDrag);
       window.removeEventListener("pointerup", stopStudioResizeDrag);
       window.removeEventListener("pointercancel", stopStudioResizeDrag);
+      commitStudioHistory(historySnapshot);
+      renderStudioBoard();
+      renderStudioInspector();
     }
 
     function startStudioResizeDrag(event, role, mode, edge = "", corner = "") {
@@ -3917,7 +5046,12 @@ HTML = r"""<!doctype html>
         return;
       }
       selectRole(role);
-      studioResizeDrag = { role, mode };
+      studioResizeDrag = {
+        role,
+        mode,
+        historySnapshot: captureStudioHistorySnapshot(),
+        snapAxes: {},
+      };
       const resolvedCorner = corner || studioResizeCornerName(ctx) || "";
       studioBoard?.classList.add("resizing");
       if (studioBoard) studioBoard.style.cursor = studioResizeCursor(mode, resolvedCorner, edge);
@@ -4000,6 +5134,7 @@ HTML = r"""<!doctype html>
             return;
           }
           const sourceRole = draggedStudioRole;
+          const historySnapshot = captureStudioHistorySnapshot();
           card.classList.remove("drop-target");
           if (!splitTreeSwapRoles(tree, sourceRole, role)) {
             setStatus("Could not reposition panes.", true);
@@ -4007,6 +5142,7 @@ HTML = r"""<!doctype html>
           }
           state.splitTreeModel = tree;
           syncSplitTreeState();
+          commitStudioHistory(historySnapshot);
           draggedStudioRole = null;
           selectRole(sourceRole);
           renderPlaylistEditor();
@@ -4033,6 +5169,7 @@ HTML = r"""<!doctype html>
         });
         studioBoard.appendChild(card);
       });
+      renderStudioResizeGuides();
       syncStudioBoardSelectionState();
     }
 
@@ -4137,6 +5274,147 @@ HTML = r"""<!doctype html>
       overlay.style.top = `${position.top}px`;
     }
 
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function paneTemplatePayload(role = selectedRole) {
+      ensurePaneCommands(state);
+      return {
+        type: state.pane_types?.[role] || "terminal",
+        raw: state.pane_type_raw?.[role] || "",
+        settings: { ...(state.pane_type_settings?.[role] || {}) },
+        command: state.pane_commands?.[role] || "",
+        playlist: state.pane_playlists?.[role] || "",
+        playlist_extended: state.pane_playlist_extended?.[role] || "",
+        playlist_fifo: state.pane_playlist_fifos?.[role] || "",
+        mpv_out: state.pane_mpv_outs?.[role] || "",
+        video_rotate: state.pane_video_rotate?.[role] || "",
+        panscan: state.pane_panscan?.[role] || "",
+        watchdog: Number(state.pane_watchdogs?.[role] || 0),
+        sync_group: state.pane_sync_groups?.[role] || "",
+        video_paths: [...(state.pane_video_paths?.[role] || [])],
+        mpv_opts: [...(state.pane_mpv_opts?.[role] || [])],
+      };
+    }
+
+    function paneTemplateMarkup() {
+      const options = (paneTemplateCatalog.templates || []).map((template) => (
+        `<option value="${escapeHtml(template.id)}" ${template.id === selectedPaneTemplateId ? "selected" : ""}>${escapeHtml(template.name || "Unnamed template")}</option>`
+      )).join("");
+      return `
+        <div class="selected-pane-section">
+          <h2 class="section-title">Pane Templates</h2>
+          <label>Saved Template
+            <select id="paneTemplateSelect"><option value="">New template…</option>${options}</select>
+          </label>
+          <label>Template Name
+            <input id="paneTemplateName" type="text" maxlength="80" placeholder="Dashboard video pane" />
+          </label>
+          <div class="actions tight">
+            <button id="paneTemplateSaveBtn" type="button" class="secondary">Save Template</button>
+            <button id="paneTemplateApplyBtn" type="button" class="secondary">Apply</button>
+            <button id="paneTemplateDeleteBtn" type="button" class="secondary danger">Delete</button>
+          </div>
+          <p class="muted-note">Apply changes only this editor pane. Use Save Config when you are ready to activate it.</p>
+        </div>`;
+    }
+
+    async function paneTemplateApi(path, payload = {}) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Pane template operation failed");
+      return result;
+    }
+
+    async function loadPaneTemplates() {
+      const response = await fetch("/api/templates");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Failed to load pane templates");
+      paneTemplateCatalog = payload;
+      if (!(payload.templates || []).some((template) => template.id === selectedPaneTemplateId)) {
+        selectedPaneTemplateId = "";
+      }
+      if (state && selectedRole >= 0) renderStudioInspector();
+    }
+
+    function applyPaneTemplate(template) {
+      if (!state || selectedRole < 0 || !template?.pane) return;
+      ensurePaneCommands(state);
+      const role = selectedRole;
+      const pane = template.pane;
+      state.pane_types[role] = String(pane.type || "terminal");
+      state.pane_type_raw[role] = String(pane.raw || "");
+      state.pane_type_settings[role] = pane.settings && typeof pane.settings === "object" ? { ...pane.settings } : {};
+      state.pane_commands[role] = String(pane.command || "");
+      state.pane_playlists[role] = String(pane.playlist || "");
+      state.pane_playlist_extended[role] = String(pane.playlist_extended || "");
+      state.pane_playlist_fifos[role] = String(pane.playlist_fifo || "");
+      state.pane_mpv_outs[role] = String(pane.mpv_out || "");
+      state.pane_video_rotate[role] = String(pane.video_rotate || "");
+      state.pane_panscan[role] = String(pane.panscan || "");
+      state.pane_watchdogs[role] = Math.max(0, Number(pane.watchdog || 0));
+      state.pane_sync_groups[role] = String(pane.sync_group || "");
+      state.pane_video_paths[role] = Array.isArray(pane.video_paths) ? pane.video_paths.slice() : [];
+      state.pane_mpv_opts[role] = Array.isArray(pane.mpv_opts) ? pane.mpv_opts.slice() : [];
+      renderStudioBoard();
+      renderStudioInspector();
+      renderPlaylistEditor();
+      setStatus(`Applied pane template ${template.name || ""}; save config to activate it.`, false, true);
+    }
+
+    function bindPaneTemplateControls() {
+      const select = document.getElementById("paneTemplateSelect");
+      const name = document.getElementById("paneTemplateName");
+      const apply = document.getElementById("paneTemplateApplyBtn");
+      const remove = document.getElementById("paneTemplateDeleteBtn");
+      if (!select || !name || !apply || !remove) return;
+      const refresh = () => {
+        const template = (paneTemplateCatalog.templates || []).find((item) => item.id === select.value);
+        selectedPaneTemplateId = template?.id || "";
+        name.value = template ? String(template.name || "") : "";
+        apply.disabled = !template;
+        remove.disabled = !template;
+      };
+      select.addEventListener("change", refresh);
+      refresh();
+      document.getElementById("paneTemplateSaveBtn")?.addEventListener("click", () => {
+        if (selectedPaneType() === "mpv") syncInspectorPaneMpvOpts(selectedRole);
+        paneTemplateApi("/api/templates/save", {
+          id: selectedPaneTemplateId,
+          name: name.value,
+          pane: paneTemplatePayload(),
+        }).then((payload) => {
+          paneTemplateCatalog = payload;
+          selectedPaneTemplateId = payload.template?.id || "";
+          renderStudioInspector();
+          setStatus(`Saved pane template ${payload.template?.name || ""}.`, false, true);
+        }).catch((err) => setStatus(err.message, true));
+      });
+      apply.addEventListener("click", () => {
+        const template = (paneTemplateCatalog.templates || []).find((item) => item.id === select.value);
+        applyPaneTemplate(template);
+      });
+      remove.addEventListener("click", () => {
+        const template = (paneTemplateCatalog.templates || []).find((item) => item.id === select.value);
+        if (!template || !window.confirm(`Delete pane template “${template.name || "Unnamed template"}”?`)) return;
+        paneTemplateApi("/api/templates/delete", { id: template.id }).then((payload) => {
+          paneTemplateCatalog = payload;
+          selectedPaneTemplateId = "";
+          renderStudioInspector();
+          setStatus("Deleted pane template.", false, true);
+        }).catch((err) => setStatus(err.message, true));
+      });
+    }
+
     function renderStudioInspector() {
       if (!state || !studioInspector) return;
       ensureSelectedRole();
@@ -4154,6 +5432,8 @@ HTML = r"""<!doctype html>
       if (paneType === "mpv") {
         const paneMpvGroups = parseMpvOptionGroups(state.pane_mpv_opts?.[paneIndex] || []);
         const panePanscan = String(state.pane_panscan?.[paneIndex] || "");
+        const paneWatchdog = Number(state.pane_watchdogs?.[paneIndex] || 0);
+        const paneSyncGroup = String(state.pane_sync_groups?.[paneIndex] || "");
         studioInspector.innerHTML = `
           <div class="selected-pane-section">
             <h2 class="section-title">Pane Behavior</h2>
@@ -4163,9 +5443,55 @@ HTML = r"""<!doctype html>
                 <option value="mpv" selected>mpv</option>
               </select>
             </label>
+            <label>Hardware Decode
+              <select id="inspectorPaneHwdec">
+                <option value="" ${paneMpvGroups.hwdec ? "" : "selected"}>Automatic default</option>
+                <option value="auto-copy-safe" ${paneMpvGroups.hwdec === "auto-copy-safe" ? "selected" : ""}>Auto copy-safe</option>
+                <option value="no" ${paneMpvGroups.hwdec === "no" ? "selected" : ""}>Software decode</option>
+              </select>
+            </label>
+            <label>Image Scaling
+              <select id="inspectorPaneScale">
+                <option value="" ${paneMpvGroups.scale ? "" : "selected"}>mpv default</option>
+                <option value="bilinear" ${paneMpvGroups.scale === "bilinear" ? "selected" : ""}>Bilinear (lowest cost)</option>
+                <option value="bicubic" ${paneMpvGroups.scale === "bicubic" ? "selected" : ""}>Bicubic</option>
+                <option value="lanczos" ${paneMpvGroups.scale === "lanczos" ? "selected" : ""}>Lanczos (sharper)</option>
+              </select>
+            </label>
+            <label>Debanding
+              <select id="inspectorPaneDeband">
+                <option value="" ${paneMpvGroups.deband ? "" : "selected"}>mpv default</option>
+                <option value="yes" ${paneMpvGroups.deband === "yes" ? "selected" : ""}>On</option>
+                <option value="no" ${paneMpvGroups.deband === "no" ? "selected" : ""}>Off</option>
+              </select>
+            </label>
+            <label>Frame Interpolation
+              <select id="inspectorPaneInterpolation">
+                <option value="" ${paneMpvGroups.interpolation ? "" : "selected"}>mpv default</option>
+                <option value="yes" ${paneMpvGroups.interpolation === "yes" ? "selected" : ""}>On</option>
+                <option value="no" ${paneMpvGroups.interpolation === "no" ? "selected" : ""}>Off</option>
+              </select>
+            </label>
+            <label>Video Sync
+              <select id="inspectorPaneVideoSync">
+                <option value="" ${paneMpvGroups.videoSync ? "" : "selected"}>mpv default</option>
+                <option value="audio" ${paneMpvGroups.videoSync === "audio" ? "selected" : ""}>Audio clock</option>
+                <option value="display-resample" ${paneMpvGroups.videoSync === "display-resample" ? "selected" : ""}>Display resample</option>
+                <option value="display-vdrop" ${paneMpvGroups.videoSync === "display-vdrop" ? "selected" : ""}>Display drop</option>
+              </select>
+            </label>
             <label>Panscan
               <input id="inspectorPanePanscan" type="number" step="0.01" placeholder="0.00" value="${panePanscan.replace(/"/g, "&quot;")}">
             </label>
+            <label>Playback Watchdog (seconds)
+              <input id="inspectorPaneWatchdog" type="number" min="0" step="1" value="${paneWatchdog}">
+            </label>
+            <p class="muted-note">0 disables it. When enabled, only active, unpaused playback is restarted after it stops advancing.</p>
+            <label>Start Sync Group
+              <input id="inspectorPaneSyncGroup" type="text" placeholder="wall-a" value="${paneSyncGroup.replace(/"/g, "&quot;")}">
+            </label>
+            <p class="muted-note">Media panes with the same group wait until all members are loaded, then begin together. Later queue changes remain independent.</p>
+            <button id="inspectorRestartPane" type="button" class="secondary">Restart This Pane</button>
             <label>Shader Stack
               <textarea id="inspectorPaneShaders" spellcheck="false" placeholder="/path/to/shader1.glsl&#10;/path/to/shader2.glsl">${paneMpvGroups.shaders.join("\n")}</textarea>
             </label>
@@ -4173,6 +5499,7 @@ HTML = r"""<!doctype html>
               <textarea id="inspectorPaneMpvOpts" spellcheck="false" placeholder="profile=fast&#10;deband=yes">${paneMpvGroups.other.join("\n")}</textarea>
             </label>
           </div>
+          ${paneTemplateMarkup()}
           ${selectedPaneSizeSectionMarkup(selectedRole)}
           ${layoutActions}
           ${selectedPaneQueueSectionMarkup()}
@@ -4184,6 +5511,13 @@ HTML = r"""<!doctype html>
         });
         [
           "inspectorPanePanscan",
+          "inspectorPaneWatchdog",
+          "inspectorPaneHwdec",
+          "inspectorPaneScale",
+          "inspectorPaneDeband",
+          "inspectorPaneInterpolation",
+          "inspectorPaneVideoSync",
+          "inspectorPaneSyncGroup",
           "inspectorPaneShaders",
           "inspectorPaneMpvOpts",
         ].forEach((id) => {
@@ -4206,6 +5540,10 @@ HTML = r"""<!doctype html>
           });
         }
         bindStudioSizeInputs(studioInspector);
+        bindPaneTemplateControls();
+        document.getElementById("inspectorRestartPane")?.addEventListener("click", () => {
+          restartPane(paneIndex).catch((err) => setStatus(err.message, true));
+        });
         bindSelectedPaneLayoutActions(selectedRole);
         syncInspectorPaneMpvOpts(paneIndex);
         renderPlaylistEditor();
@@ -4226,7 +5564,9 @@ HTML = r"""<!doctype html>
             <input id="inspectorPaneCommand" type="text" value="${value.replace(/"/g, "&quot;")}" placeholder="btop --utf-force" />
           </label>
           <p class="muted-note">This pane currently spawns a shell command. Switch it to mpv here if you want a dedicated video pane instead.</p>
+          <button id="inspectorRestartPane" type="button" class="secondary">Restart This Pane</button>
         </div>
+        ${paneTemplateMarkup()}
         ${selectedPaneSizeSectionMarkup(selectedRole)}
         ${layoutActions}
       `;
@@ -4240,6 +5580,10 @@ HTML = r"""<!doctype html>
         renderStudioBoard();
       });
       bindStudioSizeInputs(studioInspector);
+      bindPaneTemplateControls();
+      document.getElementById("inspectorRestartPane")?.addEventListener("click", () => {
+        restartPane(paneIndex).catch((err) => setStatus(err.message, true));
+      });
       bindSelectedPaneLayoutActions(selectedRole);
       dispatchSelectedPaneState();
     }
@@ -4616,6 +5960,7 @@ HTML = r"""<!doctype html>
 
     function splitSelectedRole(kind) {
       if (!state) return false;
+      const historySnapshot = captureStudioHistorySnapshot();
       const tree = ensureSplitTreeModel();
       const targetRole = selectedRole;
       const newRole = Number(state.pane_count || 0);
@@ -4635,6 +5980,7 @@ HTML = r"""<!doctype html>
       }
       state.splitTreeModel = tree;
       syncSplitTreeState();
+      commitStudioHistory(historySnapshot);
       const paneCountInput = document.getElementById("paneCount");
       if (paneCountInput) paneCountInput.value = String(state.pane_count);
       selectRole(newRole);
@@ -4651,6 +5997,7 @@ HTML = r"""<!doctype html>
 
     function removeSelectedPane() {
       if (!state || selectedRole < 0 || Number(state.pane_count || 0) === 1) return false;
+      const historySnapshot = captureStudioHistorySnapshot();
       const tree = ensureSplitTreeModel();
       const paneIndex = selectedRole;
       const role = selectedRole;
@@ -4668,12 +6015,15 @@ HTML = r"""<!doctype html>
       state.pane_mpv_outs.splice(paneIndex, 1);
       state.pane_video_rotate.splice(paneIndex, 1);
       state.pane_panscan.splice(paneIndex, 1);
+      state.pane_watchdogs.splice(paneIndex, 1);
+      state.pane_sync_groups.splice(paneIndex, 1);
       state.pane_video_paths.splice(paneIndex, 1);
       state.pane_mpv_opts.splice(paneIndex, 1);
       state.pane_count = Math.max(1, state.pane_count - 1);
       ensurePaneCommands(state);
       state.splitTreeModel = tree;
       syncSplitTreeState();
+      commitStudioHistory(historySnapshot);
       const paneCountInput = document.getElementById("paneCount");
       if (paneCountInput) paneCountInput.value = String(state.pane_count);
       selectRole(-1);
@@ -4719,8 +6069,9 @@ HTML = r"""<!doctype html>
         throw new Error("This browser does not support the WebRTC preview");
       }
       setPreviewStageState("Connecting preview…", true);
+      let pc = null;
       try {
-        const pc = new RTCPeerConnection({ iceServers: [] });
+        pc = new RTCPeerConnection({ iceServers: [] });
         webrtcPeer = pc;
         const remoteStream = new MediaStream();
         webrtcStream = remoteStream;
@@ -4739,8 +6090,9 @@ HTML = r"""<!doctype html>
             if (ordered.length) transceiver.setCodecPreferences(ordered);
           }
         }
-        pc.addEventListener("track", (event) => {
-          remoteStream.addTrack(event.track);
+        const attachPreviewTrack = (track) => {
+          if (!track || remoteStream.getTracks().some(existing => existing.id === track.id)) return;
+          remoteStream.addTrack(track);
           previewVideo.muted = true;
           previewVideo.autoplay = true;
           previewVideo.playsInline = true;
@@ -4750,15 +6102,23 @@ HTML = r"""<!doctype html>
           previewVideo.srcObject = remoteStream;
           const ensurePlay = () => previewVideo.play().catch(() => {});
           ensurePlay();
-          previewVideo.onloadedmetadata = () => syncWebRtcPreviewGeometry();
+          previewVideo.onloadedmetadata = () => {
+            syncWebRtcPreviewGeometry();
+            setStatus("Live preview connected over WebRTC.", false, true);
+          };
           previewVideo.onresize = () => syncWebRtcPreviewGeometry();
           previewVideo.oncanplay = () => ensurePlay();
           setPreviewStageState("", false);
+        };
+        pc.addEventListener("track", (event) => {
+          attachPreviewTrack(event.track);
         });
         pc.addEventListener("connectionstatechange", () => {
           if (pc !== webrtcPeer) return;
           if (pc.connectionState === "connected") {
-            setStatus("Live preview connected over WebRTC.", false, true);
+            if (!remoteStream.getVideoTracks().length) {
+              setStatus("WebRTC connected; waiting for preview frames…", false, true);
+            }
             setPreviewStageState("", false);
             return;
           }
@@ -4779,19 +6139,65 @@ HTML = r"""<!doctype html>
           body: JSON.stringify({
             sdp: pc.localDescription?.sdp || "",
             type: pc.localDescription?.type || "offer",
+            preview_profile: resolvedPreviewProfile(),
           }),
         });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "Failed to establish WebRTC preview");
-        await pc.setRemoteDescription(payload);
+        if (pc !== webrtcPeer) {
+          if (payload.peer_id) {
+            fetch("/api/webrtc-close", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ peer_id: payload.peer_id }),
+              keepalive: true,
+            }).catch(() => {});
+          }
+          return;
+        }
+        webrtcPeerId = payload.peer_id || null;
+        if (webrtcHeartbeatTimer) clearInterval(webrtcHeartbeatTimer);
+        if (webrtcPeerId) {
+          webrtcHeartbeatTimer = setInterval(() => {
+            if (!webrtcPeerId) return;
+            fetch("/api/webrtc-keepalive", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ peer_id: webrtcPeerId }),
+            }).catch(() => {});
+          }, 5000);
+        }
+        await pc.setRemoteDescription({ sdp: payload.sdp, type: payload.type });
+        attachPreviewTrack(transceiver?.receiver?.track);
       } catch (err) {
-        stopLivePreviewStream();
-        setPreviewStageState("Preview unavailable", true);
+        if (pc === webrtcPeer) {
+          stopLivePreviewStream();
+          setPreviewStageState("Preview unavailable", true);
+        }
         throw err;
       }
     }
 
-    function stopLivePreviewStream() {
+    function releaseWebRtcPeer(peerId, useBeacon = false) {
+      if (!peerId) return;
+      const body = JSON.stringify({ peer_id: peerId });
+      if (useBeacon && navigator.sendBeacon) {
+        navigator.sendBeacon("/api/webrtc-close", new Blob([body], { type: "application/json" }));
+        return;
+      }
+      fetch("/api/webrtc-close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        keepalive: true,
+      }).catch(() => {});
+    }
+
+    function stopLivePreviewStream(useBeacon = false) {
+      if (webrtcHeartbeatTimer) {
+        clearInterval(webrtcHeartbeatTimer);
+        webrtcHeartbeatTimer = null;
+      }
       if (webrtcRetryTimer) {
         clearTimeout(webrtcRetryTimer);
         webrtcRetryTimer = null;
@@ -4812,6 +6218,11 @@ HTML = r"""<!doctype html>
         webrtcPeer.onconnectionstatechange = null;
         webrtcPeer.close();
         webrtcPeer = null;
+      }
+      if (webrtcPeerId) {
+        const peerId = webrtcPeerId;
+        webrtcPeerId = null;
+        releaseWebRtcPeer(peerId, useBeacon);
       }
       if (livePreviewController) {
         livePreviewController.abort();
@@ -4937,6 +6348,7 @@ HTML = r"""<!doctype html>
       const layoutEl = document.getElementById("layout");
       const rolesEl = document.getElementById("roles");
       const fsCycleEl = document.getElementById("fsCycleSec");
+      const transitionEl = document.getElementById("transitionMs");
       if (modeEl) state.mode = modeEl.value.trim();
       if (rotationEl) state.rotation = readInt("rotation", 0);
       if (fontSizeEl) state.font_size = readInt("fontSize", 18);
@@ -4947,6 +6359,7 @@ HTML = r"""<!doctype html>
       if (layoutEl) state.layout = layoutEl.value;
       if (rolesEl) state.roles = rolesEl.value.trim();
       if (fsCycleEl) state.fs_cycle_sec = readInt("fsCycleSec", 5);
+      if (transitionEl) state.transition_ms = Math.max(0, Math.min(5000, readInt("transitionMs", 0)));
       state.visibility_mode = visibilityModeForState(state);
       normalizeVisibilityFlags();
       state.flags.smooth = document.getElementById("flagSmooth").checked;
@@ -4980,6 +6393,7 @@ HTML = r"""<!doctype html>
 
     function fillForm(nextState, configPath, nextRawConfig) {
       const previousSelection = captureSelectedPaneSnapshot(state);
+      activeConfigPath = configPath || activeConfigPath;
       state = nextState;
       state.visibility_mode = visibilityModeForState(state);
       normalizeVisibilityFlags();
@@ -5006,6 +6420,7 @@ HTML = r"""<!doctype html>
       const layoutEl = document.getElementById("layout");
       const rolesEl = document.getElementById("roles");
       const fsCycleEl = document.getElementById("fsCycleSec");
+      const transitionEl = document.getElementById("transitionMs");
       if (modeEl) modeEl.value = state.mode || "";
       if (connectorEl) connectorEl.value = state.connector || "";
       if (rotationEl) rotationEl.value = String(state.rotation || 0);
@@ -5017,6 +6432,7 @@ HTML = r"""<!doctype html>
       if (layoutEl) layoutEl.value = state.layout || "stack";
       if (rolesEl) rolesEl.value = state.roles || "";
       if (fsCycleEl) fsCycleEl.value = String(state.fs_cycle_sec || 5);
+      if (transitionEl) transitionEl.value = String(state.transition_ms || 0);
       const queueField = selectedPaneQueueField();
       const queueCtx = queueEditorContext();
       if (queueField) queueField.value = (queueCtx?.paths || []).join("\n");
@@ -5032,6 +6448,7 @@ HTML = r"""<!doctype html>
       renderStudioBoard();
       renderStudioInspector();
       applyPreviewGeometry();
+      updateStudioHistoryButtons();
     }
 
     async function loadConnectorOptions() {
@@ -5070,6 +6487,380 @@ HTML = r"""<!doctype html>
       connectorEl.value = state.connector || "";
     }
 
+    function selectedSceneId() {
+      return document.getElementById("sceneSelect")?.value || "";
+    }
+
+    function formatHealthBytes(value) {
+      const bytes = Number(value || 0);
+      if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+      if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MiB`;
+      return `${Math.round(bytes / 1024)} KiB`;
+    }
+
+    function renderHealth(payload) {
+      const grid = document.getElementById("healthGrid");
+      if (!grid) return;
+      const compositor = payload.compositor;
+      const web = payload.web;
+      const gpu = (payload.gpu || [])[0] || {};
+      const recovery = payload.last_recovery;
+      const cards = [
+        ["Compositor", compositor ? "Running" : "Stopped", compositor ? "health-ok" : "health-bad"],
+        ["Compositor CPU", `${Number(compositor?.cpu_percent || 0).toFixed(1)}%`, ""],
+        ["Compositor RAM", formatHealthBytes(compositor?.rss_bytes), ""],
+        ["GPU Busy", gpu.busy_percent == null ? "Unavailable" : `${gpu.busy_percent}%`, ""],
+        ["Web CPU", `${Number(web?.cpu_percent || 0).toFixed(1)}%`, ""],
+        ["Web RAM", formatHealthBytes(web?.rss_bytes), ""],
+        ["Preview Clients", String(payload.preview_peers || 0), ""],
+        ["Pane Processes", String((payload.pane_processes || []).length), ""],
+        ["Last Recovery", recovery ? `${roleTitle(Number(recovery.pane || 0))} · ${recovery.source || "unknown"}` : "None", recovery?.ok === false ? "health-bad" : ""],
+      ];
+      grid.innerHTML = "";
+      cards.forEach(([labelText, valueText, className]) => {
+        const card = document.createElement("div");
+        card.className = "health-card";
+        const label = document.createElement("div");
+        label.className = "health-label";
+        label.textContent = labelText;
+        const value = document.createElement("div");
+        value.className = `health-value ${className}`.trim();
+        value.textContent = valueText;
+        card.append(label, value);
+        grid.appendChild(card);
+      });
+      const processes = document.getElementById("healthProcesses");
+      if (processes) {
+        processes.textContent = (payload.pane_processes || []).length
+          ? (payload.pane_processes || []).map((item) => `${item.name} · PID ${item.pid} · ${item.cpu_percent}% · ${formatHealthBytes(item.rss_bytes)}`).join("\n")
+          : "No direct pane child processes detected.";
+      }
+      const errors = document.getElementById("healthErrors");
+      if (errors) {
+        errors.textContent = (payload.recent_errors || []).length
+          ? `Recent errors\n${payload.recent_errors.join("\n")}`
+          : "No recent logged errors.";
+      }
+    }
+
+    async function loadHealth() {
+      const response = await fetch("/api/health");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Failed to load health data");
+      renderHealth(payload);
+    }
+
+    async function loadMonitors() {
+      const select = document.getElementById("monitorConnector");
+      const note = document.getElementById("monitorStatus");
+      if (!select || !note) return;
+      const response = await fetch("/api/monitors");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Failed to discover monitor controls");
+      const monitors = Array.isArray(payload.monitors) ? payload.monitors : [];
+      select.innerHTML = "";
+      monitors.forEach((monitor) => {
+        const option = document.createElement("option");
+        option.value = String(monitor.connector || "");
+        option.textContent = `${monitor.label || monitor.connector}${monitor.available ? "" : " · unavailable"}`;
+        option.disabled = !monitor.available;
+        select.appendChild(option);
+      });
+      if (!monitors.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No connected DDC/CI displays found";
+        select.appendChild(option);
+      }
+      const available = monitors.find((monitor) => monitor.available);
+      if (available) select.value = String(available.connector || "");
+      note.textContent = available
+        ? `Ready on ${available.bus}. Controls are sent only when a button is pressed.`
+        : "No writable DDC/CI bus is available for a connected display.";
+    }
+
+    async function applyMonitorControl(control, value) {
+      const connector = document.getElementById("monitorConnector")?.value || "";
+      if (!connector) throw new Error("Select an available display first");
+      if (control === "power" && Number(value) === 4 && !window.confirm("Power off this display?")) return;
+      const response = await fetch("/api/monitors/set", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connector, control, value: Number(value) }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Monitor control failed");
+      const note = document.getElementById("monitorStatus");
+      if (note) note.textContent = `Sent ${control} = ${value} to ${connector}.`;
+      setStatus(`Sent monitor ${control} control.`, false, true);
+    }
+
+    function renderConfigHistory(entries) {
+      const list = document.getElementById("historyList");
+      if (!list) return;
+      list.innerHTML = "";
+      (entries || []).forEach((entry) => {
+        const row = document.createElement("div");
+        row.className = "history-item";
+        const label = document.createElement("div");
+        label.className = "history-label";
+        label.textContent = `${new Date(Number(entry.created || 0) * 1000).toLocaleString()} · ${entry.reason || "change"} · ${formatHealthBytes(entry.size)}`;
+        const actions = document.createElement("div");
+        actions.className = "history-item-actions";
+        const diff = document.createElement("button");
+        diff.type = "button";
+        diff.className = "secondary";
+        diff.textContent = "Diff";
+        diff.dataset.historyDiff = String(entry.id || "");
+        const rollback = document.createElement("button");
+        rollback.type = "button";
+        rollback.className = "secondary danger";
+        rollback.textContent = "Roll Back";
+        rollback.dataset.historyRollback = String(entry.id || "");
+        actions.append(diff, rollback);
+        row.append(label, actions);
+        list.appendChild(row);
+      });
+      if (!(entries || []).length) list.textContent = "No prior config snapshots yet.";
+    }
+
+    async function loadConfigHistory() {
+      const response = await fetch("/api/history");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Failed to load config history");
+      renderConfigHistory(payload.entries || []);
+    }
+
+    async function showConfigHistoryDiff(entryId) {
+      const response = await fetch(`/api/history/diff?id=${encodeURIComponent(entryId)}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Failed to load config diff");
+      const output = document.getElementById("historyDiff");
+      if (output) output.textContent = payload.diff || "No differences from the current config.";
+    }
+
+    async function rollbackConfigHistory(entryId) {
+      if (!window.confirm("Roll back to this config snapshot? The current config will be saved first.")) return;
+      const response = await fetch("/api/history/rollback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: entryId }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Config rollback failed");
+      studioUndoStack = [];
+      studioRedoStack = [];
+      fillForm(payload.state, payload.config_path, payload.raw_config);
+      renderConfigHistory(payload.entries || []);
+      const output = document.getElementById("historyDiff");
+      if (output) output.textContent = "";
+      scheduleLivePreview();
+      setStatus("Rolled back config; the previous current version was saved.", false, true);
+    }
+
+    function scheduleHealthPolling() {
+      if (healthTimer) {
+        clearInterval(healthTimer);
+        healthTimer = null;
+      }
+      const panel = document.getElementById("healthPanel");
+      if (!panel?.open || document.hidden) return;
+      loadHealth().catch((err) => setStatus(err.message, true));
+      healthTimer = setInterval(() => {
+        loadHealth().catch((err) => setStatus(err.message, true));
+      }, 3000);
+    }
+
+    function renderSceneControls(preferredSceneId = selectedSceneId()) {
+      const select = document.getElementById("sceneSelect");
+      const nameInput = document.getElementById("sceneName");
+      if (!select || !nameInput) return;
+      select.innerHTML = "";
+      const emptyOption = document.createElement("option");
+      emptyOption.value = "";
+      emptyOption.textContent = "New scene…";
+      select.appendChild(emptyOption);
+      (sceneCatalog.scenes || []).forEach((scene) => {
+        const option = document.createElement("option");
+        option.value = String(scene.id || "");
+        option.textContent = String(scene.name || "Unnamed scene");
+        select.appendChild(option);
+      });
+      select.value = (sceneCatalog.scenes || []).some((scene) => scene.id === preferredSceneId)
+        ? preferredSceneId
+        : "";
+      const selected = (sceneCatalog.scenes || []).find((scene) => scene.id === select.value);
+      if (selected) nameInput.value = String(selected.name || "");
+      const hasSelection = !!selected;
+      document.getElementById("sceneApplyBtn").disabled = !hasSelection;
+      document.getElementById("sceneDeleteBtn").disabled = !hasSelection;
+      document.getElementById("sceneScheduleAddBtn").disabled = !hasSelection;
+
+      const scheduleList = document.getElementById("sceneScheduleList");
+      if (!scheduleList) return;
+      scheduleList.innerHTML = "";
+      const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      (sceneCatalog.schedules || []).forEach((schedule) => {
+        const scene = (sceneCatalog.scenes || []).find((item) => item.id === schedule.scene_id);
+        const item = document.createElement("div");
+        item.className = "scene-schedule-item";
+        const label = document.createElement("span");
+        const days = (schedule.days || []).map((day) => dayNames[Number(day)] || "").filter(Boolean).join(", ");
+        label.textContent = `${scene?.name || "Missing scene"} · ${schedule.time || "--:--"} · ${days}`;
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "secondary";
+        remove.textContent = "Remove";
+        remove.dataset.scheduleId = String(schedule.id || "");
+        item.append(label, remove);
+        scheduleList.appendChild(item);
+      });
+    }
+
+    async function sceneApi(path, payload = {}) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Scene operation failed");
+      return result;
+    }
+
+    function setRemoteStatus(message, isError = false) {
+      const el = document.getElementById("remoteStatus");
+      if (!el) return;
+      el.textContent = message;
+      el.className = `status${isError ? " error" : " success"}`;
+    }
+
+    function renderRemoteControls(scenes, health) {
+      const sceneGrid = document.getElementById("remoteScenes");
+      const paneGrid = document.getElementById("remotePanes");
+      const healthEl = document.getElementById("remoteHealth");
+      if (sceneGrid) {
+        sceneGrid.innerHTML = "";
+        (scenes || []).forEach((scene) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "secondary";
+          button.dataset.remoteScene = String(scene.id || "");
+          button.textContent = String(scene.name || "Unnamed scene");
+          sceneGrid.appendChild(button);
+        });
+        if (!(scenes || []).length) sceneGrid.textContent = "No saved scenes yet.";
+      }
+      if (paneGrid) {
+        paneGrid.innerHTML = "";
+        const count = Math.max(0, Number(remoteState?.pane_count || 0));
+        for (let pane = 0; pane < count; pane += 1) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "secondary";
+          button.dataset.remotePane = String(pane);
+          button.textContent = `${roleName(pane)} · ${remoteState?.pane_types?.[pane] || "terminal"}`;
+          paneGrid.appendChild(button);
+        }
+      }
+      document.querySelectorAll("[data-remote-visibility]").forEach((button) => {
+        button.classList.toggle("primary", button.dataset.remoteVisibility === visibilityModeForState(remoteState));
+        button.classList.toggle("secondary", button.dataset.remoteVisibility !== visibilityModeForState(remoteState));
+      });
+      if (healthEl && health) {
+        const compositor = health?.compositor;
+        healthEl.textContent = compositor
+          ? `Online · PID ${compositor.pid} · CPU ${Number(compositor.cpu_percent || 0).toFixed(1)}% · ${formatHealthBytes(compositor.rss_bytes)}`
+          : "Compositor stopped";
+      }
+    }
+
+    async function loadRemoteControl() {
+      const [stateResponse, scenesResponse, healthResponse] = await Promise.all([
+        fetch("/api/state"), fetch("/api/scenes"), fetch("/api/health"),
+      ]);
+      const [statePayload, scenesPayload, healthPayload] = await Promise.all([
+        stateResponse.json(), scenesResponse.json(), healthResponse.json(),
+      ]);
+      if (!stateResponse.ok) throw new Error(statePayload.error || "Failed to load state");
+      if (!scenesResponse.ok) throw new Error(scenesPayload.error || "Failed to load scenes");
+      if (!healthResponse.ok) throw new Error(healthPayload.error || "Failed to load health");
+      remoteState = statePayload.state;
+      sceneCatalog = scenesPayload;
+      renderRemoteControls(sceneCatalog.scenes || [], healthPayload);
+      setRemoteStatus("Remote is ready.");
+    }
+
+    async function setRemoteVisibility(mode) {
+      if (!remoteState) throw new Error("Remote state is not loaded yet");
+      remoteState.visibility_mode = mode;
+      const response = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state: remoteState }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Failed to change visible content");
+      remoteState = payload.state;
+      renderRemoteControls(sceneCatalog.scenes || [], null);
+      setRemoteStatus("Updated visible content.");
+    }
+
+    async function loadScenes(preferredSceneId = selectedSceneId()) {
+      const response = await fetch("/api/scenes");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Failed to load scenes");
+      sceneCatalog = payload;
+      renderSceneControls(preferredSceneId);
+    }
+
+    async function saveCurrentScene() {
+      syncFormToState();
+      const name = document.getElementById("sceneName")?.value || "";
+      const payload = await sceneApi("/api/scenes/save", {
+        id: selectedSceneId(),
+        name,
+        state,
+      });
+      sceneCatalog = payload;
+      renderSceneControls(payload.scene?.id || "");
+      setStatus(`Saved scene ${payload.scene?.name || name}.`, false, true);
+    }
+
+    async function applySelectedScene() {
+      const id = selectedSceneId();
+      if (!id) return;
+      const payload = await sceneApi("/api/scenes/apply", { id });
+      studioUndoStack = [];
+      studioRedoStack = [];
+      fillForm(payload.state, payload.config_path, payload.raw_config);
+      setStatus(`Applied scene ${payload.scene?.name || ""}.`, false, true);
+    }
+
+    async function deleteSelectedScene() {
+      const id = selectedSceneId();
+      if (!id) return;
+      const scene = (sceneCatalog.scenes || []).find((item) => item.id === id);
+      if (!window.confirm(`Delete scene “${scene?.name || "Unnamed scene"}”?`)) return;
+      const payload = await sceneApi("/api/scenes/delete", { id });
+      sceneCatalog = payload;
+      document.getElementById("sceneName").value = "";
+      renderSceneControls("");
+      setStatus("Deleted scene.", false, true);
+    }
+
+    async function addSceneSchedule() {
+      const sceneId = selectedSceneId();
+      if (!sceneId) return;
+      const atTime = document.getElementById("sceneScheduleTime")?.value || "";
+      const days = Array.from(document.querySelectorAll("#sceneScheduleDays input:checked"))
+        .map((input) => Number(input.value));
+      const payload = await sceneApi("/api/schedules/save", { scene_id: sceneId, time: atTime, days });
+      sceneCatalog = payload;
+      renderSceneControls(sceneId);
+      setStatus("Added scene schedule.", false, true);
+    }
+
     async function loadState() {
       const response = await fetch("/api/state");
       const text = await response.text();
@@ -5082,6 +6873,8 @@ HTML = r"""<!doctype html>
         }
       }
       if (!response.ok) throw new Error(payload.error || "Failed to load state");
+      studioUndoStack = [];
+      studioRedoStack = [];
       fillForm(payload.state, payload.config_path, payload.raw_config);
       await loadConnectorOptions();
       scheduleLivePreview();
@@ -5184,7 +6977,7 @@ HTML = r"""<!doctype html>
         clearTimeout(livePreviewTimer);
         livePreviewTimer = null;
       }
-      if (document.hidden) {
+      if (remoteMode || document.hidden) {
         stopLivePreviewStream();
         return;
       }
@@ -5193,14 +6986,116 @@ HTML = r"""<!doctype html>
         stopLivePreviewStream();
         return;
       }
+      if (!webrtcPeer) {
+        startLivePreviewStream().catch(err => setStatus(err.message, true));
+        return;
+      }
+      if (["new", "connecting", "connected"].includes(webrtcPeer.connectionState)) return;
       livePreviewTimer = setTimeout(async () => {
         try {
           await startLivePreviewStream();
         } catch (err) {
           setStatus(err.message, true);
         }
-      }, 0);
+      }, delay);
     }
+
+    document.getElementById("studioUndoBtn")?.addEventListener("click", () => undoStudioLayout());
+    document.getElementById("studioRedoBtn")?.addEventListener("click", () => redoStudioLayout());
+    document.getElementById("sceneSelect")?.addEventListener("change", () => renderSceneControls(selectedSceneId()));
+    document.getElementById("sceneSaveBtn")?.addEventListener("click", () => {
+      saveCurrentScene().catch((err) => setStatus(err.message, true));
+    });
+    document.getElementById("sceneApplyBtn")?.addEventListener("click", () => {
+      applySelectedScene().catch((err) => setStatus(err.message, true));
+    });
+    document.getElementById("sceneDeleteBtn")?.addEventListener("click", () => {
+      deleteSelectedScene().catch((err) => setStatus(err.message, true));
+    });
+    document.getElementById("sceneScheduleAddBtn")?.addEventListener("click", () => {
+      addSceneSchedule().catch((err) => setStatus(err.message, true));
+    });
+    document.getElementById("sceneScheduleList")?.addEventListener("click", (event) => {
+      const button = event.target?.closest?.("[data-schedule-id]");
+      if (!button) return;
+      const scheduleId = button.dataset.scheduleId || "";
+      sceneApi("/api/schedules/delete", { id: scheduleId })
+        .then((payload) => {
+          sceneCatalog = payload;
+          renderSceneControls(selectedSceneId());
+          setStatus("Removed scene schedule.", false, true);
+        })
+        .catch((err) => setStatus(err.message, true));
+    });
+    document.getElementById("healthPanel")?.addEventListener("toggle", () => scheduleHealthPolling());
+    document.getElementById("remoteRefreshBtn")?.addEventListener("click", () => {
+      loadRemoteControl().catch((err) => setRemoteStatus(err.message, true));
+    });
+    document.getElementById("remoteScenes")?.addEventListener("click", (event) => {
+      const button = event.target?.closest?.("[data-remote-scene]");
+      if (!button) return;
+      sceneApi("/api/scenes/apply", { id: button.dataset.remoteScene || "" })
+        .then((payload) => {
+          remoteState = payload.state;
+          renderRemoteControls(sceneCatalog.scenes || [], null);
+          setRemoteStatus(`Applied ${payload.scene?.name || "scene"}.`);
+        })
+        .catch((err) => setRemoteStatus(err.message, true));
+    });
+    document.getElementById("remoteVisibility")?.addEventListener("click", (event) => {
+      const button = event.target?.closest?.("[data-remote-visibility]");
+      if (!button) return;
+      setRemoteVisibility(button.dataset.remoteVisibility || "neither")
+        .catch((err) => setRemoteStatus(err.message, true));
+    });
+    document.getElementById("remotePanes")?.addEventListener("click", (event) => {
+      const button = event.target?.closest?.("[data-remote-pane]");
+      if (!button) return;
+      sceneApi("/api/panes/restart", { pane: Number(button.dataset.remotePane) })
+        .then(() => setRemoteStatus(`Restart queued for ${roleName(Number(button.dataset.remotePane))}.`))
+        .catch((err) => setRemoteStatus(err.message, true));
+    });
+    document.getElementById("monitorPanel")?.addEventListener("toggle", (event) => {
+      if (event.currentTarget.open) loadMonitors().catch((err) => setStatus(err.message, true));
+    });
+    document.getElementById("configHistoryPanel")?.addEventListener("toggle", (event) => {
+      if (event.currentTarget.open) loadConfigHistory().catch((err) => setStatus(err.message, true));
+    });
+    document.getElementById("historyRefreshBtn")?.addEventListener("click", () => {
+      loadConfigHistory().catch((err) => setStatus(err.message, true));
+    });
+    document.getElementById("historyList")?.addEventListener("click", (event) => {
+      const diffButton = event.target?.closest?.("[data-history-diff]");
+      const rollbackButton = event.target?.closest?.("[data-history-rollback]");
+      if (diffButton) {
+        showConfigHistoryDiff(diffButton.dataset.historyDiff || "").catch((err) => setStatus(err.message, true));
+      } else if (rollbackButton) {
+        rollbackConfigHistory(rollbackButton.dataset.historyRollback || "").catch((err) => setStatus(err.message, true));
+      }
+    });
+    document.getElementById("monitorPanel")?.addEventListener("click", (event) => {
+      const button = event.target?.closest?.("[data-monitor-control]");
+      if (!button) return;
+      const valueElement = button.dataset.monitorValueId
+        ? document.getElementById(button.dataset.monitorValueId)
+        : null;
+      const value = valueElement?.value ?? button.dataset.monitorValue;
+      applyMonitorControl(button.dataset.monitorControl || "", value)
+        .catch((err) => setStatus(err.message, true));
+    });
+    previewProfileSelect?.addEventListener("change", () => {
+      try { localStorage.setItem("kmsMosaicPreviewProfile", selectedPreviewProfile()); } catch (err) {}
+      setStatus(`Switching preview to ${resolvedPreviewProfile()} mode…`, false, true);
+      startLivePreviewStream().catch((err) => setStatus(err.message, true));
+    });
+    document.addEventListener("keydown", (event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
+      const target = event.target;
+      if (target?.matches?.("input, textarea, select, [contenteditable='true']")) return;
+      event.preventDefault();
+      if (event.shiftKey) redoStudioLayout();
+      else undoStudioLayout();
+    });
 
     document.getElementById("saveBtn").addEventListener("click", async () => {
       try {
@@ -5233,10 +7128,11 @@ HTML = r"""<!doctype html>
       } else {
         scheduleLivePreview();
       }
+      scheduleHealthPolling();
     });
     [
       "mode","connector","rotation","fontSize","rightFrac","paneSplit",
-      "videoFrac","paneCount","layout","roles","fsCycleSec",
+      "videoFrac","paneCount","layout","roles","fsCycleSec","transitionMs",
       "videoList","extraLines","flagSmooth","flagShuffle","flagAtomic",
       "flagAtomicNonblock","flagGlFinish","flagNoOsd"
     ].forEach(id => {
@@ -5245,8 +7141,31 @@ HTML = r"""<!doctype html>
       el.addEventListener("input", () => syncFormToState());
       el.addEventListener("change", () => syncFormToState());
     });
-    loadState().catch(err => setStatus(err.message, true));
-    window.addEventListener("beforeunload", () => stopLivePreviewStream());
+    window.currentVisibilityMode = currentVisibilityMode;
+    window.fillForm = fillForm;
+    window.loadConnectorOptions = loadConnectorOptions;
+    window.loadScenes = loadScenes;
+    window.loadHealth = loadHealth;
+    window.loadMonitors = loadMonitors;
+    window.loadConfigHistory = loadConfigHistory;
+    window.loadPaneTemplates = loadPaneTemplates;
+    window.loadState = loadState;
+    window.saveState = saveState;
+    window.scheduleLivePreview = scheduleLivePreview;
+    window.setStatus = setStatus;
+    window.setVisibilityMode = setVisibilityMode;
+    if (remoteMode) {
+      loadRemoteControl().catch((err) => setRemoteStatus(err.message, true));
+    } else {
+      loadState().catch(err => setStatus(err.message, true));
+      loadScenes().catch(err => setStatus(err.message, true));
+      loadPaneTemplates().catch(err => setStatus(err.message, true));
+      requestAnimationFrame(() => {
+        if (!webrtcPeer) scheduleLivePreview();
+      });
+    }
+    window.addEventListener("pagehide", () => stopLivePreviewStream());
+    window.addEventListener("beforeunload", () => stopLivePreviewStream(true));
   </script>
 </body>
 </html>
@@ -5267,6 +7186,22 @@ class Handler(BaseHTTPRequestHandler):
     @property
     def webrtc(self) -> WebRTCBridge:
         return self.server.webrtc  # type: ignore[attr-defined]
+
+    @property
+    def scenes(self) -> SceneManager:
+        return self.server.scenes  # type: ignore[attr-defined]
+
+    @property
+    def health(self) -> HealthMonitor:
+        return self.server.health  # type: ignore[attr-defined]
+
+    @property
+    def history(self) -> ConfigHistory:
+        return self.server.history  # type: ignore[attr-defined]
+
+    @property
+    def templates(self) -> PaneTemplateManager:
+        return self.server.templates  # type: ignore[attr-defined]
 
     def log_message(self, fmt: str, *args: Any) -> None:
         cfg = getattr(self.server, "app_config", None)
@@ -5322,6 +7257,32 @@ class Handler(BaseHTTPRequestHandler):
         digest = hashlib.sha256(str(source).encode("utf-8")).hexdigest()
         return self.app_config.thumb_cache_dir / f"{digest}.jpg"
 
+    def _prune_thumbnail_cache(self) -> None:
+        cache_dir = self.app_config.thumb_cache_dir
+        if not cache_dir.exists():
+            return
+        now = time.time()
+        entries: list[tuple[Path, os.stat_result]] = []
+        for path in cache_dir.glob("*.jpg"):
+            try:
+                st = path.stat()
+                if now - st.st_mtime > THUMB_CACHE_MAX_AGE_SEC:
+                    path.unlink(missing_ok=True)
+                    continue
+                entries.append((path, st))
+            except OSError:
+                continue
+        entries.sort(key=lambda item: item[1].st_mtime_ns, reverse=True)
+        total_bytes = 0
+        for index, (path, st) in enumerate(entries):
+            if index >= THUMB_CACHE_MAX_FILES or total_bytes + st.st_size > THUMB_CACHE_MAX_BYTES:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                continue
+            total_bytes += st.st_size
+
     def _generate_thumbnail(self, source: Path, dest: Path) -> bool:
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
@@ -5363,6 +7324,11 @@ class Handler(BaseHTTPRequestHandler):
         cache_ok = dest.exists() and dest.stat().st_mtime_ns >= src_mtime and dest.stat().st_size > 0
         if not cache_ok and not self._generate_thumbnail(source, dest):
             return None
+        try:
+            os.utime(dest, None)
+        except OSError:
+            pass
+        self._prune_thumbnail_cache()
         return dest.read_bytes() if dest.exists() else None
 
     def _serve_media_file(self, source_path: str) -> None:
@@ -5466,6 +7432,34 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"connectors": list_connectors()})
             return
 
+        if parsed.path == "/api/scenes":
+            self._send_json(self.scenes.read())
+            return
+
+        if parsed.path == "/api/health":
+            self._send_json(self.health.snapshot(len(self.webrtc.peers)))
+            return
+
+        if parsed.path == "/api/monitors":
+            self._send_json({"monitors": list_ddc_monitors()})
+            return
+
+        if parsed.path == "/api/history":
+            self._send_json({"entries": self.history.entries()})
+            return
+
+        if parsed.path == "/api/history/diff":
+            entry_id = (parse_qs(parsed.query).get("id") or [""])[0]
+            try:
+                self._send_json({"id": entry_id, "diff": self.history.diff(entry_id)})
+            except (OSError, ValueError) as exc:
+                self._send_json({"error": str(exc)}, status=400)
+            return
+
+        if parsed.path == "/api/templates":
+            self._send_json(self.templates.read())
+            return
+
         if parsed.path == "/api/frame.bin":
             try:
                 data = self._request_snapshot()
@@ -5523,8 +7517,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"error": "Not found"}, status=404)
 
     def do_POST(self) -> None:
-        if self.path not in ("/api/config", "/api/raw_config"):
-            if self.path != "/api/webrtc-offer":
+        config_paths = {"/api/config", "/api/raw_config"}
+        rtc_paths = {"/api/webrtc-offer", "/api/webrtc-close", "/api/webrtc-keepalive"}
+        scene_paths = {
+            "/api/scenes/save", "/api/scenes/apply", "/api/scenes/delete",
+            "/api/schedules/save", "/api/schedules/delete",
+        }
+        template_paths = {"/api/templates/save", "/api/templates/delete"}
+        control_paths = {"/api/panes/restart", "/api/monitors/set", "/api/history/rollback"}
+        if self.path not in config_paths:
+            if self.path not in rtc_paths | scene_paths | template_paths | control_paths:
                 self._send_json({"error": "Not found"}, status=404)
                 return
 
@@ -5533,8 +7535,106 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(body.decode("utf-8"))
             if self.path == "/api/webrtc-offer":
-                answer = self.webrtc.create_answer(str(payload["sdp"]), str(payload["type"]))
+                answer = self.webrtc.create_answer(
+                    str(payload["sdp"]), str(payload["type"]),
+                    str(payload.get("preview_profile") or "balanced"),
+                )
                 self._send_json(answer)
+                return
+            if self.path == "/api/webrtc-close":
+                self.webrtc.close_peer(str(payload.get("peer_id", "")))
+                self._send_json({"ok": True})
+                return
+            if self.path == "/api/webrtc-keepalive":
+                alive = self.webrtc.keep_peer_alive(str(payload.get("peer_id", "")))
+                self._send_json({"ok": alive}, status=200 if alive else 404)
+                return
+            if self.path == "/api/panes/restart":
+                pane_index = int(payload.get("pane", -1))
+                state = self._read_state()
+                pane_count = int(state.get("pane_count", 0))
+                if pane_index < 0 or pane_index >= pane_count:
+                    raise ValueError("Pane index is out of range")
+                write_text_atomic(self.app_config.control_request_path, f"restart-pane {pane_index}\n")
+                self._send_json({"ok": True, "pane": pane_index, "queued": True})
+                return
+            if self.path == "/api/monitors/set":
+                connector = str(payload.get("connector") or "")
+                control = str(payload.get("control") or "")
+                value = int(payload.get("value", -1))
+                monitor = next(
+                    (item for item in list_ddc_monitors() if item["connector"] == connector),
+                    None,
+                )
+                if not monitor or not monitor["available"]:
+                    raise ValueError("Selected display has no writable DDC/CI bus")
+                write_ddc_control(str(monitor["bus"]), control, value)
+                self._send_json({
+                    "ok": True,
+                    "connector": connector,
+                    "control": control,
+                    "value": value,
+                })
+                return
+            if self.path == "/api/history/rollback":
+                entry_id = str(payload.get("id") or "")
+                changed = self.history.rollback(entry_id)
+                self._send_json({
+                    "ok": True,
+                    "changed": changed,
+                    "entries": self.history.entries(),
+                    "config_path": str(self.app_config.config_path),
+                    "state": self._read_state(),
+                    "raw_config": self._read_raw_config(),
+                })
+                return
+            if self.path == "/api/templates/save":
+                template = self.templates.save(
+                    str(payload.get("name") or ""),
+                    payload.get("pane"),
+                    str(payload.get("id") or ""),
+                )
+                self._send_json({"ok": True, "template": template, **self.templates.read()})
+                return
+            if self.path == "/api/templates/delete":
+                deleted = self.templates.delete(str(payload.get("id") or ""))
+                self._send_json({"ok": deleted, **self.templates.read()}, status=200 if deleted else 404)
+                return
+            if self.path == "/api/scenes/save":
+                scene = self.scenes.save_scene(
+                    str(payload.get("name") or ""),
+                    payload["state"],
+                    str(payload.get("id") or ""),
+                )
+                self._send_json({"ok": True, "scene": scene, **self.scenes.read()})
+                return
+            if self.path == "/api/scenes/apply":
+                scene = self.scenes.apply_scene(str(payload.get("id") or ""))
+                self._send_json({
+                    "ok": True,
+                    "scene": scene,
+                    "config_path": str(self.app_config.config_path),
+                    "state": self._read_state(),
+                    "raw_config": self._read_raw_config(),
+                })
+                return
+            if self.path == "/api/scenes/delete":
+                deleted = self.scenes.delete_scene(str(payload.get("id") or ""))
+                self._send_json({"ok": deleted, **self.scenes.read()}, status=200 if deleted else 404)
+                return
+            if self.path == "/api/schedules/save":
+                schedule = self.scenes.save_schedule(
+                    str(payload.get("scene_id") or ""),
+                    str(payload.get("time") or ""),
+                    list(payload.get("days") or []),
+                    bool(payload.get("enabled", True)),
+                    str(payload.get("id") or ""),
+                )
+                self._send_json({"ok": True, "schedule": schedule, **self.scenes.read()})
+                return
+            if self.path == "/api/schedules/delete":
+                deleted = self.scenes.delete_schedule(str(payload.get("id") or ""))
+                self._send_json({"ok": deleted, **self.scenes.read()}, status=200 if deleted else 404)
                 return
             config_path = self.app_config.config_path
             if self.path == "/api/config":
@@ -5542,7 +7642,7 @@ class Handler(BaseHTTPRequestHandler):
                 text = serialize_config(state)
             else:
                 text = str(payload["raw_config"])
-            self._write_text_atomic(config_path, text)
+            self.history.write(text, "raw" if self.path == "/api/raw_config" else "editor")
         except Exception as exc:  # pragma: no cover
             self._send_json({"error": str(exc)}, status=400)
             return
@@ -5558,6 +7658,7 @@ class Handler(BaseHTTPRequestHandler):
 def parse_cli_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Web UI for KMS Mosaic")
     parser.add_argument("--config", default=default_config_path(), help="Config file to edit")
+    parser.add_argument("--scenes", help="Named-scene JSON file (defaults beside the config file)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind host")
     parser.add_argument("--port", type=int, default=8787, help="Bind port")
     parser.add_argument("--dump-state", action="store_true", help="Print parsed config state as JSON and exit")
@@ -5579,6 +7680,7 @@ def parse_args() -> WebConfig:
         preview_lease_path=Path("/tmp/kms_mosaic_preview.active"),
         snapshot_output_path=Path("/tmp/kms_mosaic_preview.rgba"),
         thumb_cache_dir=Path("/tmp/kms_mosaic_web_thumbs"),
+        scenes_path=Path(args.scenes) if args.scenes else Path(args.config).with_suffix(".scenes.json"),
     )
 
 
@@ -5628,12 +7730,18 @@ def main() -> int:
         preview_lease_path=Path("/tmp/kms_mosaic_preview.active"),
         snapshot_output_path=Path("/tmp/kms_mosaic_preview.rgba"),
         thumb_cache_dir=Path("/tmp/kms_mosaic_web_thumbs"),
+        scenes_path=Path(cli.scenes) if cli.scenes else config_path.with_suffix(".scenes.json"),
         verbose=bool(getattr(cli, "verbose", False)),
     )
     server = ReusableThreadingHTTPServer((app_config.host, app_config.port), Handler)
     server.app_config = app_config  # type: ignore[attr-defined]
     server.webrtc = WebRTCBridge(app_config)  # type: ignore[attr-defined]
+    server.history = ConfigHistory(app_config.config_path)  # type: ignore[attr-defined]
+    server.templates = PaneTemplateManager(app_config)  # type: ignore[attr-defined]
+    server.scenes = SceneManager(app_config, server.history)  # type: ignore[attr-defined]
+    server.health = HealthMonitor()  # type: ignore[attr-defined]
     server.webrtc.start()  # type: ignore[attr-defined]
+    server.scenes.start()  # type: ignore[attr-defined]
     if app_config.verbose:
         print(f"KMS Mosaic web UI serving {app_config.config_path} on http://{app_config.host}:{app_config.port}")
     try:
@@ -5641,6 +7749,7 @@ def main() -> int:
     except KeyboardInterrupt:
         return 0
     finally:
+        server.scenes.close()  # type: ignore[attr-defined]
         server.webrtc.close()  # type: ignore[attr-defined]
 
 

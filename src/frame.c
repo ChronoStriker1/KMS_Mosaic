@@ -164,19 +164,12 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         if (osd_media && osd_media->mpv) {
         static osd_ctx *osd = NULL;
         if (!osd) osd = osd_create(opt->font_px ? opt->font_px : 20);
-        int64_t pos = 0, count = 0;
-        int paused_flag = 0;
-        char *title = NULL;
-        mpv_get_property(osd_media->mpv, "playlist-pos", MPV_FORMAT_INT64, &pos);
-        mpv_get_property(osd_media->mpv, "playlist-count", MPV_FORMAT_INT64, &count);
-        mpv_get_property(osd_media->mpv, "pause", MPV_FORMAT_FLAG, &paused_flag);
-        title = mpv_get_property_string(osd_media->mpv, "media-title");
         char line[512];
         snprintf(line, sizeof line, "%s %lld/%lld - %s",
-                 paused_flag ? "Paused" : "Playing",
-                 (long long)(pos + 1), (long long)count,
-                 title ? title : "(no title)");
-        if (title) mpv_free(title);
+                 osd_media->osd_paused ? "Paused" : "Playing",
+                 (long long)(osd_media->osd_playlist_pos + 1),
+                 (long long)osd_media->osd_playlist_count,
+                 osd_media->osd_title ? osd_media->osd_title : "(no title)");
         osd_set_text(osd, line);
         glBindFramebuffer(GL_FRAMEBUFFER, rg->rt_fbo);
         render_gl_reset_state_2d();
@@ -224,17 +217,18 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
     }
 
     if (snapshot_path && snapshot_written && !rt->direct_mode) {
-        *snapshot_written = render_gl_write_current_rgba_frame(snapshot_path, logical_w, logical_h);
+        *snapshot_written = render_gl_write_preview_frame(rg, snapshot_path, rg->rt_tex,
+                                                          logical_w, logical_h, 720);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (!rt->direct_mode) {
         glViewport(0, 0, fb_w, fb_h);
         render_gl_clear_color(0.f, 0.f, 0.f, 1.f);
-        render_gl_blit_rt_to_screen(rg, opt->rotation);
+        render_gl_blit_rt_to_screen_brightness(rg, opt->rotation, rt->transition_brightness);
     }
     if (snapshot_path && snapshot_written && rt->direct_mode) {
-        *snapshot_written = render_gl_write_current_rgba_frame(snapshot_path, fb_w, fb_h);
+        *snapshot_written = render_gl_write_current_rgba_frame(rg, snapshot_path, fb_w, fb_h);
     }
 
     eglSwapBuffers(e->dpy, e->surf);
@@ -251,6 +245,6 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
             }
         }
     }
-    if (use_mpv) rt->mpv_needs_render = 1;
+    if (use_mpv) rt->mpv_needs_render = 0;
     rt->frame++;
 }

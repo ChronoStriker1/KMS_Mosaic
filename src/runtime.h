@@ -24,6 +24,8 @@ typedef struct {
     bool direct_via_fbo;
     bool direct_test_only;
     int frame;
+    bool render_dirty;
+    float transition_brightness;
     int mpv_needs_render;
     int *pane_mpv_needs_render;
     struct pollfd *pfds;

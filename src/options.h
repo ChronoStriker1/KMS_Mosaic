@@ -40,6 +40,8 @@ typedef struct {
     const char *mpv_out_path;
     const char *panscan;
     int video_rotate;
+    int watchdog_sec;
+    const char *sync_group;
     const char **mpv_opts;
     int n_mpv_opts;
     int cap_mpv_opts;
@@ -89,6 +91,7 @@ typedef struct {
     bool use_atomic;
     int layout_mode;
     int fs_cycle_sec;
+    int transition_ms;
     int *roles;
     int role_cap;
     bool roles_set;
