@@ -362,8 +362,12 @@ static int app_run_gl_test(const options_t *opt, render_gl_ctx *rg, drm_ctx *d, 
         render_gl_clear_color(0.f, 0.f, 0.f, 1.f);
         render_gl_blit_rt_to_screen(rg, opt->rotation);
         eglSwapBuffers(e->dpy, e->surf);
-        if (opt->use_atomic && opt->gl_finish) glFinish();
+        if (opt->gl_finish) glFinish();
         display_page_flip(d, g);
+        if (display_wait_for_page_flip(d, g, 1000) != 0) {
+            fprintf(stderr, "GL test: page flip timed out at frame %d.\n", f);
+            return 1;
+        }
     }
     fprintf(stderr, "GL test: rendered %d frames successfully.\n", frames);
     return 0;
@@ -374,7 +378,7 @@ static void app_prime_display(const options_t *opt, drm_ctx *d, gbm_ctx *g, egl_
     glViewport(0, 0, d->mode.hdisplay, d->mode.vdisplay);
     render_gl_clear_color(0.f, 0.f, 0.f, 1.f);
     eglSwapBuffers(e->dpy, e->surf);
-    if (opt->use_atomic && opt->gl_finish) glFinish();
+    if (opt->gl_finish) glFinish();
     display_drm_set_mode(d, g);
 
     scene->fb_w = d->mode.hdisplay;
@@ -550,6 +554,7 @@ static void app_update_layout(const options_t *opt, ui_state *ui, pane_runtime *
 
 static void app_cleanup(const options_t *opt, media_ctx *m, media_ctx *pane_media, render_gl_ctx *rg, drm_ctx *d,
                         gbm_ctx *g, egl_ctx *e, pane_runtime *panes) {
+    if (g->in_flight) (void)display_wait_for_page_flip(d, g, 1000);
     if (pane_media) {
         for (int i = 0; i < opt->pane_count; ++i) media_shutdown(&pane_media[i]);
         free(pane_media);

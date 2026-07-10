@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -451,7 +452,12 @@ void display_drm_set_mode(drm_ctx *d, gbm_ctx *g) {
 }
 
 void display_page_flip(drm_ctx *d, gbm_ctx *g) {
+    if (g->in_flight) return;
     g->next_bo = gbm_surface_lock_front_buffer(g->surface);
+    if (!g->next_bo) {
+        fprintf(stderr, "gbm_surface_lock_front_buffer (page_flip) failed\n");
+        return;
+    }
     uint32_t fb = drm_fb_for_bo(d->fd, g->next_bo);
     if (d->atomic.enabled) {
         drmModeAtomicReq *req = drmModeAtomicAlloc();
@@ -472,7 +478,9 @@ void display_page_flip(drm_ctx *d, gbm_ctx *g) {
             r |= drmModeAtomicAddProperty(req, d->crtc_id, d->atomic.crtc_props.out_fence_ptr, ptr) <= 0;
         }
         if (r) display_die("drmModeAtomicAddProperty (flip)");
-        unsigned int flags = d->atomic.nonblock ? DRM_MODE_ATOMIC_NONBLOCK : 0;
+        unsigned int flags = d->atomic.nonblock
+            ? DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT
+            : 0;
         if (drmModeAtomicCommit(d->fd, req, flags, d->atomic.nonblock ? g : NULL) == 0) {
             drmModeAtomicFree(req);
             if (out_fence >= 0) close(out_fence);
@@ -486,10 +494,17 @@ void display_page_flip(drm_ctx *d, gbm_ctx *g) {
         fprintf(stderr, "drmModeAtomicCommit (flip) failed; falling back to legacy\n");
         d->atomic.enabled = 0;
     }
-    int ret = drmModeSetCrtc(d->fd, d->crtc_id, fb, 0, 0, &d->conn_id, 1, &d->mode);
-    if (ret) fprintf(stderr, "drmModeSetCrtc (page_flip) failed: %d\n", ret);
-    if (g->bo) { uint32_t old_fb = g->fb_id; gbm_surface_release_buffer(g->surface, g->bo); drmModeRmFB(d->fd, old_fb); }
-    g->bo = g->next_bo; g->fb_id = fb;
+    if (drmModePageFlip(d->fd, d->crtc_id, fb, DRM_MODE_PAGE_FLIP_EVENT, g) == 0) {
+        g->pending_bo = g->next_bo;
+        g->pending_fb = fb;
+        g->in_flight = 1;
+        return;
+    }
+
+    fprintf(stderr, "drmModePageFlip failed: %s\n", strerror(errno));
+    drmModeRmFB(d->fd, fb);
+    gbm_surface_release_buffer(g->surface, g->next_bo);
+    g->next_bo = NULL;
 }
 
 void display_on_page_flip(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, void *user_data) {
@@ -505,4 +520,19 @@ void display_on_page_flip(int fd, unsigned int sequence, unsigned int tv_sec, un
     g->pending_bo = NULL;
     g->pending_fb = 0;
     g->in_flight = 0;
+}
+
+int display_wait_for_page_flip(drm_ctx *d, gbm_ctx *g, int timeout_ms) {
+    if (!d || !g || !g->in_flight) return 0;
+    struct pollfd pfd = {.fd = d->fd, .events = POLLIN};
+    int ready;
+    do {
+        ready = poll(&pfd, 1, timeout_ms);
+    } while (ready < 0 && errno == EINTR);
+    if (ready <= 0 || !(pfd.revents & POLLIN)) return -1;
+
+    drmEventContext ev = {0};
+    ev.version = 2;
+    ev.page_flip_handler = display_on_page_flip;
+    return drmHandleEvent(d->fd, &ev);
 }
