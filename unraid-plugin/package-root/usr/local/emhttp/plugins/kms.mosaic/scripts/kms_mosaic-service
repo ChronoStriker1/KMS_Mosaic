@@ -8,6 +8,8 @@ WEB_PIDFILE="/var/run/kms_mosaic_web.pid"
 KMS_LOG="/tmp/start_kms_mosaic.log"
 WEB_LOG="/tmp/kms_mosaic_web.log"
 LOG_MAX_BYTES="${LOG_MAX_BYTES:-1048576}"
+STARTUP_DEP_TIMEOUT="${STARTUP_DEP_TIMEOUT:-30}"
+STARTUP_HEALTH_TIMEOUT="${STARTUP_HEALTH_TIMEOUT:-15}"
 
 SERVICE="enable"
 WEB_SERVICE="enable"
@@ -15,12 +17,15 @@ WEB_PORT="8788"
 WEB_HOST="127.0.0.1"
 CONFIG_PATH="/boot/config/kms_mosaic.conf"
 LOG_ENABLE="disable"
+KMS_ARGS="--atomic-nonblock"
 
 [ -r "$CFG" ] && source "$CFG"
 
 KMS_WRAPPER="/usr/local/bin/kms_mosaic"
 WEB_WRAPPER="/usr/local/bin/kms_mosaic_web"
 KMS_LIBDIR="/usr/local/lib/kms_mosaic"
+SNAPSHOT_REQUEST="/tmp/kms_mosaic_snapshot.request"
+SNAPSHOT_OUTPUT="/tmp/kms_mosaic_preview.rgba"
 
 logging_enabled() {
   case "${LOG_ENABLE:-disable}" in
@@ -50,9 +55,11 @@ web_log_target() {
 }
 
 kms_extra_args() {
+  local args="${KMS_ARGS:-}"
   if logging_enabled; then
-    printf '%s' "--debug"
+    args="${args:+${args} }--debug"
   fi
+  printf '%s' "$args"
   return 0
 }
 
@@ -92,6 +99,54 @@ cleanup_host_gpu_libs() {
         "$KMS_LIBDIR"/libffi.so* \
         "$KMS_LIBDIR"/libncursesw.so* \
         "$KMS_LIBDIR"/libtinfo.so* 2>/dev/null || true
+}
+
+wait_for_runtime_dependencies() {
+  local waited=0
+  while [ "$waited" -lt "$STARTUP_DEP_TIMEOUT" ]; do
+    if compgen -G '/dev/dri/card*' >/dev/null &&
+       [ -r /usr/lib64/libdrm.so.2 ] &&
+       [ -r /usr/lib64/libgbm.so.1 ] &&
+       [ -r /usr/lib64/libEGL.so.1 ] &&
+       [ -r /usr/lib64/libGLESv2.so.2 ] &&
+       [ -d /usr/lib64/dri ]; then
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+request_fresh_render() {
+  local waited=0
+  rm -f "$SNAPSHOT_OUTPUT" 2>/dev/null || true
+  touch "$SNAPSHOT_REQUEST"
+  while [ "$waited" -lt "$STARTUP_HEALTH_TIMEOUT" ]; do
+    is_kms_running || return 1
+    if [ -s "$SNAPSHOT_OUTPUT" ]; then
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+kms_render_healthy() {
+  request_fresh_render || return 1
+  sleep 2
+  request_fresh_render || return 1
+  rm -f "$SNAPSHOT_REQUEST" "$SNAPSHOT_OUTPUT" 2>/dev/null || true
+  return 0
+}
+
+launch_detached() {
+  if command -v setsid >/dev/null 2>&1; then
+    nohup setsid "$@" &
+  else
+    nohup "$@" &
+  fi
 }
 
 web_pid_from_system() {
@@ -213,6 +268,9 @@ PY
 start_kms() {
   [ "${SERVICE}" = "enable" ] || return 0
   is_kms_running && return 0
+  if ! wait_for_runtime_dependencies; then
+    return 1
+  fi
   local attempt
   for attempt in 1 2; do
     cleanup_host_gpu_libs
@@ -221,16 +279,17 @@ start_kms() {
     local extra
     extra="$(kms_extra_args)"
     if [ -n "$extra" ]; then
-      nohup "$KMS_WRAPPER" --config "$CONFIG_PATH" $extra >"$target" 2>&1 &
+      launch_detached "$KMS_WRAPPER" --config "$CONFIG_PATH" $extra >"$target" 2>&1
     else
-      nohup "$KMS_WRAPPER" --config "$CONFIG_PATH" >"$target" 2>&1 &
+      launch_detached "$KMS_WRAPPER" --config "$CONFIG_PATH" >"$target" 2>&1
     fi
     write_pidfile "$KMS_PIDFILE" "$!"
     sleep 3
-    if is_kms_running; then
+    if is_kms_running && kms_render_healthy; then
       post_start_ddc
       return 0
     fi
+    stop_kms
     cleanup_pidfile "$KMS_PIDFILE"
     sleep 5
   done
@@ -288,9 +347,9 @@ start_web() {
   local extra
   extra="$(web_extra_args)"
   if [ -n "$extra" ]; then
-    nohup "$WEB_WRAPPER" --config "$CONFIG_PATH" --host "$WEB_HOST" --port "$WEB_PORT" $extra >"$target" 2>&1 &
+    launch_detached "$WEB_WRAPPER" --config "$CONFIG_PATH" --host "$WEB_HOST" --port "$WEB_PORT" $extra >"$target" 2>&1
   else
-    nohup "$WEB_WRAPPER" --config "$CONFIG_PATH" --host "$WEB_HOST" --port "$WEB_PORT" >"$target" 2>&1 &
+    launch_detached "$WEB_WRAPPER" --config "$CONFIG_PATH" --host "$WEB_HOST" --port "$WEB_PORT" >"$target" 2>&1
   fi
   sleep 1
   local pid="$!"
@@ -326,7 +385,7 @@ status_json() {
     web_running="true"
   fi
   cat <<EOF
-{"service":"${SERVICE}","web_service":"${WEB_SERVICE}","web_port":"${WEB_PORT}","config_path":"${CONFIG_PATH}","log_enable":"${LOG_ENABLE}","kms_running":${kms_running},"web_running":${web_running},"kms_pid":"${kms_pid}","web_pid":"${web_pid}"}
+{"service":"${SERVICE}","web_service":"${WEB_SERVICE}","web_port":"${WEB_PORT}","config_path":"${CONFIG_PATH}","log_enable":"${LOG_ENABLE}","kms_args":"${KMS_ARGS}","kms_running":${kms_running},"web_running":${web_running},"kms_pid":"${kms_pid}","web_pid":"${web_pid}"}
 EOF
 }
 

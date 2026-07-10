@@ -30,6 +30,7 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         }
     }
     if (snapshot_written) *snapshot_written = false;
+    if (g->in_flight) return;
 
     if (!has_pane_media && rt->direct_mode && (rt->direct_test_only || !use_mpv)) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -50,6 +51,7 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
                     vp[0], vp[1], vp[2], vp[3], cur_fbo);
         }
         eglSwapBuffers(e->dpy, e->surf);
+        if (opt->gl_finish) glFinish();
         render_gl_check(debug, "after eglSwapBuffers (direct test/baseline)");
         display_page_flip(d, g);
         rt->frame++;
@@ -236,7 +238,7 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
     }
 
     eglSwapBuffers(e->dpy, e->surf);
-    if (opt->use_atomic && opt->gl_finish) glFinish();
+    if (opt->gl_finish) glFinish();
     render_gl_check(debug, "after eglSwapBuffers");
     display_page_flip(d, g);
     if (use_mpv && m->mpv_gl) {

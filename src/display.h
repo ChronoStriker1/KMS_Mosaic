@@ -60,5 +60,6 @@ void display_egl_init(egl_ctx *e, gbm_ctx *g, bool debug);
 void display_drm_set_mode(drm_ctx *d, gbm_ctx *g);
 void display_page_flip(drm_ctx *d, gbm_ctx *g);
 void display_on_page_flip(int fd, unsigned int sequence, unsigned int tv_sec, unsigned int tv_usec, void *user_data);
+int display_wait_for_page_flip(drm_ctx *d, gbm_ctx *g, int timeout_ms);
 
 #endif

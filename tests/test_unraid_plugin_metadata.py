@@ -5,6 +5,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PLUGIN_README = ROOT / "unraid-plugin" / "package-root" / "usr" / "local" / "emhttp" / "plugins" / "kms.mosaic" / "README.md"
 PLUGIN_MANIFEST = ROOT / "unraid-plugin" / "kms.mosaic.plg"
+PLUGIN_BUILD = ROOT / "scripts" / "build_unraid_plugin.sh"
 CONTAINER_BUILD = ROOT / "scripts" / "_container_build.sh"
 MACOS_BUILD = ROOT / "scripts" / "macos_build_pkg.sh"
 HOST_GPU_LIB_PATTERNS = [
@@ -65,6 +66,11 @@ class UnraidPluginMetadataTests(unittest.TestCase):
         for lib_pattern in HOST_GPU_LIB_PATTERNS:
             install_cleanup_pattern = lib_pattern.replace(".so.*", ".so*")
             self.assertIn(f"/usr/local/lib/kms_mosaic/{install_cleanup_pattern}", text)
+
+    def test_plugin_bundle_keeps_web_wrapper_executable(self) -> None:
+        text = PLUGIN_BUILD.read_text(encoding="utf-8")
+
+        self.assertIn('"$STAGE/usr/local/bin/kms_mosaic_web"', text)
 
 
 if __name__ == "__main__":

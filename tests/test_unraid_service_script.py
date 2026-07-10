@@ -74,9 +74,35 @@ class UnraidServiceScriptTests(unittest.TestCase):
 
         self.assertIn("for attempt in 1 2; do", start_kms)
         self.assertIn("sleep 3", start_kms)
-        self.assertIn("if is_kms_running; then", start_kms)
+        self.assertIn("if is_kms_running && kms_render_healthy; then", start_kms)
         self.assertIn('cleanup_pidfile "$KMS_PIDFILE"', start_kms)
         self.assertIn("sleep 5", start_kms)
+
+    def test_start_waits_for_host_graphics_stack_and_two_fresh_frames(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+        start_kms = text[text.index("start_kms() {") : text.index("stop_kms() {")]
+
+        self.assertIn("wait_for_runtime_dependencies", start_kms)
+        self.assertIn("kms_render_healthy", start_kms)
+        self.assertIn("request_fresh_render || return 1", text)
+        self.assertEqual(text.count("request_fresh_render || return 1"), 2)
+        self.assertIn('touch "$SNAPSHOT_REQUEST"', text)
+        self.assertIn('[ -s "$SNAPSHOT_OUTPUT" ]', text)
+
+    def test_services_launch_in_isolated_sessions(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("launch_detached()", text)
+        self.assertIn('nohup setsid "$@" &', text)
+        self.assertIn('launch_detached "$KMS_WRAPPER"', text)
+        self.assertIn('launch_detached "$WEB_WRAPPER"', text)
+
+    def test_unraid_defaults_to_event_driven_atomic_presentation(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('KMS_ARGS="--atomic-nonblock"', text)
+        self.assertIn('local args="${KMS_ARGS:-}"', text)
+        self.assertIn('args="${args:+${args} }--debug"', text)
 
 
 if __name__ == "__main__":

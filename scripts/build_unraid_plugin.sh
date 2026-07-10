@@ -38,6 +38,7 @@ find "$STAGE" -type d -exec chmod 0755 {} \;
 find "$STAGE" -type f -exec chmod 0644 {} \;
 
 chmod 0755 \
+  "$STAGE/usr/local/bin/kms_mosaic_web" \
   "$STAGE/usr/local/bin/kms_mosaic_web.py" \
   "$STAGE/usr/local/emhttp/plugins/kms.mosaic/event/started" \
   "$STAGE/usr/local/emhttp/plugins/kms.mosaic/event/stopping_svcs" \
