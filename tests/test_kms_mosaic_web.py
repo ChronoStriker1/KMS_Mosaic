@@ -622,6 +622,26 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertEqual(reparsed["focus_pane"], 0)
         self.assertEqual(reparsed["fullscreen_pane"], 1)
 
+    def test_display_controls_round_trip_as_runtime_options(self) -> None:
+        state = kms_mosaic_web.empty_state()
+        state["pane_count"] = 2
+        state["show_osd"] = True
+        state["osd_pane"] = 0
+        state["fullscreen_pane"] = 1
+        state["fullscreen_cycle"] = True
+
+        text = kms_mosaic_web.build_config_text(state)
+        reparsed = kms_mosaic_web.parse_config_text(text)
+
+        self.assertIn("--show-osd 1", text)
+        self.assertIn("--osd-pane 1", text)
+        self.assertIn("--fullscreen-pane 2", text)
+        self.assertIn("--fullscreen-cycle 1", text)
+        self.assertTrue(reparsed["show_osd"])
+        self.assertEqual(reparsed["osd_pane"], 0)
+        self.assertEqual(reparsed["fullscreen_pane"], 1)
+        self.assertTrue(reparsed["fullscreen_cycle"])
+
     def test_codec_preference_key_prefers_h264_before_vp8_and_vp9(self) -> None:
         codecs = [
             SimpleNamespace(mimeType="video/VP9"),

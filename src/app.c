@@ -14,8 +14,10 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <termios.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/inotify.h>
+#endif
 
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
@@ -34,9 +36,6 @@
 #include "render_gl.h"
 #include "runtime.h"
 #include "ui.h"
-
-static struct termios g_oldt;
-static int g_have_oldt = 0;
 
 typedef struct {
     int fb_w;
@@ -63,7 +62,42 @@ typedef struct {
     bool exists;
     bool candidate_exists;
     bool candidate_pending;
+    uint64_t unsafe_hash;
 } config_watch;
+
+static bool app_hot_config_option(const char *arg) {
+    static const char *const hot[] = {
+        "--font-size", "--right-frac", "--video-frac", "--pane-split",
+        "--visibility-mode", "--split-tree", "--layout", "--landscape-layout",
+        "--portrait-layout", "--fs-cycle-sec", "--transition-ms",
+        "--show-osd", "--osd-pane", "--fullscreen-pane", "--fullscreen-cycle",
+    };
+    for (size_t i = 0; i < sizeof(hot) / sizeof(hot[0]); ++i) {
+        if (arg && strcmp(arg, hot[i]) == 0) return true;
+    }
+    return false;
+}
+
+static uint64_t app_config_unsafe_hash(const char *path) {
+    int argc = 0;
+    char **args = path ? tokenize_file(path, &argc) : NULL;
+    uint64_t hash = 1469598103934665603ULL;
+    for (int i = 0; i < argc; ++i) {
+        if (app_hot_config_option(args[i])) {
+            if (i + 1 < argc) ++i;
+            continue;
+        }
+        for (const unsigned char *p = (const unsigned char *)args[i]; *p; ++p) {
+            hash ^= *p;
+            hash *= 1099511628211ULL;
+        }
+        hash ^= 0xffu;
+        hash *= 1099511628211ULL;
+    }
+    for (int i = 0; i < argc; ++i) free(args[i]);
+    free(args);
+    return hash;
+}
 
 typedef struct {
     const char *request_path;
@@ -81,6 +115,54 @@ typedef struct {
     off_t lease_last_size;
     bool lease_exists;
 } snapshot_watch;
+
+typedef struct {
+    int fd;
+} app_file_watch;
+
+static void app_file_watch_init(app_file_watch *watch, const char *config_path) {
+    if (!watch) return;
+    watch->fd = -1;
+#ifdef __linux__
+    watch->fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (watch->fd < 0) return;
+    (void)inotify_add_watch(watch->fd, "/tmp",
+                            IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE | IN_ATTRIB);
+    if (config_path && *config_path) {
+        char dir[4096];
+        int len = snprintf(dir, sizeof(dir), "%s", config_path);
+        if (len > 0 && (size_t)len < sizeof(dir)) {
+            char *slash = strrchr(dir, '/');
+            if (slash) {
+                if (slash == dir) slash[1] = '\0';
+                else *slash = '\0';
+                (void)inotify_add_watch(watch->fd, dir,
+                                        IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE | IN_ATTRIB);
+            }
+        }
+    }
+#else
+    (void)config_path;
+#endif
+}
+
+static bool app_file_watch_drain(app_file_watch *watch) {
+    if (!watch || watch->fd < 0) return false;
+    bool changed = false;
+    char events[4096];
+    for (;;) {
+        ssize_t n = read(watch->fd, events, sizeof(events));
+        if (n > 0) changed = true;
+        else break;
+    }
+    return changed;
+}
+
+static void app_file_watch_destroy(app_file_watch *watch) {
+    if (!watch) return;
+    if (watch->fd >= 0) close(watch->fd);
+    watch->fd = -1;
+}
 
 static bool app_scene_init(app_scene *scene, int pane_count) {
     memset(scene, 0, sizeof(*scene));
@@ -103,10 +185,6 @@ static void app_scene_destroy(app_scene *scene) {
     scene->slot_layouts = NULL;
     scene->pane_layouts = NULL;
     scene->pane_count = 0;
-}
-
-static void restore_tty(void) {
-    if (g_have_oldt) tcsetattr(0, TCSANOW, &g_oldt);
 }
 
 static void app_write_text_file(const char *path, const char *value) {
@@ -132,8 +210,8 @@ static void app_rebind_fbcon(void) {
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         if (entry->d_name[0] == '.') continue;
-        char name_path[256];
-        char bind_path[256];
+        char name_path[512];
+        char bind_path[512];
         snprintf(name_path, sizeof(name_path), "/sys/class/vtconsole/%s/name", entry->d_name);
         snprintf(bind_path, sizeof(bind_path), "/sys/class/vtconsole/%s/bind", entry->d_name);
         char name_buf[128] = {0};
@@ -153,7 +231,7 @@ static void app_unblank_framebuffers(void) {
     while ((entry = readdir(dir)) != NULL) {
         if (strncmp(entry->d_name, "fb", 2) != 0) continue;
         if (strcmp(entry->d_name, "fbcon") == 0) continue;
-        char blank_path[256];
+        char blank_path[512];
         snprintf(blank_path, sizeof(blank_path), "/sys/class/graphics/%s/blank", entry->d_name);
         app_write_text_file(blank_path, "0\n");
     }
@@ -175,7 +253,8 @@ static void app_restore_linux_console(void) {
     int tty_fd = open("/dev/tty1", O_RDWR | O_NOCTTY);
     if (tty_fd >= 0) {
         ioctl(tty_fd, KDSETMODE, KD_TEXT);
-        write(tty_fd, "\033c\033[2J\033[H", 10);
+        ssize_t written = write(tty_fd, "\033c\033[2J\033[H", 10);
+        (void)written;
         close(tty_fd);
     }
 }
@@ -304,6 +383,7 @@ static void app_config_watch_init(config_watch *watch, const options_t *opt) {
     }
     watch->next_check_sec = app_now_sec() + 1.0;
     if (!watch->enabled) return;
+    watch->unsafe_hash = app_config_unsafe_hash(watch->path);
 
     struct stat st;
     if (stat(watch->path, &st) == 0) {
@@ -311,6 +391,49 @@ static void app_config_watch_init(config_watch *watch, const options_t *opt) {
         watch->last_mtime = st.st_mtim;
         watch->last_size = st.st_size;
     }
+}
+
+static bool app_apply_hot_config(options_t *opt, int argc, char **argv, int *debug,
+                                 ui_state *ui, runtime_state *rt, char **owned_split_tree) {
+    options_t next = {0};
+    next.fs_cycle_sec = 5;
+    int next_debug = debug ? *debug : 0;
+    if (options_parse_cli(&next, argc, argv, &next_debug) || next.pane_count != opt->pane_count) {
+        options_destroy(&next);
+        return false;
+    }
+    char *next_split = next.split_tree_spec ? strdup(next.split_tree_spec) : NULL;
+    if (next.split_tree_spec && !next_split) {
+        options_destroy(&next);
+        return false;
+    }
+    free(*owned_split_tree);
+    *owned_split_tree = next_split;
+    opt->split_tree_spec = next_split;
+    opt->font_px = next.font_px;
+    opt->right_frac_pct = next.right_frac_pct;
+    opt->video_frac_pct = next.video_frac_pct;
+    opt->pane_split_pct = next.pane_split_pct;
+    opt->visibility_mode = next.visibility_mode;
+    opt->layout_mode = next.layout_mode;
+    opt->fs_cycle_sec = next.fs_cycle_sec;
+    opt->show_osd = next.show_osd;
+    opt->osd_pane = next.osd_pane;
+    opt->fullscreen_pane = next.fullscreen_pane;
+    opt->fullscreen_cycle = next.fullscreen_cycle;
+    opt->transition_ms = next.transition_ms;
+    if (ui) {
+        ui->last_layout_mode = -1;
+        ui->focus = opt->osd_pane >= 0 && opt->osd_pane < opt->pane_count ? opt->osd_pane : 0;
+        ui->fullscreen = opt->fullscreen_pane >= 0 && opt->fullscreen_pane < opt->pane_count;
+        ui->fs_pane = ui->fullscreen ? opt->fullscreen_pane : 0;
+        ui->fs_cycle = opt->fullscreen_cycle;
+        ui->fs_next_switch = 0.0;
+        if (ui->fs_cycle) ui->fullscreen = true;
+    }
+    if (rt) rt->render_dirty = true;
+    options_destroy(&next);
+    return true;
 }
 
 static void app_snapshot_watch_init(snapshot_watch *watch) {
@@ -565,31 +688,6 @@ static int app_poll_timeout_ms(const config_watch *cfg_watch, const snapshot_wat
     return (int)(remaining_ms + 0.999);
 }
 
-static bool app_handle_input_ready(runtime_state *rt, ui_state *ui, options_t *opt, bool use_mpv,
-                                   pane_runtime *panes, media_ctx *m, media_ctx *pane_media, bool debug) {
-    if (!(rt->pfds[RUNTIME_POLL_STDIN].revents & POLLIN)) return true;
-    char buf[64];
-    ssize_t n = read(0, buf, sizeof(buf));
-    if (n > 0) {
-        rt->render_dirty = true;
-        term_pane **pane_terms = calloc((size_t)opt->pane_count, sizeof(*pane_terms));
-        mpv_handle **pane_mpv = calloc((size_t)opt->pane_count, sizeof(*pane_mpv));
-        if (!pane_terms || !pane_mpv) {
-            free(pane_terms);
-            free(pane_mpv);
-            return rt->running;
-        }
-        for (int i = 0; i < opt->pane_count; ++i) pane_terms[i] = panes_get_term(panes, i);
-        for (int i = 0; i < opt->pane_count; ++i) pane_mpv[i] = pane_media && pane_media[i].mpv ? pane_media[i].mpv : NULL;
-        (void)ui_handle_input(ui, opt, buf, n, use_mpv,
-                              pane_terms, pane_mpv, opt->pane_count,
-                              m->mpv, &rt->running, debug);
-        free(pane_terms);
-        free(pane_mpv);
-    }
-    return rt->running;
-}
-
 static bool app_collect_pane_ready(const options_t *opt, const runtime_state *rt,
                                    bool *pane_ready) {
     bool any_ready = false;
@@ -767,11 +865,13 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     runtime_state rt = {0};
     config_watch cfg_watch = {0};
     snapshot_watch snap_watch = {0};
+    app_file_watch file_watch = {.fd = -1};
     char pfifo_buf[1024];
     int pfifo_len = 0;
     char (*pane_pfifo_bufs)[1024] = NULL;
     int *pane_pfifo_lens = NULL;
     int rc = 0;
+    char *hot_split_tree = NULL;
 
     if (options_parse_cli(&opt, argc, argv, debug)) return 0;
     if (!panes_init_runtime(&panes, opt.pane_count)) app_die("panes_init_runtime");
@@ -828,23 +928,15 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
 
     app_init_scene(&opt, use_mpv, &panes, &ui, &scene, *debug);
 
-    struct termios rawt;
-    if (tcgetattr(0, &g_oldt) == 0) {
-        g_have_oldt = 1;
-        rawt = g_oldt;
-        cfmakeraw(&rawt);
-        tcsetattr(0, TCSANOW, &rawt);
-        atexit(restore_tty);
-    }
-    fprintf(stderr, "Controls: Ctrl+E Control Mode; in Control Mode: Tab focus panes, Arrows resize, l/L layouts, r/R rotate roles, t swap focus/next, z fullscreen, n/p next/prev FS, c cycle FS, o OSD; Ctrl+P panscan; Ctrl+Q quit.\n");
-
-    if (!runtime_init(&rt, &opt, use_mpv, &m, d.fd)) app_die("runtime_init");
     app_config_watch_init(&cfg_watch, &opt);
     app_snapshot_watch_init(&snap_watch);
+    app_file_watch_init(&file_watch, cfg_watch.path);
+    if (!runtime_init(&rt, &opt, use_mpv, &m, d.fd, file_watch.fd)) app_die("runtime_init");
     double transition_started_sec = app_now_sec();
     bool transition_fading_in = opt.transition_ms > 0;
     bool transition_fading_out = false;
     bool reload_pending = false;
+    double control_next_check_sec = 0.0;
 
     while (rt.running) {
         if (*stop_flag) {
@@ -873,19 +965,28 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
         int poll_timeout_ms = app_poll_timeout_ms(&cfg_watch, &snap_watch, &ui,
                                                   g.in_flight != 0, rt.render_dirty);
         if (!app_poll_runtime_with_media(&rt, &opt, &panes, pane_media, poll_timeout_ms)) app_die("poll");
-        if (!app_handle_input_ready(&rt, &ui, &opt, use_mpv, &panes, &m, pane_media, *debug)) {
-            fprintf(stderr, "Exiting main loop: input handler requested stop\n");
-            break;
+        bool file_event = app_file_watch_drain(&file_watch);
+        if (file_event) {
+            cfg_watch.next_check_sec = 0.0;
+            snap_watch.next_check_sec = 0.0;
         }
         app_handle_runtime_events(&rt, &ui, &opt, &m, pane_media, &d,
                                   pfifo_buf, &pfifo_len, pane_pfifo_bufs, pane_pfifo_lens,
                                   use_mpv, *debug);
-        app_control_poll(&opt, &panes, pane_media, &rt);
+        double control_now_sec = app_now_sec();
+        if (file_event || control_now_sec >= control_next_check_sec) {
+            app_control_poll(&opt, &panes, pane_media, &rt);
+            control_next_check_sec = control_now_sec + 1.0;
+        }
         app_media_sync_groups_poll(&opt, pane_media, &rt);
         app_media_watchdogs_poll(&opt, pane_media, &rt);
         if (!reload_pending && app_config_watch_poll(&cfg_watch)) {
             fprintf(stderr, "Config file changed: %s\n", cfg_watch.path);
-            if (opt.transition_ms > 0) {
+            uint64_t next_unsafe_hash = app_config_unsafe_hash(cfg_watch.path);
+            if (next_unsafe_hash == cfg_watch.unsafe_hash &&
+                app_apply_hot_config(&opt, argc, argv, debug, &ui, &rt, &hot_split_tree)) {
+                fprintf(stderr, "Applied layout/UI config changes without restarting media panes.\n");
+            } else if (opt.transition_ms > 0) {
                 reload_pending = true;
                 transition_fading_in = false;
                 transition_fading_out = true;
@@ -931,12 +1032,14 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     fprintf(stderr, "Main loop exited: rc=%d running=%d stop_flag=%d\n", rc, rt.running ? 1 : 0, *stop_flag ? 1 : 0);
 
 cleanup:
+    app_file_watch_destroy(&file_watch);
     ui_state_destroy(&ui);
     runtime_destroy(&rt);
     app_scene_destroy(&scene);
     free(pane_pfifo_bufs);
     free(pane_pfifo_lens);
     app_cleanup(&opt, &m, pane_media, &rg, &d, &g, &e, &panes);
+    free(hot_split_tree);
     options_destroy(&opt);
     return rc;
 }

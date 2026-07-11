@@ -32,6 +32,15 @@ typedef struct {
     int preview_h;
     unsigned char *preview_pixels;
     size_t preview_pixels_cap;
+    GLuint preview_pbos[2];
+    size_t preview_pbo_size;
+    int preview_pbo_write_index;
+    int preview_pbo_pending_index;
+    int preview_pbo_pending_w;
+    int preview_pbo_pending_h;
+    bool preview_pbo_checked;
+    bool preview_pbo_supported;
+    char preview_pbo_pending_path[4096];
 } render_gl_ctx;
 
 void render_gl_reset_state_2d(void);

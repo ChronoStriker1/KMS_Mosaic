@@ -174,6 +174,7 @@ static bool options_ensure_role_capacity(options_t *opt, int role_count) {
 }
 
 static bool options_ensure_pane_capacity(options_t *opt, int pane_count) {
+    if (pane_count < 1 || pane_count > KMS_MOSAIC_MAX_PANE_COUNT) return false;
     if (opt->pane_cap >= pane_count) return true;
     int old_cap = opt->pane_cap;
     const char **next = malloc((size_t)pane_count * sizeof(*next));
@@ -347,8 +348,10 @@ bool options_pane_hidden(const options_t *opt, int pane_index) {
 void push_video(options_t *opt, const char *path) {
     if (opt->video_count == opt->video_cap) {
         int ncap = opt->video_cap ? opt->video_cap * 2 : 8;
-        opt->videos = realloc(opt->videos, (size_t)ncap * sizeof(video_item));
-        memset(opt->videos + opt->video_cap, 0, (size_t)(ncap - opt->video_cap) * sizeof(video_item));
+        video_item *next = realloc(opt->videos, (size_t)ncap * sizeof(*next));
+        if (!next) return;
+        opt->videos = next;
+        memset(opt->videos + opt->video_cap, 0, (size_t)(ncap - opt->video_cap) * sizeof(*next));
         opt->video_cap = ncap;
     }
     video_item *vi = &opt->videos[opt->video_count++];
@@ -377,7 +380,9 @@ void push_video_opt(video_item *vi, const char *kv) {
     if (!vi) return;
     if (vi->nopts == vi->cap) {
         int ncap = vi->cap ? vi->cap * 2 : 8;
-        vi->opts = realloc(vi->opts, (size_t)ncap * sizeof(char *));
+        const char **next = realloc(vi->opts, (size_t)ncap * sizeof(*next));
+        if (!next) return;
+        vi->opts = next;
         vi->cap = ncap;
     }
     vi->opts[vi->nopts++] = kv;
@@ -637,27 +642,21 @@ static void print_usage(const char *exe) {
         "  --gl-test               Render a diagnostic GL gradient and exit.\n"
         "  --diag                  Print GL/driver diagnostics and exit.\n"
         "  --debug                 Verbose logging.\n\n"
+        "Display state:\n"
+        "  --show-osd 0|1         Show playback status on the display.\n"
+        "  --osd-pane N           Pane used for OSD status (1-based, 0=automatic).\n"
+        "  --fullscreen-pane N    Fullscreen pane (1-based, 0=off).\n"
+        "  --fullscreen-cycle 0|1 Cycle fullscreen panes.\n\n"
         "Defaults and notes:\n"
-        "  - OSD is off by default (toggle in Control Mode with 'o').\n"
-        "  - If a single video is provided (no playlist), --loop is assumed.\n"
-        "  - Controls are gated behind Control Mode so panes and video receive keys normally.\n\n"
-        "Controls (toggle Control Mode with Ctrl+E):\n"
-        "  Tab           Cycle focus among the video and pane slots.\n"
-        "  l / L         Cycle layouts forward/back.\n"
-        "  r / R         Rotate slot roles (and reverse).\n"
-        "  t             Swap the focused slot with the next slot.\n"
-        "  z             Fullscreen focused pane.\n"
-        "  c             Cycle fullscreen panes.\n"
-        "  o             Toggle OSD visibility.\n"
-        "  (Help shown automatically in Control Mode)\n"
-        "  Ctrl+Q        Quit (only active in Control Mode).\n\n"
-        "Always:\n"
-        "  Ctrl+P        Toggle mpv panscan.\n\n",
+        "  - OSD is off by default and all runtime settings are managed by the plugin config page.\n"
+        "  - If a single video is provided (no playlist), --loop is assumed.\n\n",
         exe, KMS_MOSAIC_DEFAULT_PANE_COUNT);
 }
 
 int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
     opt->pane_count = KMS_MOSAIC_DEFAULT_PANE_COUNT;
+    opt->osd_pane = -1;
+    opt->fullscreen_pane = -1;
     const char *roles_arg = NULL;
     bool pane_model_explicit = false;
     bool used_legacy_pane_model = false;
@@ -677,6 +676,7 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
         const char *def = default_config_path();
         if (!opt->no_config && access(def, R_OK) == 0) cfg = def;
     }
+    opt->config_file = cfg;
     opt->unified_pane_model = true;
 
     char **merged = NULL;
@@ -696,6 +696,9 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
         }
         argv = merged;
         argc = margc;
+        opt->owned_config_args = cargv;
+        opt->owned_config_argc = cargc;
+        opt->owned_merged_argv = merged;
     }
 
     for (int i = 1; i < argc; ++i) {
@@ -706,7 +709,9 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
             else {
                 if (opt->n_mpv_opts == opt->cap_mpv_opts) {
                     int nc = opt->cap_mpv_opts ? opt->cap_mpv_opts * 2 : 8;
-                    opt->mpv_opts = realloc(opt->mpv_opts, (size_t)nc * sizeof(char *));
+                    const char **next = realloc(opt->mpv_opts, (size_t)nc * sizeof(*next));
+                    if (!next) return 1;
+                    opt->mpv_opts = next;
                     opt->cap_mpv_opts = nc;
                 }
                 opt->mpv_opts[opt->n_mpv_opts++] = argv[++i];
@@ -739,6 +744,10 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
         else if (!strcmp(argv[i], "--pane-count") && i + 1 < argc) {
             opt->pane_count = atoi(argv[++i]);
             if (opt->pane_count < 1) opt->pane_count = 1;
+            if (opt->pane_count > KMS_MOSAIC_MAX_PANE_COUNT) {
+                fprintf(stderr, "Pane count exceeds maximum of %d.\n", KMS_MOSAIC_MAX_PANE_COUNT);
+                return 1;
+            }
             if (!options_ensure_pane_capacity(opt, opt->pane_count) ||
                 !options_ensure_role_capacity(opt, options_role_count(opt))) {
                 fprintf(stderr, "Failed to allocate pane storage.\n");
@@ -935,6 +944,16 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
             int mode = parse_layout_mode(argv[++i]);
             if (mode >= 0) opt->layout_mode = mode;
         } else if (!strcmp(argv[i], "--fs-cycle-sec") && i + 1 < argc) opt->fs_cycle_sec = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--show-osd") && i + 1 < argc) opt->show_osd = atoi(argv[++i]) != 0;
+        else if (!strcmp(argv[i], "--osd-pane") && i + 1 < argc) {
+            int pane = atoi(argv[++i]);
+            opt->osd_pane = pane > 0 ? pane - 1 : -1;
+        }
+        else if (!strcmp(argv[i], "--fullscreen-pane") && i + 1 < argc) {
+            int pane = atoi(argv[++i]);
+            opt->fullscreen_pane = pane > 0 ? pane - 1 : -1;
+        }
+        else if (!strcmp(argv[i], "--fullscreen-cycle") && i + 1 < argc) opt->fullscreen_cycle = atoi(argv[++i]) != 0;
         else if (!strcmp(argv[i], "--transition-ms") && i + 1 < argc) {
             opt->transition_ms = atoi(argv[++i]);
             if (opt->transition_ms < 0) opt->transition_ms = 0;
@@ -945,14 +964,16 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
         else if (!strcmp(argv[i], "--loop")) opt->loop_flag = true;
         else if (!strcmp(argv[i], "--loop-playlist")) opt->loop_playlist = true;
         else if (!strcmp(argv[i], "--shuffle") || !strcmp(argv[i], "--randomize")) opt->shuffle = true;
-        else if (!strcmp(argv[i], "--no-osd")) opt->no_osd = true;
+        else if (!strcmp(argv[i], "--no-osd")) opt->show_osd = false;
         else if (!strcmp(argv[i], "--atomic")) opt->use_atomic = true;
         else if (!strcmp(argv[i], "--atomic-nonblock")) { opt->use_atomic = true; opt->atomic_nonblock = true; }
         else if (!strcmp(argv[i], "--gl-finish")) opt->gl_finish = true;
         else if (!strcmp(argv[i], "--mpv-opt") && i + 1 < argc) {
             if (opt->n_mpv_opts == opt->cap_mpv_opts) {
                 int nc = opt->cap_mpv_opts ? opt->cap_mpv_opts * 2 : 8;
-                opt->mpv_opts = realloc(opt->mpv_opts, (size_t)nc * sizeof(char *));
+                const char **next = realloc(opt->mpv_opts, (size_t)nc * sizeof(*next));
+                if (!next) return 1;
+                opt->mpv_opts = next;
                 opt->cap_mpv_opts = nc;
             }
             opt->mpv_opts[opt->n_mpv_opts++] = argv[++i];
@@ -1004,6 +1025,8 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
         opt->roles_set = parse_roles_string(roles_arg, opt->roles, options_role_count(opt));
     }
     options_sync_pane_cmds(opt);
+    if (opt->osd_pane >= opt->pane_count) opt->osd_pane = -1;
+    if (opt->fullscreen_pane >= opt->pane_count) opt->fullscreen_pane = -1;
     if (used_legacy_pane_model) opt->unified_pane_model = true;
     return 0;
 }
@@ -1051,6 +1074,10 @@ void save_config(const options_t *opt, const char *path) {
         fputc('\n', f);
     }
     if (opt->fs_cycle_sec) fprintf(f, "--fs-cycle-sec %d\n", opt->fs_cycle_sec);
+    fprintf(f, "--show-osd %d\n", opt->show_osd ? 1 : 0);
+    fprintf(f, "--osd-pane %d\n", opt->osd_pane >= 0 ? opt->osd_pane + 1 : 0);
+    fprintf(f, "--fullscreen-pane %d\n", opt->fullscreen_pane >= 0 ? opt->fullscreen_pane + 1 : 0);
+    fprintf(f, "--fullscreen-cycle %d\n", opt->fullscreen_cycle ? 1 : 0);
     if (opt->transition_ms > 0) fprintf(f, "--transition-ms %d\n", opt->transition_ms);
     if (opt->pane_count != KMS_MOSAIC_DEFAULT_PANE_COUNT) fprintf(f, "--pane-count %d\n", opt->pane_count);
     for (int i = 0; i < opt->pane_count; ++i) {
@@ -1101,9 +1128,15 @@ void options_destroy(options_t *opt) {
     }
     free(opt->pane_media);
     free(opt->roles);
+    for (int i = 0; i < opt->owned_config_argc; ++i) free(opt->owned_config_args[i]);
+    free(opt->owned_config_args);
+    free(opt->owned_merged_argv);
     opt->pane_cmds = NULL;
     opt->pane_media = NULL;
     opt->roles = NULL;
     opt->pane_cap = 0;
     opt->role_cap = 0;
+    opt->owned_config_args = NULL;
+    opt->owned_config_argc = 0;
+    opt->owned_merged_argv = NULL;
 }

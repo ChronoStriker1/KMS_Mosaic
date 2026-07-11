@@ -14,6 +14,7 @@ typedef enum {
 
 enum {
     KMS_MOSAIC_DEFAULT_PANE_COUNT = 2,
+    KMS_MOSAIC_MAX_PANE_COUNT = 64,
     KMS_MOSAIC_SLOT_PANE_BASE = 0,
     KMS_MOSAIC_SLOT_PANE_A = KMS_MOSAIC_SLOT_PANE_BASE + 0,
     KMS_MOSAIC_SLOT_PANE_B = KMS_MOSAIC_SLOT_PANE_BASE + 1,
@@ -80,7 +81,8 @@ typedef struct {
     bool loop_file;
     bool loop_playlist;
     bool shuffle;
-    bool no_osd;
+    bool show_osd;
+    int osd_pane;
     bool loop_flag;
     int video_rotate;
     const char *panscan;
@@ -91,6 +93,8 @@ typedef struct {
     bool use_atomic;
     int layout_mode;
     int fs_cycle_sec;
+    int fullscreen_pane;
+    bool fullscreen_cycle;
     int transition_ms;
     int *roles;
     int role_cap;
@@ -104,6 +108,9 @@ typedef struct {
     bool save_config_default;
     const char *mpv_out_path;
     const char *playlist_fifo;
+    char **owned_config_args;
+    int owned_config_argc;
+    char **owned_merged_argv;
 } options_t;
 
 void parse_mode(const char *s, int *w, int *h, int *hz);

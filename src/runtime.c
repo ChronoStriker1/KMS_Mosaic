@@ -34,7 +34,8 @@ bool runtime_pane_playlist_ready(const runtime_state *rt, const options_t *opt, 
     return rt->pfds[poll_index].revents & (POLLIN | POLLERR | POLLHUP);
 }
 
-bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const media_ctx *m, int drm_fd) {
+bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const media_ctx *m,
+                  int drm_fd, int file_watch_fd) {
     memset(rt, 0, sizeof(*rt));
     rt->nfds = RUNTIME_POLL_BASE_COUNT + opt->pane_count + opt->pane_count + opt->pane_count;
     rt->pfds = calloc((size_t)rt->nfds, sizeof(*rt->pfds));
@@ -62,14 +63,14 @@ bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const m
     rt->mpv_needs_render = 1;
     for (int i = 0; i < opt->pane_count; ++i) rt->pane_mpv_needs_render[i] = 1;
 
-    rt->pfds[RUNTIME_POLL_STDIN].fd = isatty(0) ? 0 : -1;
-    rt->pfds[RUNTIME_POLL_STDIN].events = POLLIN;
     rt->pfds[RUNTIME_POLL_MPV_WAKEUP].fd = use_mpv ? m->wakeup_fd[0] : -1;
     rt->pfds[RUNTIME_POLL_MPV_WAKEUP].events = POLLIN;
     rt->pfds[RUNTIME_POLL_DRM].fd = drm_fd;
     rt->pfds[RUNTIME_POLL_DRM].events = POLLIN;
     rt->pfds[RUNTIME_POLL_PLAYLIST_FIFO].fd = m->playlist_fifo_fd;
     rt->pfds[RUNTIME_POLL_PLAYLIST_FIFO].events = POLLIN;
+    rt->pfds[RUNTIME_POLL_FILE_WATCH].fd = file_watch_fd;
+    rt->pfds[RUNTIME_POLL_FILE_WATCH].events = POLLIN;
     for (int i = 0; i < opt->pane_count; ++i) {
         rt->pfds[runtime_pane_poll_index(i)].events = POLLIN | POLLERR | POLLHUP;
         rt->pfds[runtime_pane_media_poll_index(opt, i)].events = POLLIN | POLLERR | POLLHUP;

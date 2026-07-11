@@ -76,6 +76,14 @@ class KmsMosaicWebHtmlTests(unittest.TestCase):
         self.assertIn('.studio-resize-handle[data-edge="top"]::after,', html)
         self.assertIn('box-shadow: 0 0 0 2px rgba(87, 31, 16, 0.18);', html)
 
+    def test_studio_mirrors_the_exact_live_preview_stream(self):
+        html = self.module.HTML
+        self.assertIn('id="studioPreviewVideo" class="studio-live-mirror"', html)
+        self.assertIn("studioPreviewVideo.srcObject = remoteStream;", html)
+        self.assertIn('studioBoard.querySelectorAll(".studio-card, .studio-guide")', html)
+        self.assertNotIn('studioBoard.innerHTML = "";', html)
+        self.assertIn("object-fit: fill;", html)
+
     def test_preview_webrtc_prefers_h264_first_in_browser(self):
         html = self.module.HTML
         match = re.search(

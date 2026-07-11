@@ -31,7 +31,7 @@ class RenderTargetTests(unittest.TestCase):
         frame_src = FRAME_C.read_text(encoding="utf-8")
         self.assertIn("render_gl_ensure_pane_video_rt(", frame_src)
         pane_section = frame_src.split("if (!rt->direct_mode) {", 1)[1]
-        pane_section = pane_section.split("if (!rt->direct_mode && !opt->no_osd && ui->show_osd)", 1)[0]
+        pane_section = pane_section.split("if (!rt->direct_mode && opt->show_osd)", 1)[0]
         self.assertNotIn("render_gl_ensure_video_rt(rg, vw, vh);", pane_section)
 
     def test_render_gl_ctx_tracks_pane_video_targets(self) -> None:
@@ -65,14 +65,13 @@ class RenderTargetTests(unittest.TestCase):
         self.assertNotIn("UI_SLOT_VIDEO", ui_src)
         self.assertNotIn("return pane_count + (use_mpv ? 1 : 0);", ui_src)
         self.assertNotIn("else if (ui->focus == UI_SLOT_VIDEO && mpv)", ui_src)
-        self.assertIn("return pane_count;", ui_src)
-        self.assertIn("ui->focus = opt->pane_count > 0 ? 0 : -1;", ui_src)
-        self.assertIn("pane_mpv && ui->focus >= 0 && pane_mpv[ui->focus]", ui_src)
+        self.assertIn("ui->role_count = opt->pane_count;", ui_src)
+        self.assertIn("ui->focus = opt->osd_pane", ui_src)
 
         self.assertNotIn("const pane_layout *lay_video = &slot_layouts[KMS_MOSAIC_SLOT_VIDEO];", frame_src)
         self.assertNotIn("if (use_mpv && (!ui->fullscreen || ui->fs_pane == 0))", frame_src)
         self.assertNotIn("focus_layouts[KMS_MOSAIC_SLOT_VIDEO]", frame_src)
-        self.assertIn("const pane_layout *focus_layout = &pane_layouts[focus_slot];", frame_src)
+        self.assertNotIn("focus_layout", frame_src)
         self.assertIn("bool pane_hidden = options_pane_hidden(opt, i);", frame_src)
         self.assertIn("bool pane_visible = !pane_hidden && (!ui->fullscreen || ui->fs_pane == i);", frame_src)
         self.assertIn("media_ctx *pane_ctx = NULL;", frame_src)

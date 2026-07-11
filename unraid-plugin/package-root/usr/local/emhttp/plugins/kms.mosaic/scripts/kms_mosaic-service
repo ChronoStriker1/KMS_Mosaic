@@ -18,6 +18,14 @@ WEB_HOST="127.0.0.1"
 CONFIG_PATH="/boot/config/kms_mosaic.conf"
 LOG_ENABLE="disable"
 KMS_ARGS="--atomic-nonblock"
+DDC_STARTUP="enable"
+DDC_CONNECTOR=""
+DDC_BUS=""
+DDC_INPUT_CODE="20"
+DDC_INPUT_VALUE="6"
+DDC_BRIGHTNESS="100"
+DDC_CONTRAST="100"
+DDC_SAVE="enable"
 
 [ -r "$CFG" ] && source "$CFG"
 
@@ -227,16 +235,85 @@ cleanup_pidfile() {
 }
 
 post_start_ddc() {
+  case "${DDC_STARTUP:-disable}" in
+    enable|enabled|1|true|yes|on) ;;
+    *) return 0 ;;
+  esac
 (
   sleep 5
-  python3 - <<'PY'
+  DDC_CONNECTOR="${DDC_CONNECTOR:-}" DDC_BUS="${DDC_BUS:-}" \
+  DDC_INPUT_CODE="${DDC_INPUT_CODE:-20}" DDC_INPUT_VALUE="${DDC_INPUT_VALUE:-6}" \
+  DDC_BRIGHTNESS="${DDC_BRIGHTNESS:-100}" DDC_CONTRAST="${DDC_CONTRAST:-100}" \
+  DDC_SAVE="${DDC_SAVE:-enable}" CONFIG_PATH="$CONFIG_PATH" python3 - <<'PY'
 import fcntl
 import os
+from pathlib import Path
+import shlex
 import time
 
 I2C_SLAVE_FORCE = 0x0706
-BUS = "/dev/i2c-3"
 ADDR = 0x37
+
+def enabled(value):
+    return str(value).lower() in {"enable", "enabled", "1", "true", "yes", "on"}
+
+def number(name, default):
+    try:
+        return max(0, min(int(os.environ.get(name, default), 0), 255))
+    except ValueError:
+        return default
+
+def configured_connector():
+    explicit = os.environ.get("DDC_CONNECTOR", "").strip()
+    if explicit:
+        return explicit
+    try:
+        tokens = shlex.split(Path(os.environ["CONFIG_PATH"]).read_text())
+    except (OSError, ValueError, KeyError):
+        return ""
+    for index, token in enumerate(tokens[:-1]):
+        if token == "--connector":
+            return tokens[index + 1]
+    return ""
+
+def bus_for_connector(connector):
+    explicit = os.environ.get("DDC_BUS", "").strip()
+    if explicit:
+        return explicit if Path(explicit).exists() else ""
+    candidates = []
+    for drm_path in sorted(Path("/sys/class/drm").glob("card*-*")):
+        status = drm_path / "status"
+        try:
+            if status.read_text().strip() != "connected":
+                continue
+        except OSError:
+            continue
+        name = drm_path.name.split("-", 1)[-1]
+        if connector and connector not in {name, drm_path.name}:
+            continue
+        if not connector:
+            try:
+                if (drm_path / "enabled").read_text().strip() != "enabled":
+                    continue
+            except OSError:
+                pass
+        for match in list((drm_path / "ddc/i2c-dev").glob("i2c-*")) + list((drm_path / "device").glob("i2c-*")):
+            device = Path("/dev") / match.name
+            if device.exists():
+                candidates.append(str(device))
+        ddc = drm_path / "ddc"
+        try:
+            resolved = ddc.resolve(strict=True)
+            if resolved.name.startswith("i2c-") and (Path("/dev") / resolved.name).exists():
+                candidates.append(str(Path("/dev") / resolved.name))
+        except OSError:
+            pass
+    unique = list(dict.fromkeys(candidates))
+    return unique[0] if len(unique) == 1 else ""
+
+BUS = bus_for_connector(configured_connector())
+if not BUS:
+    raise SystemExit(0)
 
 def checksum(payload):
     value = 0x6E
@@ -253,12 +330,14 @@ def send(payload):
     finally:
         os.close(fd)
 
-for payload in (
-    [0x51, 0x84, 0x03, 0x14, 0x00, 0x06],
-    [0x51, 0x84, 0x03, 0x10, 0x00, 0x64],
-    [0x51, 0x84, 0x03, 0x12, 0x00, 0x64],
-    [0x51, 0x81, 0x0C],
-):
+payloads = [
+    [0x51, 0x84, 0x03, number("DDC_INPUT_CODE", 0x14), 0x00, number("DDC_INPUT_VALUE", 6)],
+    [0x51, 0x84, 0x03, 0x10, 0x00, number("DDC_BRIGHTNESS", 100)],
+    [0x51, 0x84, 0x03, 0x12, 0x00, number("DDC_CONTRAST", 100)],
+]
+if enabled(os.environ.get("DDC_SAVE", "enable")):
+    payloads.append([0x51, 0x81, 0x0C])
+for payload in payloads:
     send(payload)
     time.sleep(0.2)
 PY

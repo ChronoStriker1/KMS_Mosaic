@@ -230,6 +230,9 @@ def empty_state() -> dict[str, Any]:
         "layout": "stack",
         "roles": "",
         "fs_cycle_sec": 5,
+        "show_osd": False,
+        "osd_pane": -1,
+        "fullscreen_cycle": False,
         "transition_ms": 0,
         "visibility_mode": "neither",
         "pane_types": ["terminal", "terminal"],
@@ -263,7 +266,6 @@ def empty_state() -> dict[str, Any]:
             "atomic": False,
             "atomic_nonblock": False,
             "gl_finish": False,
-            "no_osd": False,
         },
         "mpv_opts": [],
         "focus_pane": -1,
@@ -643,7 +645,8 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
     normalized = empty_state()
     for key in (
         "connector", "mode", "rotation", "font_size", "right_frac", "video_frac",
-        "pane_split", "layout", "fs_cycle_sec", "transition_ms", "extra_lines",
+        "pane_split", "layout", "fs_cycle_sec", "show_osd", "osd_pane",
+        "fullscreen_cycle", "transition_ms", "extra_lines",
     ):
         normalized[key] = state.get(key, normalized.get(key))
     normalized["flags"] = dict(state.get("flags", {}))
@@ -701,8 +704,11 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
         normalized["pane_count"],
     )
     normalized["fullscreen_pane"] = _normalize_saved_pane(
-        web_state.get("fullscreen_pane", web_state.get("fullscreen_role")),
+        web_state.get("fullscreen_pane", web_state.get("fullscreen_role", state.get("fullscreen_pane"))),
         normalized["pane_count"],
+    )
+    normalized["osd_pane"] = _normalize_saved_pane(
+        state.get("osd_pane"), normalized["pane_count"]
     )
     normalized["selected_pane"] = _normalize_saved_pane(
         web_state.get("selected_pane", web_state.get("selected_role")),
@@ -868,6 +874,18 @@ def parse_config_text(text: str) -> dict[str, Any]:
             elif tok == "--fs-cycle-sec" and nxt is not None:
                 state["fs_cycle_sec"] = int(nxt)
                 i += 2
+            elif tok == "--show-osd" and nxt is not None:
+                state["show_osd"] = nxt not in ("0", "false", "no")
+                i += 2
+            elif tok == "--osd-pane" and nxt is not None:
+                state["osd_pane"] = max(-1, int(nxt) - 1)
+                i += 2
+            elif tok == "--fullscreen-pane" and nxt is not None:
+                state["fullscreen_pane"] = max(-1, int(nxt) - 1)
+                i += 2
+            elif tok == "--fullscreen-cycle" and nxt is not None:
+                state["fullscreen_cycle"] = nxt not in ("0", "false", "no")
+                i += 2
             elif tok == "--transition-ms" and nxt is not None:
                 state["transition_ms"] = max(0, min(5000, int(nxt)))
                 i += 2
@@ -927,7 +945,7 @@ def parse_config_text(text: str) -> dict[str, Any]:
                 state["flags"]["gl_finish"] = True
                 i += 1
             elif tok == "--no-osd":
-                state["flags"]["no_osd"] = True
+                state["show_osd"] = False
                 i += 1
             else:
                 keep_line = True
@@ -992,6 +1010,12 @@ def build_config_text(state: dict[str, Any]) -> str:
     if roles:
         add_opt("--roles", roles)
     add_opt("--fs-cycle-sec", state.get("fs_cycle_sec", 5))
+    add_opt("--show-osd", 1 if state.get("show_osd") else 0)
+    osd_pane = _normalize_saved_pane(state.get("osd_pane"), int(state.get("pane_count", 2)))
+    add_opt("--osd-pane", osd_pane + 1 if osd_pane >= 0 else 0)
+    fullscreen_pane = _normalize_saved_pane(state.get("fullscreen_pane"), int(state.get("pane_count", 2)))
+    add_opt("--fullscreen-pane", fullscreen_pane + 1 if fullscreen_pane >= 0 else 0)
+    add_opt("--fullscreen-cycle", 1 if state.get("fullscreen_cycle") else 0)
     if int(state.get("transition_ms", 0) or 0) > 0:
         add_opt("--transition-ms", min(5000, int(state["transition_ms"])))
 
@@ -1066,7 +1090,6 @@ def build_config_text(state: dict[str, Any]) -> str:
     flags = state.get("flags", {})
     add_flag("--smooth", bool(flags.get("smooth")))
     add_flag("--shuffle", bool(flags.get("shuffle")))
-    add_flag("--no-osd", bool(flags.get("no_osd")))
     if flags.get("atomic_nonblock"):
         add_flag("--atomic-nonblock", True)
     else:
@@ -2505,6 +2528,16 @@ HTML = r"""<!doctype html>
         linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
       background-size: 28px 28px;
       pointer-events: none;
+      z-index: 1;
+    }
+    .studio-live-mirror {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: fill;
+      pointer-events: none;
+      z-index: 0;
     }
     .studio-board.resizing,
     .studio-board.resizing .studio-card {
@@ -2521,6 +2554,7 @@ HTML = r"""<!doctype html>
     .studio-guide.horizontal { left: 0; right: 0; height: 1px; }
     .studio-card {
       position: absolute;
+      z-index: 2;
       border-radius: 14px;
       border: 1px solid rgba(255,255,255,0.08);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03), 0 12px 28px rgba(0,0,0,0.24);
@@ -2544,8 +2578,8 @@ HTML = r"""<!doctype html>
       border-color: rgba(255,240,200,0.70);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10), 0 0 0 2px rgba(207,120,83,0.28), 0 12px 28px rgba(0,0,0,0.30);
     }
-    .studio-card.video { background: linear-gradient(145deg, rgba(109,47,23,0.75), rgba(46,24,15,0.96)); color: #fff8f0; }
-    .studio-card.terminal { background: linear-gradient(145deg, rgba(22,30,26,0.92), rgba(8,12,11,0.98)); color: #d8f0e2; }
+    .studio-card.video { background: rgba(74,32,20,0.10); color: #fff8f0; }
+    .studio-card.terminal { background: rgba(8,12,11,0.10); color: #d8f0e2; }
     .studio-top {
       display: flex;
       align-items: center;
@@ -3286,7 +3320,9 @@ HTML = r"""<!doctype html>
                 <button type="button" class="secondary" id="studioRedoBtn" title="Redo layout change (Ctrl/Cmd+Shift+Z)" disabled>Redo</button>
                 <span class="hint">Drag handles to resize. Hold Alt to bypass snapping.</span>
               </div>
-              <div class="studio-board" id="studioBoard"></div>
+              <div class="studio-board" id="studioBoard">
+                <video id="studioPreviewVideo" class="studio-live-mirror" autoplay playsinline muted></video>
+              </div>
             </div>
           </div>
         </div>
@@ -3306,7 +3342,8 @@ HTML = r"""<!doctype html>
                 <label class="check" title="Use DRM atomic modesetting when the GPU and connector support it."><input id="flagAtomic" type="checkbox" /> Atomic</label>
                 <label class="check" title="Request non-blocking atomic commits when atomic modesetting is enabled."><input id="flagAtomicNonblock" type="checkbox" /> Atomic Nonblock</label>
                 <label class="check" title="Force a glFinish after rendering each frame. Useful for troubleshooting timing issues, but it can hurt performance."><input id="flagGlFinish" type="checkbox" /> glFinish</label>
-                <label class="check" title="Hide the on-screen display and control overlay text."><input id="flagNoOsd" type="checkbox" /> No OSD</label>
+                <label class="check" title="Show playback status over the composed display and preview."><input id="showOsd" type="checkbox" /> Playback OSD</label>
+                <label class="check" title="Automatically rotate the fullscreen view through every pane."><input id="fullscreenCycle" type="checkbox" /> Cycle Fullscreen Panes</label>
               </div>
             </div>
 
@@ -3334,6 +3371,12 @@ HTML = r"""<!doctype html>
                 </label>
                 <label>Fullscreen Cycle Sec
                   <input id="fsCycleSec" type="number" min="0" max="600" />
+                </label>
+                <label>Fullscreen Pane
+                  <select id="fullscreenPane"><option value="-1">Off</option></select>
+                </label>
+                <label>OSD Status Pane
+                  <select id="osdPane"><option value="-1">Automatic</option></select>
                 </label>
                 <label>Scene Fade (ms)
                   <input id="transitionMs" type="number" min="0" max="5000" step="50" />
@@ -3403,6 +3446,7 @@ HTML = r"""<!doctype html>
     document.body.classList.toggle("remote-mode", remoteMode);
     const layoutNames = ["stack", "row", "2x1", "1x2", "2over1", "1over2", "overlay"];
     const previewVideo = document.getElementById("previewVideo");
+    const studioPreviewVideo = document.getElementById("studioPreviewVideo");
     const previewStage = document.querySelector(".preview-stage");
     const previewLayout = document.querySelector(".preview-layout");
     const layoutSelect = document.getElementById("layout");
@@ -5068,7 +5112,7 @@ HTML = r"""<!doctype html>
       const layout = visibilityLayoutForState(state);
       const rects = layout.rects;
       studioBoard.classList.toggle("resizing", !!studioResizeDrag);
-      studioBoard.innerHTML = "";
+      studioBoard.querySelectorAll(".studio-card, .studio-guide").forEach((element) => element.remove());
       layout.visibleRoles.forEach((role) => {
         const rect = rects[role];
         if (!rect || rect.w <= 0 || rect.h <= 0) return;
@@ -6100,6 +6144,13 @@ HTML = r"""<!doctype html>
           previewVideo.setAttribute("autoplay", "");
           previewVideo.setAttribute("playsinline", "");
           previewVideo.srcObject = remoteStream;
+          if (studioPreviewVideo) {
+            studioPreviewVideo.muted = true;
+            studioPreviewVideo.autoplay = true;
+            studioPreviewVideo.playsInline = true;
+            studioPreviewVideo.srcObject = remoteStream;
+            studioPreviewVideo.play().catch(() => {});
+          }
           const ensurePlay = () => previewVideo.play().catch(() => {});
           ensurePlay();
           previewVideo.onloadedmetadata = () => {
@@ -6208,6 +6259,10 @@ HTML = r"""<!doctype html>
         previewVideo.onloadedmetadata = null;
         previewVideo.onresize = null;
         previewVideo.oncanplay = null;
+      }
+      if (studioPreviewVideo) {
+        studioPreviewVideo.pause();
+        studioPreviewVideo.srcObject = null;
       }
       if (webrtcStream) {
         webrtcStream.getTracks().forEach(track => track.stop());
@@ -6349,6 +6404,8 @@ HTML = r"""<!doctype html>
       const rolesEl = document.getElementById("roles");
       const fsCycleEl = document.getElementById("fsCycleSec");
       const transitionEl = document.getElementById("transitionMs");
+      const fullscreenPaneEl = document.getElementById("fullscreenPane");
+      const osdPaneEl = document.getElementById("osdPane");
       if (modeEl) state.mode = modeEl.value.trim();
       if (rotationEl) state.rotation = readInt("rotation", 0);
       if (fontSizeEl) state.font_size = readInt("fontSize", 18);
@@ -6360,6 +6417,10 @@ HTML = r"""<!doctype html>
       if (rolesEl) state.roles = rolesEl.value.trim();
       if (fsCycleEl) state.fs_cycle_sec = readInt("fsCycleSec", 5);
       if (transitionEl) state.transition_ms = Math.max(0, Math.min(5000, readInt("transitionMs", 0)));
+      if (fullscreenPaneEl) state.fullscreen_pane = Number(fullscreenPaneEl.value);
+      if (osdPaneEl) state.osd_pane = Number(osdPaneEl.value);
+      state.show_osd = document.getElementById("showOsd").checked;
+      state.fullscreen_cycle = document.getElementById("fullscreenCycle").checked;
       state.visibility_mode = visibilityModeForState(state);
       normalizeVisibilityFlags();
       state.flags.smooth = document.getElementById("flagSmooth").checked;
@@ -6367,7 +6428,6 @@ HTML = r"""<!doctype html>
       state.flags.atomic = document.getElementById("flagAtomic").checked;
       state.flags.atomic_nonblock = document.getElementById("flagAtomicNonblock").checked;
       state.flags.gl_finish = document.getElementById("flagGlFinish").checked;
-      state.flags.no_osd = document.getElementById("flagNoOsd").checked;
       state.extra_lines = document.getElementById("extraLines").value;
       const queueCtx = queueEditorContext();
       const queueField = selectedPaneQueueField();
@@ -6389,6 +6449,23 @@ HTML = r"""<!doctype html>
       renderStudioBoard();
       renderStudioInspector();
       applyPreviewGeometry();
+    }
+
+    function fillPaneSelect(id, selected, emptyLabel) {
+      const select = document.getElementById(id);
+      if (!select) return;
+      select.replaceChildren();
+      const empty = document.createElement("option");
+      empty.value = "-1";
+      empty.textContent = emptyLabel;
+      select.appendChild(empty);
+      for (let pane = 0; pane < Math.max(1, Number(state.pane_count) || 1); pane += 1) {
+        const option = document.createElement("option");
+        option.value = String(pane);
+        option.textContent = `Pane ${pane + 1}`;
+        select.appendChild(option);
+      }
+      select.value = String(Number.isFinite(Number(selected)) ? Number(selected) : -1);
     }
 
     function fillForm(nextState, configPath, nextRawConfig) {
@@ -6433,6 +6510,8 @@ HTML = r"""<!doctype html>
       if (rolesEl) rolesEl.value = state.roles || "";
       if (fsCycleEl) fsCycleEl.value = String(state.fs_cycle_sec || 5);
       if (transitionEl) transitionEl.value = String(state.transition_ms || 0);
+      fillPaneSelect("fullscreenPane", state.fullscreen_pane, "Off");
+      fillPaneSelect("osdPane", state.osd_pane, "Automatic");
       const queueField = selectedPaneQueueField();
       const queueCtx = queueEditorContext();
       if (queueField) queueField.value = (queueCtx?.paths || []).join("\n");
@@ -6441,7 +6520,8 @@ HTML = r"""<!doctype html>
       document.getElementById("flagAtomic").checked = !!state.flags.atomic;
       document.getElementById("flagAtomicNonblock").checked = !!state.flags.atomic_nonblock;
       document.getElementById("flagGlFinish").checked = !!state.flags.gl_finish;
-      document.getElementById("flagNoOsd").checked = !!state.flags.no_osd;
+      document.getElementById("showOsd").checked = !!state.show_osd;
+      document.getElementById("fullscreenCycle").checked = !!state.fullscreen_cycle;
       document.getElementById("extraLines").value = state.extra_lines || "";
       document.getElementById("rawConfig").value = rawConfigText;
       renderPlaylistEditor();
@@ -7134,7 +7214,8 @@ HTML = r"""<!doctype html>
       "mode","connector","rotation","fontSize","rightFrac","paneSplit",
       "videoFrac","paneCount","layout","roles","fsCycleSec","transitionMs",
       "videoList","extraLines","flagSmooth","flagShuffle","flagAtomic",
-      "flagAtomicNonblock","flagGlFinish","flagNoOsd"
+      "flagAtomicNonblock","flagGlFinish","showOsd","fullscreenCycle",
+      "fullscreenPane","osdPane"
     ].forEach(id => {
       const el = document.getElementById(id);
       if (!el) return;
