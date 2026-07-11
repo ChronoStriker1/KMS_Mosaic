@@ -13,6 +13,8 @@ DISPLAY_C = (ROOT / "src" / "display.c").read_text(encoding="utf-8")
 FRAME_C = (ROOT / "src" / "frame.c").read_text(encoding="utf-8")
 MEDIA_C = (ROOT / "src" / "media.c").read_text(encoding="utf-8")
 RENDER_GL_C = (ROOT / "src" / "render_gl.c").read_text(encoding="utf-8")
+TERM_PANE_C = (ROOT / "src" / "term_pane.c").read_text(encoding="utf-8")
+RUNTIME_C = (ROOT / "src" / "runtime.c").read_text(encoding="utf-8")
 
 
 class ResourceEfficiencyTests(unittest.TestCase):
@@ -24,14 +26,40 @@ class ResourceEfficiencyTests(unittest.TestCase):
         self.assertIn("app_poll_timeout_ms(", loop)
         self.assertIn("if (!layout_changed) return false;", APP_C)
 
+    def test_plugin_only_control_removes_terminal_input_resources(self) -> None:
+        self.assertNotIn("app_handle_input_ready", APP_C)
+        self.assertNotIn("RUNTIME_POLL_STDIN", RUNTIME_C)
+        self.assertNotIn("ui_handle_input", (ROOT / "src" / "ui.c").read_text(encoding="utf-8"))
+        damaged = TERM_PANE_C[TERM_PANE_C.index("static void update_damaged_rows") : TERM_PANE_C.index("bool term_pane_poll")]
+        self.assertIn("tp->row_cells_cap < tp->layout.cols", damaged)
+        self.assertNotIn("free(row_cells)", damaged)
+
+    def test_file_changes_wake_the_existing_poll_loop(self) -> None:
+        self.assertIn("inotify_init1(IN_NONBLOCK | IN_CLOEXEC)", APP_C)
+        self.assertIn("RUNTIME_POLL_FILE_WATCH", RUNTIME_C)
+        self.assertIn("app_file_watch_drain(&file_watch)", APP_C)
+        self.assertIn("control_next_check_sec", APP_C)
+
+    def test_layout_only_config_changes_keep_media_processes_alive(self) -> None:
+        self.assertIn("app_config_unsafe_hash", APP_C)
+        self.assertIn("app_apply_hot_config", APP_C)
+        self.assertIn("Applied layout/UI config changes without restarting media panes", APP_C)
+        self.assertIn("next_unsafe_hash == cfg_watch.unsafe_hash", APP_C)
+
     def test_preview_downscales_before_reusable_readback(self) -> None:
         self.assertIn("render_gl_write_preview_frame(", FRAME_C)
         self.assertIn("logical_w, logical_h, 720", FRAME_C)
         self.assertIn("ctx->preview_pixels_cap < pixel_bytes", RENDER_GL_C)
         self.assertIn("glBindFramebuffer(GL_FRAMEBUFFER, ctx->preview_fbo);", RENDER_GL_C)
 
+    def test_preview_pipelines_readback_when_pixel_buffers_are_available(self) -> None:
+        self.assertIn('GL_NV_pixel_buffer_object', RENDER_GL_C)
+        self.assertIn('glMapBufferRangeEXT', RENDER_GL_C)
+        self.assertIn('ctx->preview_pbo_pending_index = write_index;', RENDER_GL_C)
+        self.assertIn('render_gl_write_rgba_file(ctx->preview_pbo_pending_path', RENDER_GL_C)
+
     def test_osd_uses_observed_properties_instead_of_sync_reads(self) -> None:
-        osd_section = FRAME_C[FRAME_C.index("if (osd_media && osd_media->mpv)") : FRAME_C.index("if (!rt->direct_mode && ui->ui_control)")]
+        osd_section = FRAME_C[FRAME_C.index("if (osd_media && osd_media->mpv)") : FRAME_C.index("if (snapshot_path && snapshot_written")]
         self.assertNotIn("mpv_get_property", osd_section)
         self.assertIn('mpv_observe_property(m->mpv, MEDIA_OBSERVE_PLAYLIST_POS', MEDIA_C)
         self.assertIn("MPV_EVENT_PROPERTY_CHANGE", MEDIA_C)

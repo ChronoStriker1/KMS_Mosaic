@@ -7,6 +7,25 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <EGL/egl.h>
+
+#ifndef GL_PIXEL_PACK_BUFFER_NV
+#define GL_PIXEL_PACK_BUFFER_NV 0x88EB
+#endif
+#ifndef GL_MAP_READ_BIT_EXT
+#define GL_MAP_READ_BIT_EXT 0x0001
+#endif
+#ifndef GL_STREAM_READ
+#define GL_STREAM_READ 0x88E1
+#endif
+
+typedef void *(*render_gl_map_buffer_range_fn)(GLenum target, GLintptr offset,
+                                               GLsizeiptr length, GLbitfield access);
+typedef GLboolean (*render_gl_unmap_buffer_fn)(GLenum target);
+
+static render_gl_map_buffer_range_fn render_gl_map_buffer_range;
+static render_gl_unmap_buffer_fn render_gl_unmap_buffer;
+
 void render_gl_reset_state_2d(void) {
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_DEPTH_TEST);
@@ -152,25 +171,30 @@ static void render_gl_ensure_pane_video_capacity(render_gl_ctx *ctx, int pane_in
     int new_cap = ctx->pane_vid_cap ? ctx->pane_vid_cap : 4;
     while (new_cap <= pane_index) new_cap *= 2;
 
-    GLuint *next_fbos = realloc(ctx->pane_vid_fbos, (size_t)new_cap * sizeof(*next_fbos));
-    GLuint *next_texs = realloc(ctx->pane_vid_texs, (size_t)new_cap * sizeof(*next_texs));
-    int *next_ws = realloc(ctx->pane_vid_ws, (size_t)new_cap * sizeof(*next_ws));
-    int *next_hs = realloc(ctx->pane_vid_hs, (size_t)new_cap * sizeof(*next_hs));
+    GLuint *next_fbos = calloc((size_t)new_cap, sizeof(*next_fbos));
+    GLuint *next_texs = calloc((size_t)new_cap, sizeof(*next_texs));
+    int *next_ws = calloc((size_t)new_cap, sizeof(*next_ws));
+    int *next_hs = calloc((size_t)new_cap, sizeof(*next_hs));
     if (!next_fbos || !next_texs || !next_ws || !next_hs) {
         fprintf(stderr, "pane video target allocation failed\n");
         exit(1);
     }
 
+    if (ctx->pane_vid_cap > 0) {
+        memcpy(next_fbos, ctx->pane_vid_fbos, (size_t)ctx->pane_vid_cap * sizeof(*next_fbos));
+        memcpy(next_texs, ctx->pane_vid_texs, (size_t)ctx->pane_vid_cap * sizeof(*next_texs));
+        memcpy(next_ws, ctx->pane_vid_ws, (size_t)ctx->pane_vid_cap * sizeof(*next_ws));
+        memcpy(next_hs, ctx->pane_vid_hs, (size_t)ctx->pane_vid_cap * sizeof(*next_hs));
+    }
+    free(ctx->pane_vid_fbos);
+    free(ctx->pane_vid_texs);
+    free(ctx->pane_vid_ws);
+    free(ctx->pane_vid_hs);
+
     ctx->pane_vid_fbos = next_fbos;
     ctx->pane_vid_texs = next_texs;
     ctx->pane_vid_ws = next_ws;
     ctx->pane_vid_hs = next_hs;
-    for (int i = ctx->pane_vid_cap; i < new_cap; ++i) {
-        ctx->pane_vid_fbos[i] = 0;
-        ctx->pane_vid_texs[i] = 0;
-        ctx->pane_vid_ws[i] = 0;
-        ctx->pane_vid_hs[i] = 0;
-    }
     ctx->pane_vid_cap = new_cap;
 }
 
@@ -331,22 +355,10 @@ void render_gl_draw_tex_to_rt(render_gl_ctx *ctx, GLuint tex, int x, int y, int 
     glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
-bool render_gl_write_current_rgba_frame(render_gl_ctx *ctx, const char *path, int w, int h) {
-    if (!ctx || !path || w <= 0 || h <= 0) return false;
-
+static bool render_gl_write_rgba_file(const char *path, const unsigned char *pixels,
+                                      int w, int h) {
+    if (!path || !pixels || w <= 0 || h <= 0) return false;
     size_t pixel_bytes = (size_t)w * (size_t)h * 4u;
-    if (ctx->preview_pixels_cap < pixel_bytes) {
-        unsigned char *next = realloc(ctx->preview_pixels, pixel_bytes);
-        if (!next) return false;
-        ctx->preview_pixels = next;
-        ctx->preview_pixels_cap = pixel_bytes;
-    }
-
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, ctx->preview_pixels);
-    GLenum err = glGetError();
-    if (err != GL_NO_ERROR) return false;
-
     char tmp_path[4096];
     int tmp_len = snprintf(tmp_path, sizeof(tmp_path), "%s.tmp.%ld", path, (long)getpid());
     if (tmp_len <= 0 || (size_t)tmp_len >= sizeof(tmp_path)) return false;
@@ -358,7 +370,7 @@ bool render_gl_write_current_rgba_frame(render_gl_ctx *ctx, const char *path, in
         (unsigned char)(h), (unsigned char)(h >> 8), (unsigned char)(h >> 16), (unsigned char)(h >> 24),
     };
     bool ok = fwrite(header, 1, sizeof(header), f) == sizeof(header) &&
-              fwrite(ctx->preview_pixels, 1, pixel_bytes, f) == pixel_bytes;
+              fwrite(pixels, 1, pixel_bytes, f) == pixel_bytes;
 
     if (fclose(f) != 0) ok = false;
     if (ok && rename(tmp_path, path) != 0) ok = false;
@@ -367,6 +379,115 @@ bool render_gl_write_current_rgba_frame(render_gl_ctx *ctx, const char *path, in
         remove(tmp_path);
     }
     return ok;
+}
+
+static bool render_gl_has_extension(const char *extensions, const char *wanted) {
+    if (!extensions || !wanted || !*wanted || strchr(wanted, ' ')) return false;
+    size_t wanted_len = strlen(wanted);
+    const char *at = extensions;
+    while ((at = strstr(at, wanted)) != NULL) {
+        bool starts_token = at == extensions || at[-1] == ' ';
+        bool ends_token = at[wanted_len] == '\0' || at[wanted_len] == ' ';
+        if (starts_token && ends_token) return true;
+        at += wanted_len;
+    }
+    return false;
+}
+
+static void render_gl_check_preview_pbo(render_gl_ctx *ctx) {
+    if (ctx->preview_pbo_checked) return;
+    ctx->preview_pbo_checked = true;
+    const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+    bool has_pbo = render_gl_has_extension(extensions, "GL_NV_pixel_buffer_object") ||
+                   render_gl_has_extension(extensions, "GL_EXT_pixel_buffer_object");
+    bool has_map_range = render_gl_has_extension(extensions, "GL_EXT_map_buffer_range");
+    if (!has_pbo || !has_map_range) return;
+    render_gl_map_buffer_range = (render_gl_map_buffer_range_fn)eglGetProcAddress("glMapBufferRangeEXT");
+    render_gl_unmap_buffer = (render_gl_unmap_buffer_fn)eglGetProcAddress("glUnmapBufferOES");
+    ctx->preview_pbo_supported = render_gl_map_buffer_range && render_gl_unmap_buffer;
+}
+
+static bool render_gl_ensure_preview_pbos(render_gl_ctx *ctx, size_t pixel_bytes) {
+    if (ctx->preview_pbo_size == pixel_bytes && ctx->preview_pbos[0] && ctx->preview_pbos[1]) return true;
+    if (ctx->preview_pbos[0] || ctx->preview_pbos[1]) glDeleteBuffers(2, ctx->preview_pbos);
+    memset(ctx->preview_pbos, 0, sizeof(ctx->preview_pbos));
+    ctx->preview_pbo_size = 0;
+    ctx->preview_pbo_pending_index = -1;
+    glGenBuffers(2, ctx->preview_pbos);
+    if (!ctx->preview_pbos[0] || !ctx->preview_pbos[1]) return false;
+    for (int i = 0; i < 2; ++i) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER_NV, ctx->preview_pbos[i]);
+        glBufferData(GL_PIXEL_PACK_BUFFER_NV, (GLsizeiptr)pixel_bytes, NULL, GL_STREAM_READ);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER_NV, 0);
+    if (glGetError() != GL_NO_ERROR) {
+        glDeleteBuffers(2, ctx->preview_pbos);
+        memset(ctx->preview_pbos, 0, sizeof(ctx->preview_pbos));
+        return false;
+    }
+    ctx->preview_pbo_size = pixel_bytes;
+    ctx->preview_pbo_write_index = 0;
+    return true;
+}
+
+static bool render_gl_write_current_rgba_frame_pbo(render_gl_ctx *ctx, const char *path,
+                                                   int w, int h, size_t pixel_bytes) {
+    if (!render_gl_ensure_preview_pbos(ctx, pixel_bytes)) {
+        ctx->preview_pbo_supported = false;
+        return false;
+    }
+
+    if (ctx->preview_pbo_pending_index >= 0) {
+        int pending = ctx->preview_pbo_pending_index;
+        glBindBuffer(GL_PIXEL_PACK_BUFFER_NV, ctx->preview_pbos[pending]);
+        const unsigned char *pixels = render_gl_map_buffer_range(
+            GL_PIXEL_PACK_BUFFER_NV, 0, (GLsizeiptr)ctx->preview_pbo_size, GL_MAP_READ_BIT_EXT);
+        if (!pixels) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER_NV, 0);
+            return false;
+        }
+        bool ok = render_gl_write_rgba_file(ctx->preview_pbo_pending_path, pixels,
+                                            ctx->preview_pbo_pending_w, ctx->preview_pbo_pending_h);
+        if (!render_gl_unmap_buffer(GL_PIXEL_PACK_BUFFER_NV)) ok = false;
+        glBindBuffer(GL_PIXEL_PACK_BUFFER_NV, 0);
+        ctx->preview_pbo_pending_index = -1;
+        return ok;
+    }
+
+    int write_index = ctx->preview_pbo_write_index;
+    glBindBuffer(GL_PIXEL_PACK_BUFFER_NV, ctx->preview_pbos[write_index]);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, (void *)0);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER_NV, 0);
+    if (glGetError() != GL_NO_ERROR) return false;
+    int path_len = snprintf(ctx->preview_pbo_pending_path, sizeof(ctx->preview_pbo_pending_path), "%s", path);
+    if (path_len <= 0 || (size_t)path_len >= sizeof(ctx->preview_pbo_pending_path)) return false;
+    ctx->preview_pbo_pending_index = write_index;
+    ctx->preview_pbo_pending_w = w;
+    ctx->preview_pbo_pending_h = h;
+    ctx->preview_pbo_write_index = 1 - write_index;
+    return false;
+}
+
+bool render_gl_write_current_rgba_frame(render_gl_ctx *ctx, const char *path, int w, int h) {
+    if (!ctx || !path || w <= 0 || h <= 0) return false;
+    size_t pixel_bytes = (size_t)w * (size_t)h * 4u;
+
+    render_gl_check_preview_pbo(ctx);
+    if (ctx->preview_pbo_supported) {
+        return render_gl_write_current_rgba_frame_pbo(ctx, path, w, h, pixel_bytes);
+    }
+
+    if (ctx->preview_pixels_cap < pixel_bytes) {
+        unsigned char *next = realloc(ctx->preview_pixels, pixel_bytes);
+        if (!next) return false;
+        ctx->preview_pixels = next;
+        ctx->preview_pixels_cap = pixel_bytes;
+    }
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, ctx->preview_pixels);
+    if (glGetError() != GL_NO_ERROR) return false;
+    return render_gl_write_rgba_file(path, ctx->preview_pixels, w, h);
 }
 
 bool render_gl_write_preview_frame(render_gl_ctx *ctx, const char *path, GLuint source_tex,
@@ -409,12 +530,16 @@ void render_gl_destroy(render_gl_ctx *ctx) {
     free(ctx->pane_vid_ws);
     free(ctx->pane_vid_hs);
     free(ctx->preview_pixels);
+    if (ctx->preview_pbos[0] || ctx->preview_pbos[1]) glDeleteBuffers(2, ctx->preview_pbos);
     ctx->pane_vid_fbos = NULL;
     ctx->pane_vid_texs = NULL;
     ctx->pane_vid_ws = NULL;
     ctx->pane_vid_hs = NULL;
     ctx->preview_pixels = NULL;
     ctx->preview_pixels_cap = 0;
+    memset(ctx->preview_pbos, 0, sizeof(ctx->preview_pbos));
+    ctx->preview_pbo_size = 0;
+    ctx->preview_pbo_pending_index = -1;
     ctx->pane_vid_cap = 0;
     if (ctx->blit_vbo) {
         glDeleteBuffers(1, &ctx->blit_vbo);

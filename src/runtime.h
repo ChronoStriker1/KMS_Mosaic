@@ -10,10 +10,10 @@
 #include "ui.h"
 
 enum {
-    RUNTIME_POLL_STDIN = 0,
-    RUNTIME_POLL_MPV_WAKEUP,
+    RUNTIME_POLL_MPV_WAKEUP = 0,
     RUNTIME_POLL_DRM,
     RUNTIME_POLL_PLAYLIST_FIFO,
+    RUNTIME_POLL_FILE_WATCH,
     RUNTIME_POLL_BASE_COUNT
 };
 
@@ -32,7 +32,8 @@ typedef struct {
     int nfds;
 } runtime_state;
 
-bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const media_ctx *m, int drm_fd);
+bool runtime_init(runtime_state *rt, const options_t *opt, bool use_mpv, const media_ctx *m,
+                  int drm_fd, int file_watch_fd);
 void runtime_update_pane_fds(runtime_state *rt, const options_t *opt, const pane_runtime *panes,
                              const media_ctx *pane_media);
 void runtime_refresh_playlist_fd(runtime_state *rt, const media_ctx *m);

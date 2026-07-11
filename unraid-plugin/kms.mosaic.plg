@@ -51,6 +51,14 @@ WEB_PORT="8788"
 CONFIG_PATH="/boot/config/kms_mosaic.conf"
 LOG_ENABLE="disable"
 KMS_ARGS="--atomic-nonblock"
+DDC_STARTUP="enable"
+DDC_CONNECTOR=""
+DDC_BUS=""
+DDC_INPUT_CODE="20"
+DDC_INPUT_VALUE="6"
+DDC_BRIGHTNESS="100"
+DDC_CONTRAST="100"
+DDC_SAVE="enable"
 ]]>
 </INLINE>
 </FILE>

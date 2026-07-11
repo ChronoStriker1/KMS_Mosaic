@@ -83,6 +83,8 @@ struct term_pane {
     int use_shell_cmd;
     char *shell_cmd;
     char **argv_dup;
+    VTermScreenCell *row_cells;
+    int row_cells_cap;
 };
 
 static void die(const char *msg) {
@@ -726,6 +728,7 @@ void term_pane_destroy(term_pane *tp) {
     if (tp->vt) vterm_free(tp->vt);
     if (tp->shell_cmd) free(tp->shell_cmd);
     if (tp->argv_dup) free_argv(tp->argv_dup);
+    free(tp->row_cells);
     free(tp);
 }
 
@@ -789,11 +792,18 @@ static void mark_surface_dirty_rows(term_pane *tp, int start_row, int end_row) {
 
 static void update_damaged_rows(term_pane *tp) {
     if (!tp || !tp->vts) return;
-    VTermScreenCell *row_cells = calloc((size_t)tp->layout.cols, sizeof(*row_cells));
-    if (!row_cells) {
+    if (tp->row_cells_cap < tp->layout.cols) {
+        VTermScreenCell *next = realloc(tp->row_cells, (size_t)tp->layout.cols * sizeof(*next));
+        if (next) {
+            tp->row_cells = next;
+            tp->row_cells_cap = tp->layout.cols;
+        }
+    }
+    if (!tp->row_cells || tp->row_cells_cap < tp->layout.cols) {
         rebuild_surface(tp);
         return;
     }
+    VTermScreenCell *row_cells = tp->row_cells;
     tp->surface.dirty_count = 0;
     tp->surface.dirty_y0 = tp->surface.tex_h;
     tp->surface.dirty_y1 = 0;
@@ -813,7 +823,6 @@ static void update_damaged_rows(term_pane *tp) {
     }
     tp->surface.dirty = tp->surface.dirty_count > 0;
     tp->pending_dirty_count = 0;
-    free(row_cells);
 }
 
 bool term_pane_poll(term_pane *tp) {

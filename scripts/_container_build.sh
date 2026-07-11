@@ -161,7 +161,7 @@ kms_mosaic: kms_mosaic - KMS compositor with tiled video + terminal panes
 kms_mosaic:
 kms_mosaic: Single-binary compositor for TTY using DRM/GBM/EGL.
 kms_mosaic: Embeds libmpv for video and libvterm for terminals.
-kms_mosaic: Portrait and landscape tiling layouts with runtime controls.
+kms_mosaic: Portrait and landscape tiling managed through the plugin config page.
 kms_mosaic:
 kms_mosaic: Homepage: n/a
 kms_mosaic:

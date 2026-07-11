@@ -4,8 +4,8 @@ KMS Mosaic
 Direct-to-KMS video + terminal compositor for the Linux console.
 
 It uses DRM/KMS + GBM + EGL/GLES2 for scanout, libmpv for video rendering, and
-libvterm for terminal panes. The compositor keeps one video slot plus a
-configurable list of terminal panes.
+libvterm for terminal panes. Every pane uses the same indexed model and can be
+configured as either a terminal or an independent mpv media pane.
 
 The runtime is modular now. The old single-file compositor has been split into:
 
@@ -19,7 +19,7 @@ The runtime is modular now. The old single-file compositor has been split into:
 - `src/layout.c`: geometric layout computation
 - `src/options.c`: CLI/config parsing and config save path
 - `src/runtime.c`: pollfd/runtime state helpers
-- `src/ui.c`: control-mode and input handling
+- `src/ui.c`: OSD focus and fullscreen-cycle state
 - `src/term_pane.c`: libvterm terminal emulation and texture updates
 
 Status
@@ -28,7 +28,9 @@ Status
 Implemented:
 
 - Event-driven PTY polling through the compositor `poll(2)` loop
-- Automatic config-file reload by self-reexec when the active config file changes
+- Event-driven config and control-file watching on Linux
+- In-process reloads for layout, OSD, fullscreen, and other display-only changes
+- Wrapper-based self-reexec when a config change requires media/process reconstruction
 - Bounded hash-backed terminal glyph cache
 - libvterm damage callbacks for pane redraw tracking
 - Indexed pane-array plumbing through `app`, `frame`, and `panes` instead of separate A/B argument chains
@@ -37,6 +39,10 @@ Implemented:
 - User-facing variable terminal pane counts
 - Runtime pane, scene, UI, and pollfd storage now allocates from the configured pane count instead of fixed-cap live buffers
 - Option parsing and layout output now allocate pane/role storage dynamically, including generic `--pane N "CMD"` support
+- Consistent user-facing pane indices across config parsing, split trees, rendering, preview, and the Layout Studio
+- Independent pane-local mpv render targets so differently sized video panes do not thrash one shared FBO
+- Pane-local playback watchdogs, manual restart controls, and synchronization groups
+- Config-driven OSD and fullscreen-pane selection; interactive console controls are intentionally removed
 - DRM atomic modesetting with optional nonblocking flips
 - Containerized Linux build path from macOS and other non-Linux hosts
 - Unraid deployment workflow through a native Unraid plugin with start/stop and a native settings page that hosts the full editor through same-origin plugin proxies
@@ -44,7 +50,7 @@ Implemented:
 Still not implemented:
 
 - Richer layout families for very large pane counts
-- More polished naming/help text for panes beyond the legacy A/B/C/D shortcuts
+- More polished naming/help text for very high pane counts
 - Further terminal rendering/performance tuning under heavy Unicode and scroll load
 
 Build
@@ -114,13 +120,15 @@ That service:
 
 - reads the active `kms_mosaic.conf`
 - streams the live compositor preview into the browser over WebRTC
-- exposes a pane-oriented "Layout Studio" that edits the saved `--split-tree` when present
+- mirrors the exact live preview stream beneath the Layout Studio pane outlines so the editor, preview, and physical output share the same content and coordinates
+- exposes a pane-oriented Layout Studio with drag/drop placement, edge/corner resize handles, snapping, and undo/redo for the saved `--split-tree`
 - lets you add/remove panes, switch panes between terminal and mpv, and edit each mpv pane's media queue from an explicit playlist target bar instead of tying queue edits to the selected studio pane
 - lets you attach pane-local mpv options to mpv panes so each media pane can override the global mpv defaults
 - lets each mpv pane keep its own playlist file or playlist FIFO so multiple mpv panes do not share one live queue
 - exposes the same structured mpv controls on the video pane and extra mpv panes so playlist, playlist-extended, fifo, mute, loop-file, audio, video-only/audio-only mode, shader settings, mpv log output, panscan, and video rotation stay consistent across all media panes
 - gives the Media section its own pane target bar, so the same per-mpv-pane fields are editable there instead of only through the selected pane inspector
 - exposes structured pane-local mpv controls in the pane inspector for audio, mute, loop-file, video-only/audio-only mode, and shader stacks while preserving a smaller raw per-pane options box for anything else
+- exposes pane-local watchdog, synchronization-group, and restart controls
 - rotates playlist preview thumbnails to match the effective KMS rotation plus pane-specific video rotation instead of always rendering them upright
 - sizes playlist thumbnails from the selected pane's actual layout geometry and panscan behavior, including portrait-pane treatments
 - keeps playlist thumbnails fitted inside their preview frame, overlays video durations on the preview, and moves bulk queue editing into a collapsed section under the playlist editor
@@ -128,47 +136,39 @@ That service:
 - lets you split the selected pane vertically or horizontally from the studio itself
 - treats the old layout presets as starter suggestions instead of the main editing surface
 - moves scene rules, raw config, and raw mpv option text under Advanced
+- saves, applies, schedules, and deletes named scenes
+- reports compositor/web/GPU health, recent errors, and recovery state
+- provides config history with diff and rollback actions
+- provides DDC/CI monitor power, input, brightness, and contrast controls when supported by the display
+- exposes playback OSD, OSD source pane, fullscreen pane, and fullscreen cycling on the config page
 - exposes common global mpv controls such as audio mode and shader stack as structured fields
 - shows inline playlist previews in the queue editor using browser-decoded media frames served from the Unraid host
 - writes config changes back atomically
 - relies on the compositor's file-watch reload path to apply changes live
 
 It is intentionally separate from the KMS compositor process so web serving
-does not destabilize scanout or input handling.
+does not destabilize scanout or the media render loop.
 
 Current limitation:
 
-- The web UI now edits split trees, but the studio is still a button-driven split editor rather than a full drag-handle tree designer.
-- The browser preview is much closer to a true live mirror now, but it still depends on compositor-side preview capture rather than a dedicated zero-copy capture/encode path.
+- The browser preview is a true content mirror of compositor capture, but capture and encode are not yet a zero-copy path.
 
 Defaults:
 
 - Pane A default command: `btop --utf-force`
 - Pane B default command: `tail -F /var/log/syslog -n 500`
   - Fallbacks: `journalctl -f`, then `/var/log/messages`
-- Supported pane count range: `1+` via `--pane-count N`
+- Supported pane count range: `1-64` via `--pane-count N`
 - Single-video runs auto-enable loop mode unless a playlist is in use
 
-Controls
---------
+Runtime control
+---------------
 
-- `Ctrl+E`: toggle Control Mode
-- `Ctrl+Q`: quit while in Control Mode
-- `Ctrl+P`: toggle mpv panscan
-- `Tab`: cycle focus among the video slot and all active pane slots while in Control Mode
-- `l` / `L`: cycle layouts
-- `r` / `R`: rotate role assignment across the active slots
-- `t`: swap focused pane with the next slot
-- `o`: toggle OSD
-- `f`: force pane surface rebuild
-- `s`: save current config
-- `z`: fullscreen focused pane
-- `n` / `p`: next / previous fullscreen pane
-- `c`: cycle fullscreen panes
-- arrow keys: resize split layouts while in Control Mode
-
-Outside Control Mode, input is forwarded to the focused target. For video focus,
-the compositor forwards common keys to mpv.
+Runtime behavior is managed through the plugin config page. Layout changes,
+pane selection, OSD, fullscreen behavior, media queues, pane restart, scenes,
+monitor controls, and service actions do not require console keyboard access.
+Options that cannot be represented through the config page are not exposed as
+interactive runtime controls.
 
 Layouts
 -------
@@ -202,10 +202,10 @@ Default config path:
 Config files use the same CLI flags as the command line and support quoting plus
 `#` comments.
 
-When the active config file changes on disk, the running process detects the
-mtime change and reloads by re-execing itself with the original command-line
-arguments. That keeps the launch path stable while applying the updated config
-without needing an external restart.
+When the active config changes, layout/UI-only settings are applied in-process
+without rebuilding media panes. Changes to pane types, commands, queues, or
+other process-level settings trigger a self-reexec through the packaged wrapper
+so shared-library resolution and launch arguments remain stable.
 
 Debugging
 ---------
@@ -225,8 +225,8 @@ The preferred Unraid deployment path is now the native plugin under
 Plugin artifacts:
 
 - plugin manifest: `dist/kms.mosaic.plg`
-- plugin payload bundle: `dist/kms.mosaic-2026.04.17.tgz`
-- Linux package: `dist/kms_mosaic-2026.04.17-x86_64-1.txz`
+- plugin payload bundle: `dist/kms.mosaic-2026.07.10.tgz`
+- Linux package: `dist/kms_mosaic-2026.07.10-x86_64-1.txz`
 
 Build the plugin artifacts after building the Linux package:
 
@@ -255,20 +255,25 @@ Important operational note:
 - A very fast restart can still lose DRM master and fail with `drmModeAtomicCommit (modeset): Permission denied`; a delayed second restart has been sufficient on the current Unraid host.
 - Do not re-enable the old userscript after installing the plugin, or both launch paths can race on boot.
 
+Release workflow
+----------------
+
+For every program update:
+
+1. Run the full automated test suite and build the Linux package.
+2. Rebuild the Unraid plugin so its web payload and native-package reference match the current build.
+3. Copy the completed artifacts to TOWER and install both the native package and plugin payload.
+4. Restart services sequentially when required; never overlap stop and start.
+5. Verify the installed hashes, service health, physical display, advancing compositor frames, WebRTC preview, and pane/content alignment on TOWER.
+6. Commit and push to GitHub only after the deployed version passes those checks.
+
 Roadmap
 -------
 
 High-value remaining work:
 
 - Add more intentional layouts for higher pane counts instead of relying mostly on split-and-tile behavior
-- Add direct drag/resize editing to the split-tree studio instead of only button-driven splits
-- Add richer per-pane playlist management in the web UI, including drag-and-drop reorder
+- Continue expanding structured mpv controls where a commonly used option still requires raw text
+- Pursue lower-copy preview capture/encoding where supported by the host graphics and codec stack
 - Keep tightening terminal performance under heavy Unicode and scroll loads
 - Simplify pane naming/help text so higher-count configurations read more naturally in the UI and saved configs
-
-Requested follow-up UI changes
-------------------------------
-
-- Improve the live preview transport further so it behaves closer to a true 1:1 mirror
-- Add drag handles for split movement and resizing directly in the Layout Studio
-- Expand the structured mpv controls beyond audio/shader fields so fewer users need the raw advanced text

@@ -146,7 +146,7 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         }
     }
 
-    if (!rt->direct_mode && !opt->no_osd && ui->show_osd) {
+    if (!rt->direct_mode && opt->show_osd) {
         media_ctx *osd_media = NULL;
         if (ui->focus >= 0 && ui->focus < pane_count) {
             if (pane_media && pane_media[ui->focus].mpv_gl) {
@@ -176,44 +176,6 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
         glViewport(0, 0, logical_w, logical_h);
         osd_draw(osd, 16, 16, logical_w, logical_h);
         }
-    }
-
-    if (!rt->direct_mode && ui->ui_control) {
-        static osd_ctx *osdcm = NULL;
-        if (!osdcm) osdcm = osd_create(opt->font_px ? opt->font_px : 20);
-        const char *layout_name = layout_mode_name(opt->layout_mode);
-        const char *help =
-            "Tab: focus cycle panes\n"
-            "o: toggle OSD\n"
-            "l/L: cycle layouts\n"
-            "r/R: rotate roles\n"
-            "t: swap focused pane with next\n"
-            "z: fullscreen focused pane\n"
-            "n: next fullscreen pane\n"
-            "p: previous fullscreen pane\n"
-            "c: cycle fullscreen panes\n"
-            "Arrows: resize splits (2x1/1x2/2over1/1over2)\n"
-            "f: force pane rebuild\n"
-            "Always: Ctrl+Q quit";
-        char cm_text[1024];
-        snprintf(cm_text, sizeof cm_text, "Control Mode (Ctrl+E)  Layout: %s\n%s", layout_name, help);
-        osd_set_text(osdcm, cm_text);
-        glBindFramebuffer(GL_FRAMEBUFFER, rg->rt_fbo);
-        render_gl_reset_state_2d();
-        glViewport(0, 0, logical_w, logical_h);
-        osd_draw(osdcm, 16, 48, logical_w, logical_h);
-        int bx = 0, by = 0, bw = 0, bh = 0;
-        int thickness = 4;
-        int focus_slot = ui->focus;
-        if (focus_slot < 0 || focus_slot >= pane_count) {
-            focus_slot = 0;
-        }
-        const pane_layout *focus_layout = &pane_layouts[focus_slot];
-        bx = focus_layout->x;
-        by = focus_layout->y;
-        bw = focus_layout->w;
-        bh = focus_layout->h;
-        render_gl_draw_border_rect(bx, by, bw, bh, thickness, logical_w, logical_h, 0.1f, 0.9f, 0.95f, 1.0f);
     }
 
     if (snapshot_path && snapshot_written && !rt->direct_mode) {

@@ -104,6 +104,17 @@ class UnraidServiceScriptTests(unittest.TestCase):
         self.assertIn('local args="${KMS_ARGS:-}"', text)
         self.assertIn('args="${args:+${args} }--debug"', text)
 
+    def test_startup_ddc_is_configurable_and_connector_aware(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn('DDC_STARTUP="enable"', text)
+        self.assertIn('DDC_CONNECTOR=""', text)
+        self.assertIn('DDC_BUS=""', text)
+        self.assertIn('Path("/sys/class/drm").glob("card*-*")', text)
+        self.assertIn('if status.read_text().strip() != "connected"', text)
+        self.assertIn('return unique[0] if len(unique) == 1 else ""', text)
+        self.assertNotIn('BUS = "/dev/i2c-3"', text)
+
 
 if __name__ == "__main__":
     unittest.main()
