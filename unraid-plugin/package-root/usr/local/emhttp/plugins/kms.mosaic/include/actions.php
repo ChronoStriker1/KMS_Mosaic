@@ -252,6 +252,39 @@ function output_proxy_response($result, $allowed_headers = []) {
   exit;
 }
 
+function validate_backend_api_path($path) {
+  if (!is_string($path) || $path === '' || preg_match('/[\r\n]/', $path)) {
+    throw new RuntimeException('Invalid backend API path');
+  }
+  $parsed = parse_url($path);
+  if (!is_array($parsed) || isset($parsed['scheme']) || isset($parsed['host'])) {
+    throw new RuntimeException('Invalid backend API path');
+  }
+  $endpoint = $parsed['path'] ?? '';
+  $allowed = [
+    '/api/health',
+    '/api/scenes',
+    '/api/scenes/save',
+    '/api/scenes/apply',
+    '/api/scenes/delete',
+    '/api/templates',
+    '/api/templates/save',
+    '/api/templates/delete',
+    '/api/panes/restart',
+    '/api/monitors',
+    '/api/monitors/set',
+    '/api/history',
+    '/api/history/diff',
+    '/api/history/rollback',
+    '/api/webrtc-close',
+    '/api/webrtc-keepalive',
+  ];
+  if (!in_array($endpoint, $allowed, true)) {
+    throw new RuntimeException('Unsupported backend API path');
+  }
+  return $path;
+}
+
 $action = $_POST['action'] ?? $_GET['action'] ?? 'status';
 
 try {
@@ -309,6 +342,22 @@ try {
   if ($action === 'backend_media') {
     $path = (string)($_GET['path'] ?? '');
     stream_backend_response('GET', $backend . '/api/media?path=' . rawurlencode($path));
+  }
+
+  if ($action === 'backend_api') {
+    $path = validate_backend_api_path((string)($_GET['path'] ?? ''));
+    $method = strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+    if ($method !== 'GET' && $method !== 'POST') {
+      throw new RuntimeException('Unsupported backend API method');
+    }
+    $body = null;
+    $content_type = null;
+    if ($method === 'POST') {
+      $body = (string)($_POST['payload'] ?? file_get_contents('php://input'));
+      $content_type = 'application/json';
+    }
+    $result = proxy_backend_request($method, $backend . $path, $body, $content_type);
+    output_proxy_response($result, ['Content-Type', 'Cache-Control']);
   }
 
   if ($action === 'save') {

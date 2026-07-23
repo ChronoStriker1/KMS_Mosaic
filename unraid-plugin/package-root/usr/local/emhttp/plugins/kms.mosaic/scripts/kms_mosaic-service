@@ -2,14 +2,22 @@
 set -euo pipefail
 
 PLUGIN="kms.mosaic"
-CFG="/boot/config/plugins/${PLUGIN}/${PLUGIN}.cfg"
-KMS_PIDFILE="/var/run/kms_mosaic.pid"
-WEB_PIDFILE="/var/run/kms_mosaic_web.pid"
-KMS_LOG="/tmp/start_kms_mosaic.log"
-WEB_LOG="/tmp/kms_mosaic_web.log"
+CFG="${KMS_MOSAIC_CFG:-/boot/config/plugins/${PLUGIN}/${PLUGIN}.cfg}"
+KMS_PIDFILE="${KMS_PIDFILE:-/var/run/kms_mosaic.pid}"
+WEB_PIDFILE="${WEB_PIDFILE:-/var/run/kms_mosaic_web.pid}"
+KMS_SUPERVISOR_PIDFILE="${KMS_SUPERVISOR_PIDFILE:-/var/run/kms_mosaic_supervisor.pid}"
+WEB_SUPERVISOR_PIDFILE="${WEB_SUPERVISOR_PIDFILE:-/var/run/kms_mosaic_web_supervisor.pid}"
+KMS_STOP_FILE="${KMS_STOP_FILE:-/var/run/kms_mosaic.stop}"
+WEB_STOP_FILE="${WEB_STOP_FILE:-/var/run/kms_mosaic_web.stop}"
+KMS_LOG="${KMS_LOG:-/tmp/start_kms_mosaic.log}"
+WEB_LOG="${WEB_LOG:-/tmp/kms_mosaic_web.log}"
+LIFECYCLE_LOG="${LIFECYCLE_LOG:-/boot/config/plugins/${PLUGIN}/lifecycle.log}"
 LOG_MAX_BYTES="${LOG_MAX_BYTES:-1048576}"
+LIFECYCLE_MAX_BYTES="${LIFECYCLE_MAX_BYTES:-65536}"
+RESTART_DELAY="${RESTART_DELAY:-5}"
+SUPERVISOR_POLL_INTERVAL="${SUPERVISOR_POLL_INTERVAL:-1}"
 STARTUP_DEP_TIMEOUT="${STARTUP_DEP_TIMEOUT:-30}"
-STARTUP_HEALTH_TIMEOUT="${STARTUP_HEALTH_TIMEOUT:-15}"
+STARTUP_HEALTH_TIMEOUT="${STARTUP_HEALTH_TIMEOUT:-30}"
 
 SERVICE="enable"
 WEB_SERVICE="enable"
@@ -29,11 +37,66 @@ DDC_SAVE="enable"
 
 [ -r "$CFG" ] && source "$CFG"
 
-KMS_WRAPPER="/usr/local/bin/kms_mosaic"
-WEB_WRAPPER="/usr/local/bin/kms_mosaic_web"
-KMS_LIBDIR="/usr/local/lib/kms_mosaic"
-SNAPSHOT_REQUEST="/tmp/kms_mosaic_snapshot.request"
-SNAPSHOT_OUTPUT="/tmp/kms_mosaic_preview.rgba"
+SELF="${BASH_SOURCE[0]}"
+KMS_WRAPPER="${KMS_WRAPPER:-/usr/local/bin/kms_mosaic}"
+WEB_WRAPPER="${WEB_WRAPPER:-/usr/local/bin/kms_mosaic_web}"
+KMS_LIBDIR="${KMS_LIBDIR:-/usr/local/lib/kms_mosaic}"
+SNAPSHOT_REQUEST="${SNAPSHOT_REQUEST:-/tmp/kms_mosaic_snapshot.request}"
+SNAPSHOT_OUTPUT="${SNAPSHOT_OUTPUT:-/tmp/kms_mosaic_preview.rgba}"
+
+trim_file() {
+  local file="$1"
+  local max_bytes="$2"
+  [ -f "$file" ] || return 0
+  local size
+  size="$(stat -c '%s' "$file" 2>/dev/null || printf '0')"
+  [ "$size" -le "$max_bytes" ] && return 0
+  local keep_bytes=$((max_bytes / 2))
+  local tmp="${file}.trim.$$"
+  tail -c "$keep_bytes" "$file" > "$tmp" 2>/dev/null || {
+    rm -f "$tmp" 2>/dev/null || true
+    return 0
+  }
+  mv -f "$tmp" "$file"
+}
+
+lifecycle_event() {
+  local service="$1"
+  local event="$2"
+  local pid="${3:-}"
+  local detail="${4:-}"
+  mkdir -p "$(dirname "$LIFECYCLE_LOG")" 2>/dev/null || true
+  printf '%s service=%s event=%s pid=%s %s\n' \
+    "$(date -Is)" "$service" "$event" "${pid:--}" "$detail" >> "$LIFECYCLE_LOG" 2>/dev/null || true
+  trim_file "$LIFECYCLE_LOG" "$LIFECYCLE_MAX_BYTES"
+}
+
+pid_is_running() {
+  local pid="$1"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+  local state
+  state="$(ps -o stat= -p "$pid" 2>/dev/null | awk 'NR == 1 {print $1}')"
+  [ -n "$state" ] && [[ "$state" != Z* ]]
+}
+
+pidfile_process_running() {
+  local file="$1"
+  local expected_arg="$2"
+  [ -r "$file" ] || return 1
+  local pid
+  pid="$(cat "$file" 2>/dev/null || true)"
+  pid_is_running "$pid" || return 1
+  [ -r "/proc/${pid}/cmdline" ] || return 1
+  tr '\0' ' ' < "/proc/${pid}/cmdline" | grep -F -- "$expected_arg" >/dev/null 2>&1
+}
+
+is_kms_supervisor_running() {
+  pidfile_process_running "$KMS_SUPERVISOR_PIDFILE" "supervise-kms"
+}
+
+is_web_supervisor_running() {
+  pidfile_process_running "$WEB_SUPERVISOR_PIDFILE" "supervise-web"
+}
 
 logging_enabled() {
   case "${LOG_ENABLE:-disable}" in
@@ -43,23 +106,15 @@ logging_enabled() {
 }
 
 kms_log_target() {
-  if logging_enabled; then
-    : > "$KMS_LOG" 2>/dev/null || true
-    printf '%s' "$KMS_LOG"
-  else
-    rm -f "$KMS_LOG" 2>/dev/null || true
-    printf '%s' "/dev/null"
-  fi
+  touch "$KMS_LOG" 2>/dev/null || true
+  trim_file "$KMS_LOG" "$LOG_MAX_BYTES"
+  printf '%s' "$KMS_LOG"
 }
 
 web_log_target() {
-  if logging_enabled; then
-    : > "$WEB_LOG" 2>/dev/null || true
-    printf '%s' "$WEB_LOG"
-  else
-    rm -f "$WEB_LOG" 2>/dev/null || true
-    printf '%s' "/dev/null"
-  fi
+  touch "$WEB_LOG" 2>/dev/null || true
+  trim_file "$WEB_LOG" "$LOG_MAX_BYTES"
+  printf '%s' "$WEB_LOG"
 }
 
 kms_extra_args() {
@@ -157,20 +212,143 @@ launch_detached() {
   fi
 }
 
+supervise_kms() {
+  local stopping=0
+  trap 'stopping=1' TERM INT HUP
+  lifecycle_event "kms" "supervisor-started" "$$"
+  while [ "$stopping" -eq 0 ] && [ ! -e "$KMS_STOP_FILE" ]; do
+    local target
+    target="$(kms_log_target)"
+    local extra
+    extra="$(kms_extra_args)"
+    if [ -n "$extra" ]; then
+      "$KMS_WRAPPER" --config "$CONFIG_PATH" $extra >>"$target" 2>&1 &
+    else
+      "$KMS_WRAPPER" --config "$CONFIG_PATH" >>"$target" 2>&1 &
+    fi
+    local child=$!
+    write_pidfile "$KMS_PIDFILE" "$child"
+    lifecycle_event "kms" "process-started" "$child"
+
+    local child_groups=""
+    while [ "$stopping" -eq 0 ] && [ ! -e "$KMS_STOP_FILE" ] && pid_is_running "$child"; do
+      local new_groups
+      new_groups="$(kms_child_group_leaders "$child" || true)"
+      if [ -n "$new_groups" ]; then
+        child_groups="$(printf '%s\n%s\n' "$child_groups" "$new_groups" | awk 'NF && !seen[$0]++')"
+      fi
+      sleep "$SUPERVISOR_POLL_INTERVAL"
+      trim_file "$target" "$LOG_MAX_BYTES"
+    done
+    if [ "$stopping" -ne 0 ] || [ -e "$KMS_STOP_FILE" ]; then
+      lifecycle_event "kms" "supervisor-stopping" "$$" "child=${child}"
+      return 0
+    fi
+
+    local rc=0
+    set +e
+    wait "$child"
+    rc=$?
+    set -e
+    local group
+    for group in $child_groups; do
+      kill_process_group "$group"
+    done
+    cleanup_pidfile_if_matches "$KMS_PIDFILE" "$child"
+    trim_file "$target" "$LOG_MAX_BYTES"
+    lifecycle_event "kms" "unexpected-exit" "$child" \
+      "rc=${rc} cleaned_groups=$(printf '%s\n' "$child_groups" | awk 'NF {count++} END {print count + 0}') restart_in=${RESTART_DELAY}s"
+    sleep "$RESTART_DELAY"
+  done
+  lifecycle_event "kms" "supervisor-stopped" "$$"
+}
+
+supervise_web() {
+  local stopping=0
+  trap 'stopping=1' TERM INT HUP
+  lifecycle_event "web" "supervisor-started" "$$"
+  while [ "$stopping" -eq 0 ] && [ ! -e "$WEB_STOP_FILE" ]; do
+    local target
+    target="$(web_log_target)"
+    local extra
+    extra="$(web_extra_args)"
+    if [ -n "$extra" ]; then
+      "$WEB_WRAPPER" --config "$CONFIG_PATH" --host "$WEB_HOST" --port "$WEB_PORT" $extra >>"$target" 2>&1 &
+    else
+      "$WEB_WRAPPER" --config "$CONFIG_PATH" --host "$WEB_HOST" --port "$WEB_PORT" >>"$target" 2>&1 &
+    fi
+    local child=$!
+    write_pidfile "$WEB_PIDFILE" "$child"
+    lifecycle_event "web" "process-started" "$child"
+
+    while [ "$stopping" -eq 0 ] && [ ! -e "$WEB_STOP_FILE" ] && pid_is_running "$child"; do
+      sleep "$SUPERVISOR_POLL_INTERVAL"
+      trim_file "$target" "$LOG_MAX_BYTES"
+    done
+    if [ "$stopping" -ne 0 ] || [ -e "$WEB_STOP_FILE" ]; then
+      lifecycle_event "web" "supervisor-stopping" "$$" "child=${child}"
+      return 0
+    fi
+
+    local rc=0
+    set +e
+    wait "$child"
+    rc=$?
+    set -e
+    cleanup_pidfile_if_matches "$WEB_PIDFILE" "$child"
+    trim_file "$target" "$LOG_MAX_BYTES"
+    lifecycle_event "web" "unexpected-exit" "$child" "rc=${rc} restart_in=${RESTART_DELAY}s"
+    sleep "$RESTART_DELAY"
+  done
+  lifecycle_event "web" "supervisor-stopped" "$$"
+}
+
+stop_supervisor() {
+  local pidfile="$1"
+  local expected_arg="$2"
+  if pidfile_process_running "$pidfile" "$expected_arg"; then
+    local pid
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    local waited=0
+    while [ "$waited" -lt 10 ] && pid_is_running "$pid"; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  cleanup_pidfile "$pidfile"
+}
+
 web_pid_from_system() {
   pgrep -fo "/usr/local/bin/kms_mosaic_web.py --config ${CONFIG_PATH} --host ${WEB_HOST} --port ${WEB_PORT}" 2>/dev/null || true
 }
 
 is_kms_running() {
-  pgrep -x kms_mosaic.bin >/dev/null 2>&1
+  local pid
+  for pid in $(pgrep -x kms_mosaic.bin 2>/dev/null || true); do
+    pid_is_running "$pid" && return 0
+  done
+  return 1
 }
 
 kms_pid_from_system() {
-  pgrep -x kms_mosaic.bin | head -n1 2>/dev/null || true
+  local pid
+  for pid in $(pgrep -x kms_mosaic.bin 2>/dev/null || true); do
+    if pid_is_running "$pid"; then
+      printf '%s\n' "$pid"
+      return 0
+    fi
+  done
+  return 0
 }
 
 kms_pids_from_system() {
-  pgrep -x kms_mosaic.bin 2>/dev/null || true
+  local pid
+  for pid in $(pgrep -x kms_mosaic.bin 2>/dev/null || true); do
+    pid_is_running "$pid" && printf '%s\n' "$pid"
+  done
+  return 0
 }
 
 wait_for_kms_exit() {
@@ -214,13 +392,13 @@ is_web_running() {
   if [ -f "$WEB_PIDFILE" ]; then
     pid="$(cat "$WEB_PIDFILE" 2>/dev/null || true)"
   fi
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+  if pid_is_running "$pid"; then
     return 0
   fi
   pid="$(web_pid_from_system)"
   [ -n "$pid" ] || return 1
   write_pidfile "$WEB_PIDFILE" "$pid"
-  kill -0 "$pid" 2>/dev/null
+  pid_is_running "$pid"
 }
 
 write_pidfile() {
@@ -232,6 +410,15 @@ write_pidfile() {
 cleanup_pidfile() {
   local file="$1"
   rm -f "$file" 2>/dev/null || true
+}
+
+cleanup_pidfile_if_matches() {
+  local file="$1"
+  local expected="$2"
+  local current=""
+  current="$(cat "$file" 2>/dev/null || true)"
+  [ "$current" = "$expected" ] && cleanup_pidfile "$file"
+  return 0
 }
 
 post_start_ddc() {
@@ -346,38 +533,46 @@ PY
 
 start_kms() {
   [ "${SERVICE}" = "enable" ] || return 0
-  is_kms_running && return 0
+  if is_kms_running && is_kms_supervisor_running; then
+    return 0
+  fi
+  if is_kms_running || is_kms_supervisor_running; then
+    lifecycle_event "kms" "replacing-unmanaged-or-partial-start" "$$"
+    stop_kms
+  fi
   if ! wait_for_runtime_dependencies; then
+    lifecycle_event "kms" "dependency-timeout" "$$"
     return 1
   fi
   local attempt
   for attempt in 1 2; do
     cleanup_host_gpu_libs
-    local target
-    target="$(kms_log_target)"
-    local extra
-    extra="$(kms_extra_args)"
-    if [ -n "$extra" ]; then
-      launch_detached "$KMS_WRAPPER" --config "$CONFIG_PATH" $extra >"$target" 2>&1
-    else
-      launch_detached "$KMS_WRAPPER" --config "$CONFIG_PATH" >"$target" 2>&1
-    fi
-    write_pidfile "$KMS_PIDFILE" "$!"
-    sleep 3
+    rm -f "$KMS_STOP_FILE" 2>/dev/null || true
+    launch_detached "$SELF" supervise-kms >/dev/null 2>&1
+    write_pidfile "$KMS_SUPERVISOR_PIDFILE" "$!"
+    local waited=0
+    while [ "$waited" -lt 5 ] && ! is_kms_running; do
+      sleep 1
+      waited=$((waited + 1))
+    done
     if is_kms_running && kms_render_healthy; then
+      lifecycle_event "kms" "startup-healthy" "$(kms_pid_from_system)" "attempt=${attempt}"
       post_start_ddc
       return 0
     fi
+    lifecycle_event "kms" "startup-unhealthy" "$(kms_pid_from_system)" "attempt=${attempt}"
     stop_kms
-    cleanup_pidfile "$KMS_PIDFILE"
     sleep 5
   done
+  return 1
 }
 
 stop_kms() {
   local pids=""
   local pid=""
   local child_groups=""
+  touch "$KMS_STOP_FILE"
+  stop_supervisor "$KMS_SUPERVISOR_PIDFILE" "supervise-kms"
   pids="$(kms_pids_from_system)"
   if [ -n "$pids" ]; then
     for pid in $pids; do
@@ -396,7 +591,7 @@ stop_kms() {
         if [ -n "$new_groups" ]; then
           child_groups="$(printf '%s\n%s\n' "$child_groups" "$new_groups" | awk 'NF && !seen[$0]++')"
         fi
-        if kill -0 "$pid" 2>/dev/null; then
+        if pid_is_running "$pid"; then
           any_running="true"
         fi
       done
@@ -406,7 +601,7 @@ stop_kms() {
       sleep 1
     done
     for pid in $pids; do
-      if kill -0 "$pid" 2>/dev/null; then
+      if pid_is_running "$pid"; then
         kill -9 "$pid" 2>/dev/null || true
       fi
     done
@@ -416,30 +611,39 @@ stop_kms() {
     done
   fi
   cleanup_pidfile "$KMS_PIDFILE"
+  lifecycle_event "kms" "stopped" "$$"
 }
 
 start_web() {
   [ "${WEB_SERVICE}" = "enable" ] || return 0
-  is_web_running && return 0
-  local target
-  target="$(web_log_target)"
-  local extra
-  extra="$(web_extra_args)"
-  if [ -n "$extra" ]; then
-    launch_detached "$WEB_WRAPPER" --config "$CONFIG_PATH" --host "$WEB_HOST" --port "$WEB_PORT" $extra >"$target" 2>&1
-  else
-    launch_detached "$WEB_WRAPPER" --config "$CONFIG_PATH" --host "$WEB_HOST" --port "$WEB_PORT" >"$target" 2>&1
+  if is_web_running && is_web_supervisor_running; then
+    return 0
   fi
-  sleep 1
-  local pid="$!"
-  if ! kill -0 "$pid" 2>/dev/null; then
-    pid="$(web_pid_from_system)"
+  if is_web_running || is_web_supervisor_running; then
+    lifecycle_event "web" "replacing-unmanaged-or-partial-start" "$$"
+    stop_web
   fi
-  [ -n "$pid" ] && write_pidfile "$WEB_PIDFILE" "$pid"
+  rm -f "$WEB_STOP_FILE" 2>/dev/null || true
+  launch_detached "$SELF" supervise-web >/dev/null 2>&1
+  write_pidfile "$WEB_SUPERVISOR_PIDFILE" "$!"
+  local waited=0
+  while [ "$waited" -lt 10 ]; do
+    if is_web_running &&
+       curl -fsS --max-time 2 "http://${WEB_HOST}:${WEB_PORT}/api/health" >/dev/null 2>&1; then
+      lifecycle_event "web" "startup-healthy" "$(cat "$WEB_PIDFILE" 2>/dev/null || true)"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  lifecycle_event "web" "startup-unhealthy" "$(cat "$WEB_PIDFILE" 2>/dev/null || true)"
+  return 1
 }
 
 stop_web() {
   local pid=""
+  touch "$WEB_STOP_FILE"
+  stop_supervisor "$WEB_SUPERVISOR_PIDFILE" "supervise-web"
   if is_web_running; then
     pid="$(cat "$WEB_PIDFILE" 2>/dev/null || true)"
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
@@ -448,6 +652,7 @@ stop_web() {
   pid="$(web_pid_from_system)"
   [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   cleanup_pidfile "$WEB_PIDFILE"
+  lifecycle_event "web" "stopped" "$$"
 }
 
 status_json() {
@@ -455,6 +660,8 @@ status_json() {
   local web_pid=""
   local kms_running="false"
   local web_running="false"
+  local kms_supervisor_running="false"
+  local web_supervisor_running="false"
   if is_kms_running; then
     kms_pid="$(pgrep -x kms_mosaic.bin | head -n1)"
     kms_running="true"
@@ -463,16 +670,18 @@ status_json() {
     web_pid="$(cat "$WEB_PIDFILE" 2>/dev/null || true)"
     web_running="true"
   fi
+  is_kms_supervisor_running && kms_supervisor_running="true"
+  is_web_supervisor_running && web_supervisor_running="true"
   cat <<EOF
-{"service":"${SERVICE}","web_service":"${WEB_SERVICE}","web_port":"${WEB_PORT}","config_path":"${CONFIG_PATH}","log_enable":"${LOG_ENABLE}","kms_args":"${KMS_ARGS}","kms_running":${kms_running},"web_running":${web_running},"kms_pid":"${kms_pid}","web_pid":"${web_pid}"}
+{"service":"${SERVICE}","web_service":"${WEB_SERVICE}","web_port":"${WEB_PORT}","config_path":"${CONFIG_PATH}","log_enable":"${LOG_ENABLE}","kms_args":"${KMS_ARGS}","kms_running":${kms_running},"web_running":${web_running},"kms_supervisor_running":${kms_supervisor_running},"web_supervisor_running":${web_supervisor_running},"kms_pid":"${kms_pid}","web_pid":"${web_pid}","lifecycle_log":"${LIFECYCLE_LOG}"}
 EOF
 }
 
 cmd="${1:-status}"
 case "$cmd" in
   start)
-    start_kms
-    start_web
+    start_kms || true
+    start_web || true
     ;;
   stop)
     stop_web
@@ -482,11 +691,17 @@ case "$cmd" in
     stop_web
     stop_kms
     wait_for_kms_exit 20 || true
-    start_kms
-    start_web
+    start_kms || true
+    start_web || true
     ;;
   status)
     status_json
+    ;;
+  supervise-kms)
+    supervise_kms
+    ;;
+  supervise-web)
+    supervise_web
     ;;
   *)
     echo "Usage: $0 {start|stop|restart|status}" >&2

@@ -20,6 +20,23 @@ class UnraidActionsProxyTests(unittest.TestCase):
         self.assertIn("if ($action === 'backend_connectors') {", src)
         self.assertIn("echo run_web_wrapper($web_wrapper, $cfg['CONFIG_PATH'], ['--dump-connectors']);", src)
 
+    def test_backend_api_proxy_is_explicitly_allowlisted(self) -> None:
+        src = ACTIONS_PHP.read_text(encoding="utf-8")
+        self.assertIn("function validate_backend_api_path($path)", src)
+        self.assertIn("if (!in_array($endpoint, $allowed, true))", src)
+        self.assertIn("if ($action === 'backend_api') {", src)
+        for path in (
+            "/api/scenes",
+            "/api/templates",
+            "/api/panes/restart",
+            "/api/monitors/set",
+            "/api/history/diff",
+            "/api/webrtc-close",
+            "/api/webrtc-keepalive",
+        ):
+            self.assertIn(f"'{path}'", src)
+        self.assertIn("proxy_backend_request($method, $backend . $path, $body, $content_type)", src)
+
 
 if __name__ == "__main__":
     unittest.main()
