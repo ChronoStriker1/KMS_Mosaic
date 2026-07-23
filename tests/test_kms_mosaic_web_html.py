@@ -183,6 +183,15 @@ class KmsMosaicWebHtmlTests(unittest.TestCase):
         self.assertIn("if (typeof window.loadConnectorOptions === 'function') {", html)
         self.assertIn("await window.loadConnectorOptions();", html)
 
+    def test_plugin_page_routes_all_embedded_api_calls_through_actions_proxy(self):
+        html = PLUGIN_PAGE_PATH.read_text(encoding="utf-8")
+        self.assertIn("sourceUrl.pathname.startsWith('/api/')", html)
+        self.assertIn("proxyUrl.searchParams.set('action', 'backend_api');", html)
+        self.assertIn("proxyUrl.searchParams.set('path', `${sourceUrl.pathname}${sourceUrl.search}`);", html)
+        self.assertIn(".replaceAll('/api/webrtc-close', closePath)", html)
+        self.assertIn(".replaceAll('/api/webrtc-keepalive', keepalivePath)", html)
+        self.assertIn("csrf_token=${encodeURIComponent(kmsCsrfToken)}", html)
+
 
 if __name__ == "__main__":
     unittest.main()

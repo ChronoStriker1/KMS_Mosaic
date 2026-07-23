@@ -1102,20 +1102,31 @@ function kmsEmbeddedUrl(action) {
 }
 
 function kmsRewriteBackendHtml(html) {
+  const closePath = `${kmsActionUrl}?action=backend_api&path=${encodeURIComponent('/api/webrtc-close')}&csrf_token=${encodeURIComponent(kmsCsrfToken)}`;
+  const keepalivePath = `${kmsActionUrl}?action=backend_api&path=${encodeURIComponent('/api/webrtc-keepalive')}&csrf_token=${encodeURIComponent(kmsCsrfToken)}`;
   return html
     .replaceAll('/api/state', `${kmsActionUrl}?action=backend_state`)
     .replaceAll('/api/connectors', `${kmsActionUrl}?action=backend_connectors`)
     .replaceAll('/api/config', `${kmsActionUrl}?action=backend_config`)
     .replaceAll('/api/raw_config', `${kmsActionUrl}?action=backend_raw_config`)
-      .replaceAll('/api/webrtc-offer', `${kmsActionUrl}?action=backend_webrtc_offer`)
-      .replaceAll('/api/media?path=', `${kmsActionUrl}?action=backend_media&path=`);
+    .replaceAll('/api/webrtc-offer', `${kmsActionUrl}?action=backend_webrtc_offer`)
+    .replaceAll('/api/webrtc-close', closePath)
+    .replaceAll('/api/webrtc-keepalive', keepalivePath)
+    .replaceAll('/api/media?path=', `${kmsActionUrl}?action=backend_media&path=`);
 }
 
 function kmsInstallFetchShim() {
   if (window.__kmsFetchShimInstalled) return;
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (input, init = undefined) => {
-    const rawUrl = typeof input === 'string' ? input : (input?.url || '');
+    let rawUrl = typeof input === 'string' ? input : (input?.url || '');
+    const sourceUrl = new URL(rawUrl, window.location.origin);
+    if (sourceUrl.origin === window.location.origin && sourceUrl.pathname.startsWith('/api/')) {
+      const proxyUrl = new URL(kmsActionUrl, window.location.origin);
+      proxyUrl.searchParams.set('action', 'backend_api');
+      proxyUrl.searchParams.set('path', `${sourceUrl.pathname}${sourceUrl.search}`);
+      rawUrl = proxyUrl.toString();
+    }
     if (!rawUrl.includes('/plugins/kms.mosaic/include/actions.php')) {
       return originalFetch(input, init);
     }
