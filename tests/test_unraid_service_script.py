@@ -1,5 +1,6 @@
 import os
 import pathlib
+import signal
 import subprocess
 import tempfile
 import time
@@ -8,6 +9,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVICE_SCRIPT = ROOT / "unraid-plugin" / "package-root" / "usr" / "local" / "emhttp" / "plugins" / "kms.mosaic" / "scripts" / "kms_mosaic-service"
+KMS_MAIN = ROOT / "src" / "kms_mosaic.c"
 
 
 class UnraidServiceScriptTests(unittest.TestCase):
@@ -115,10 +117,32 @@ class UnraidServiceScriptTests(unittest.TestCase):
         self.assertIn('stop_supervisor "$KMS_SUPERVISOR_PIDFILE" "supervise-kms"', text)
         self.assertIn('stop_supervisor "$WEB_SUPERVISOR_PIDFILE" "supervise-web"', text)
         supervise_kms = text[text.index("supervise_kms() {") : text.index("supervise_web() {")]
-        self.assertIn('new_groups="$(kms_child_group_leaders "$child" || true)"', supervise_kms)
-        self.assertIn('child_groups="$(printf', supervise_kms)
+        self.assertIn('monitor_kms_child "$child" "$groups_file" "$reason_file" &', supervise_kms)
+        self.assertIn('child_groups="$(awk', supervise_kms)
         self.assertIn('kill_process_group "$group"', supervise_kms)
         self.assertIn("cleaned_groups=", supervise_kms)
+
+    def test_supervised_config_reload_uses_a_fresh_process(self) -> None:
+        service = SERVICE_SCRIPT.read_text(encoding="utf-8")
+        main = KMS_MAIN.read_text(encoding="utf-8")
+
+        self.assertIn("KMS_MOSAIC_SUPERVISED_RELOAD=1", service)
+        self.assertIn('if [ "$rc" -eq "$RELOAD_EXIT_CODE" ]; then', service)
+        self.assertIn('"config-reload"', service)
+        self.assertIn('getenv("KMS_MOSAIC_SUPERVISED_RELOAD")', main)
+        self.assertIn("return 75;", main)
+
+    def test_supervisor_restarts_a_live_process_that_stops_rendering(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+
+        self.assertIn("supervised_child_is_active()", text)
+        self.assertIn("local next_health_check=$SECONDS", text)
+        self.assertIn("monitor_kms_child()", text)
+        self.assertIn("snapshot_fingerprint()", text)
+        self.assertIn('touch "$SNAPSHOT_REQUEST"', text)
+        self.assertIn('"render-timeout"', text)
+        self.assertIn('"restarting-unresponsive"', text)
+        self.assertIn('kill -9 "$child"', text)
 
     def test_kms_supervisor_restarts_a_failed_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -168,6 +192,68 @@ class UnraidServiceScriptTests(unittest.TestCase):
             finally:
                 if proc.poll() is None:
                     proc.terminate()
+                    proc.wait(timeout=6)
+
+    def test_kms_supervisor_restarts_a_stalled_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = pathlib.Path(tmp_dir)
+            wrapper = tmp / "wrapper"
+            count_file = tmp / "count"
+            pid_file = tmp / "kms.pid"
+            stop_file = tmp / "stop"
+            wrapper.write_text(
+                "#!/bin/bash\n"
+                f"printf 'run\\n' >> {count_file!s}\n"
+                "trap 'exit 0' TERM INT HUP\n"
+                "while :; do sleep 0.1; done\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "KMS_MOSAIC_CFG": str(tmp / "missing.cfg"),
+                    "KMS_WRAPPER": str(wrapper),
+                    "KMS_PIDFILE": str(pid_file),
+                    "KMS_SUPERVISOR_PIDFILE": str(tmp / "supervisor.pid"),
+                    "KMS_STOP_FILE": str(stop_file),
+                    "KMS_LOG": str(tmp / "kms.log"),
+                    "LIFECYCLE_LOG": str(tmp / "lifecycle.log"),
+                    "SNAPSHOT_REQUEST": str(tmp / "snapshot.request"),
+                    "SNAPSHOT_OUTPUT": str(tmp / "snapshot.rgba"),
+                    "RUNTIME_HEALTH_INTERVAL": "1",
+                    "RUNTIME_HEALTH_TIMEOUT": "1",
+                    "HEALTH_RESTART_DELAY": "0.05",
+                    "SUPERVISOR_POLL_INTERVAL": "0.05",
+                }
+            )
+            proc = subprocess.Popen(
+                ["bash", str(SERVICE_SCRIPT), "supervise-kms"],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                deadline = time.monotonic() + 8
+                runs = 0
+                while time.monotonic() < deadline:
+                    runs = count_file.read_text(encoding="utf-8").count("run") if count_file.exists() else 0
+                    if runs >= 2:
+                        break
+                    time.sleep(0.05)
+                self.assertGreaterEqual(runs, 2)
+                lifecycle = (tmp / "lifecycle.log").read_text(encoding="utf-8")
+                self.assertIn("event=render-timeout", lifecycle)
+                self.assertIn("event=restarting-unresponsive", lifecycle)
+            finally:
+                stop_file.touch()
+                if pid_file.exists():
+                    child_pid = int(pid_file.read_text(encoding="utf-8").strip())
+                    try:
+                        os.kill(child_pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                if proc.poll() is None:
                     proc.wait(timeout=6)
 
     def test_unraid_defaults_to_event_driven_atomic_presentation(self) -> None:
