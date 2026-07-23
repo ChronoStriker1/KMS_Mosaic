@@ -51,6 +51,11 @@ int main(int argc, char **argv) {
     for (;;) {
         int rc = app_run(argc, argv, &g_debug, &g_stop);
         if (rc != APP_RUN_RELOAD) return rc;
+        const char *supervised_reload = getenv("KMS_MOSAIC_SUPERVISED_RELOAD");
+        if (supervised_reload && *supervised_reload && strcmp(supervised_reload, "0") != 0) {
+            fprintf(stderr, "Config reload requested; handing restart to supervisor.\n");
+            return 75;
+        }
         fprintf(stderr, "Reloading after config change...\n");
         const char *reexec_path = getenv("KMS_MOSAIC_REEXEC");
         if (!reexec_path || !*reexec_path) reexec_path = argv[0];

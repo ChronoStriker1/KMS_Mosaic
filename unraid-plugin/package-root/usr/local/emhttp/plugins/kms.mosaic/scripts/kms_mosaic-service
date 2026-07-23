@@ -18,6 +18,11 @@ RESTART_DELAY="${RESTART_DELAY:-5}"
 SUPERVISOR_POLL_INTERVAL="${SUPERVISOR_POLL_INTERVAL:-1}"
 STARTUP_DEP_TIMEOUT="${STARTUP_DEP_TIMEOUT:-30}"
 STARTUP_HEALTH_TIMEOUT="${STARTUP_HEALTH_TIMEOUT:-30}"
+RUNTIME_HEALTH_INTERVAL="${RUNTIME_HEALTH_INTERVAL:-30}"
+RUNTIME_HEALTH_TIMEOUT="${RUNTIME_HEALTH_TIMEOUT:-15}"
+RELOAD_EXIT_CODE="${RELOAD_EXIT_CODE:-75}"
+RELOAD_RESTART_DELAY="${RELOAD_RESTART_DELAY:-2}"
+HEALTH_RESTART_DELAY="${HEALTH_RESTART_DELAY:-2}"
 
 SERVICE="enable"
 WEB_SERVICE="enable"
@@ -36,6 +41,9 @@ DDC_CONTRAST="100"
 DDC_SAVE="enable"
 
 [ -r "$CFG" ] && source "$CFG"
+
+case "$RUNTIME_HEALTH_INTERVAL" in ''|*[!0-9]*) RUNTIME_HEALTH_INTERVAL=30 ;; esac
+case "$RUNTIME_HEALTH_TIMEOUT" in ''|*[!0-9]*|0) RUNTIME_HEALTH_TIMEOUT=15 ;; esac
 
 SELF="${BASH_SOURCE[0]}"
 KMS_WRAPPER="${KMS_WRAPPER:-/usr/local/bin/kms_mosaic}"
@@ -77,6 +85,16 @@ pid_is_running() {
   local state
   state="$(ps -o stat= -p "$pid" 2>/dev/null | awk 'NR == 1 {print $1}')"
   [ -n "$state" ] && [[ "$state" != Z* ]]
+}
+
+supervised_child_is_active() {
+  local pid="$1"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+  local state=""
+  if [ -r "/proc/${pid}/stat" ]; then
+    state="$(sed -n 's/^.*) \([A-Z]\) .*$/\1/p' "/proc/${pid}/stat" 2>/dev/null || true)"
+  fi
+  [ "$state" != "Z" ]
 }
 
 pidfile_process_running() {
@@ -212,6 +230,62 @@ launch_detached() {
   fi
 }
 
+snapshot_fingerprint() {
+  stat -c '%i:%Y:%s' "$SNAPSHOT_OUTPUT" 2>/dev/null || true
+}
+
+record_kms_child_groups() {
+  local child="$1"
+  local groups_file="$2"
+  local new_groups=""
+  new_groups="$(kms_child_group_leaders "$child" || true)"
+  [ -n "$new_groups" ] || return 0
+  printf '%s\n' "$new_groups" >> "$groups_file"
+}
+
+monitor_kms_child() {
+  local child="$1"
+  local groups_file="$2"
+  local reason_file="$3"
+  local health_pending=0
+  local health_baseline=""
+  local health_deadline=0
+  local next_health_check=$SECONDS
+
+  while supervised_child_is_active "$child"; do
+    record_kms_child_groups "$child" "$groups_file"
+    if [ "$RUNTIME_HEALTH_INTERVAL" -gt 0 ]; then
+      if [ "$health_pending" -eq 0 ] && [ "$SECONDS" -ge "$next_health_check" ]; then
+        health_baseline="$(snapshot_fingerprint)"
+        touch "$SNAPSHOT_REQUEST"
+        health_pending=1
+        health_deadline=$((SECONDS + RUNTIME_HEALTH_TIMEOUT))
+      elif [ "$health_pending" -eq 1 ]; then
+        local health_current=""
+        health_current="$(snapshot_fingerprint)"
+        if [ -n "$health_current" ] && [ "$health_current" != "$health_baseline" ]; then
+          health_pending=0
+          next_health_check=$((SECONDS + RUNTIME_HEALTH_INTERVAL))
+          rm -f "$SNAPSHOT_REQUEST" 2>/dev/null || true
+        elif [ "$SECONDS" -ge "$health_deadline" ]; then
+          printf '%s\n' "render-timeout" > "$reason_file"
+          lifecycle_event "kms" "render-timeout" "$child" \
+            "no_fresh_frame=${RUNTIME_HEALTH_TIMEOUT}s"
+          kill "$child" 2>/dev/null || true
+          local health_kill_wait=0
+          while [ "$health_kill_wait" -lt 3 ] && supervised_child_is_active "$child"; do
+            sleep 1
+            health_kill_wait=$((health_kill_wait + 1))
+          done
+          supervised_child_is_active "$child" && kill -9 "$child" 2>/dev/null || true
+          return 0
+        fi
+      fi
+    fi
+    sleep "$SUPERVISOR_POLL_INTERVAL"
+  done
+}
+
 supervise_kms() {
   local stopping=0
   trap 'stopping=1' TERM INT HUP
@@ -222,43 +296,60 @@ supervise_kms() {
     local extra
     extra="$(kms_extra_args)"
     if [ -n "$extra" ]; then
-      "$KMS_WRAPPER" --config "$CONFIG_PATH" $extra >>"$target" 2>&1 &
+      KMS_MOSAIC_SUPERVISED_RELOAD=1 \
+        "$KMS_WRAPPER" --config "$CONFIG_PATH" $extra >>"$target" 2>&1 &
     else
-      "$KMS_WRAPPER" --config "$CONFIG_PATH" >>"$target" 2>&1 &
+      KMS_MOSAIC_SUPERVISED_RELOAD=1 \
+        "$KMS_WRAPPER" --config "$CONFIG_PATH" >>"$target" 2>&1 &
     fi
     local child=$!
     write_pidfile "$KMS_PIDFILE" "$child"
     lifecycle_event "kms" "process-started" "$child"
 
-    local child_groups=""
-    while [ "$stopping" -eq 0 ] && [ ! -e "$KMS_STOP_FILE" ] && pid_is_running "$child"; do
-      local new_groups
-      new_groups="$(kms_child_group_leaders "$child" || true)"
-      if [ -n "$new_groups" ]; then
-        child_groups="$(printf '%s\n%s\n' "$child_groups" "$new_groups" | awk 'NF && !seen[$0]++')"
-      fi
-      sleep "$SUPERVISOR_POLL_INTERVAL"
-      trim_file "$target" "$LOG_MAX_BYTES"
-    done
-    if [ "$stopping" -ne 0 ] || [ -e "$KMS_STOP_FILE" ]; then
-      lifecycle_event "kms" "supervisor-stopping" "$$" "child=${child}"
-      return 0
-    fi
-
+    local groups_file="${KMS_PIDFILE}.groups.${child}"
+    local reason_file="${KMS_PIDFILE}.reason.${child}"
+    rm -f "$groups_file" "$reason_file" 2>/dev/null || true
+    monitor_kms_child "$child" "$groups_file" "$reason_file" &
+    local monitor_pid=$!
     local rc=0
     set +e
     wait "$child"
     rc=$?
     set -e
+    kill "$monitor_pid" 2>/dev/null || true
+    wait "$monitor_pid" 2>/dev/null || true
+    if [ "$stopping" -ne 0 ] || [ -e "$KMS_STOP_FILE" ]; then
+      rm -f "$groups_file" "$reason_file" 2>/dev/null || true
+      lifecycle_event "kms" "supervisor-stopping" "$$" "child=${child}"
+      return 0
+    fi
+
+    local child_groups=""
+    child_groups="$(awk 'NF && !seen[$0]++' "$groups_file" 2>/dev/null || true)"
+    local restart_reason=""
+    restart_reason="$(cat "$reason_file" 2>/dev/null || true)"
+    rm -f "$groups_file" "$reason_file" 2>/dev/null || true
     local group
     for group in $child_groups; do
       kill_process_group "$group"
     done
     cleanup_pidfile_if_matches "$KMS_PIDFILE" "$child"
     trim_file "$target" "$LOG_MAX_BYTES"
-    lifecycle_event "kms" "unexpected-exit" "$child" \
-      "rc=${rc} cleaned_groups=$(printf '%s\n' "$child_groups" | awk 'NF {count++} END {print count + 0}') restart_in=${RESTART_DELAY}s"
-    sleep "$RESTART_DELAY"
+    local cleaned_groups
+    cleaned_groups="$(printf '%s\n' "$child_groups" | awk 'NF {count++} END {print count + 0}')"
+    if [ "$rc" -eq "$RELOAD_EXIT_CODE" ]; then
+      lifecycle_event "kms" "config-reload" "$child" \
+        "rc=${rc} cleaned_groups=${cleaned_groups} restart_in=${RELOAD_RESTART_DELAY}s"
+      sleep "$RELOAD_RESTART_DELAY"
+    elif [ "$restart_reason" = "render-timeout" ]; then
+      lifecycle_event "kms" "restarting-unresponsive" "$child" \
+        "rc=${rc} cleaned_groups=${cleaned_groups} restart_in=${HEALTH_RESTART_DELAY}s"
+      sleep "$HEALTH_RESTART_DELAY"
+    else
+      lifecycle_event "kms" "unexpected-exit" "$child" \
+        "rc=${rc} cleaned_groups=${cleaned_groups} restart_in=${RESTART_DELAY}s"
+      sleep "$RESTART_DELAY"
+    fi
   done
   lifecycle_event "kms" "supervisor-stopped" "$$"
 }
@@ -281,7 +372,7 @@ supervise_web() {
     write_pidfile "$WEB_PIDFILE" "$child"
     lifecycle_event "web" "process-started" "$child"
 
-    while [ "$stopping" -eq 0 ] && [ ! -e "$WEB_STOP_FILE" ] && pid_is_running "$child"; do
+    while [ "$stopping" -eq 0 ] && [ ! -e "$WEB_STOP_FILE" ] && supervised_child_is_active "$child"; do
       sleep "$SUPERVISOR_POLL_INTERVAL"
       trim_file "$target" "$LOG_MAX_BYTES"
     done
