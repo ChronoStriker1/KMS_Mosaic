@@ -20,6 +20,6 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
                   int logical_h, int fb_w, int fb_h, int screen_w, int screen_h,
                   const int *pane_font_px, bool use_mpv,
                   const bool *pane_ready, bool debug,
-                  const char *snapshot_path, bool *snapshot_written);
+                  const char *snapshot_path, int snapshot_max_edge, bool *snapshot_written);
 
 #endif

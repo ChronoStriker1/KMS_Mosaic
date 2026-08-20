@@ -96,6 +96,54 @@ class UnraidServiceScriptTests(unittest.TestCase):
         self.assertIn('touch "$SNAPSHOT_REQUEST"', text)
         self.assertIn('[ -s "$SNAPSHOT_OUTPUT" ]', text)
 
+    def test_start_waits_for_configured_media_panes(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+        start_kms = text[text.index("start_kms() {") : text.index("stop_kms() {")]
+
+        self.assertIn('STARTUP_MEDIA_TIMEOUT="${STARTUP_MEDIA_TIMEOUT:-300}"', text)
+        self.assertIn("configured_media_requirements()", text)
+        self.assertIn("has_configured_media_requirements()", text)
+        self.assertIn("unraid_array_started()", text)
+        self.assertIn("configured_media_ready()", text)
+        self.assertIn("wait_for_configured_media()", text)
+        self.assertIn('tok == "--pane-media"', text)
+        self.assertIn('tok == "--pane-video"', text)
+        self.assertIn('tok in {"--pane-playlist", "--pane-playlist-extended"}', text)
+        self.assertIn('if has_configured_media_requirements && ! unraid_array_started; then', start_kms)
+        self.assertIn('"array-stopped"', start_kms)
+        self.assertLess(start_kms.index("! unraid_array_started"), start_kms.index("wait_for_runtime_dependencies"))
+        self.assertLess(start_kms.index("! unraid_array_started"), start_kms.index("wait_for_configured_media"))
+        self.assertIn("wait_for_configured_media", start_kms)
+        self.assertIn('"media-timeout"', start_kms)
+
+    def test_array_stopped_detection_uses_unraid_state_before_mount_fallback(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+        array_started = text[text.index("unraid_array_started() {") : text.index("configured_media_ready() {")]
+
+        self.assertIn("mdcmd=\"/root/mdcmd\"", array_started)
+        self.assertIn("command -v mdcmd", array_started)
+        self.assertIn('s/^mdState=//p', array_started)
+        self.assertIn('tr -d \'"\'', array_started)
+        self.assertIn("STARTED) return 0", array_started)
+        self.assertIn("STOPPED|STOPPING|STARTING", array_started)
+        self.assertIn('awk \'$2 == "/mnt/user" || $2 ~ "^/mnt/disk[0-9]+$"', array_started)
+        self.assertIn("[ -d /boot/config ] && return 1", array_started)
+
+    def test_start_schedules_one_boot_settle_restart_for_media_configs(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+        start_kms = text[text.index("start_kms() {") : text.index("stop_kms() {")]
+
+        self.assertIn('BOOT_SETTLE_RESTART_DELAY="${BOOT_SETTLE_RESTART_DELAY:-90}"', text)
+        self.assertIn('BOOT_SETTLE_STAMP="${BOOT_SETTLE_STAMP:-/var/run/kms_mosaic.boot-settle-restart}"', text)
+        self.assertIn("schedule_boot_settle_restart()", text)
+        self.assertIn("boot_settle_restart_already_scheduled()", text)
+        self.assertIn('touch "$BOOT_SETTLE_STAMP"', text)
+        self.assertIn('"boot-settle-restart"', text)
+        self.assertIn("has_configured_media_requirements || return 0", text[text.index("schedule_boot_settle_restart() {") : text.index("launch_detached() {")])
+        self.assertIn("stop_kms", text[text.index("schedule_boot_settle_restart() {") : text.index("launch_detached() {")])
+        self.assertIn("start_kms || true", text[text.index("schedule_boot_settle_restart() {") : text.index("launch_detached() {")])
+        self.assertIn("schedule_boot_settle_restart", start_kms)
+
     def test_services_launch_in_isolated_sessions(self) -> None:
         text = SERVICE_SCRIPT.read_text(encoding="utf-8")
 
@@ -103,6 +151,22 @@ class UnraidServiceScriptTests(unittest.TestCase):
         self.assertIn('nohup setsid "$@" &', text)
         self.assertIn('launch_detached "$SELF" supervise-kms', text)
         self.assertIn('launch_detached "$SELF" supervise-web', text)
+        self.assertIn('setsid "$KMS_WRAPPER" --config "$CONFIG_PATH"', text)
+
+    def test_web_supervisor_recovers_when_webrtc_venv_appears(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+        supervise_web = text[text.index("supervise_web() {") : text.index("stop_supervisor() {")]
+
+        self.assertIn('WEB_RECOVERY_INTERVAL="${WEB_RECOVERY_INTERVAL:-30}"', text)
+        self.assertIn('WEB_PREFERRED_PY="${WEB_PREFERRED_PY:-/mnt/cache/appdata/kms_mosaic/venv/bin/python}"', text)
+        self.assertIn("web_preferred_python_ready()", text)
+        self.assertIn("web_pid_uses_preferred_python()", text)
+        self.assertIn("import aiortc", text)
+        self.assertIn("import av", text)
+        self.assertIn('local next_dependency_check=$SECONDS', supervise_web)
+        self.assertIn("web_preferred_python_ready && ! web_pid_uses_preferred_python", supervise_web)
+        self.assertIn('"restarting-for-webrtc-deps"', supervise_web)
+        self.assertIn('kill "$child"', supervise_web)
 
     def test_supervisors_record_and_restart_unexpected_exits(self) -> None:
         text = SERVICE_SCRIPT.read_text(encoding="utf-8")
@@ -175,6 +239,7 @@ class UnraidServiceScriptTests(unittest.TestCase):
                 env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
             try:
                 deadline = time.monotonic() + 5
@@ -232,6 +297,7 @@ class UnraidServiceScriptTests(unittest.TestCase):
                 env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
             try:
                 deadline = time.monotonic() + 8

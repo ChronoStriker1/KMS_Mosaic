@@ -711,6 +711,21 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertIn("if now >= next_lease_refresh:", reader_source)
         self.assertIn("next_lease_refresh = now + 0.25", reader_source)
 
+    def test_quality_preview_enforces_encoder_bitrate(self) -> None:
+        original = kms_mosaic_web.aiortc_h264
+        fake_h264 = SimpleNamespace()
+        try:
+            kms_mosaic_web.aiortc_h264 = fake_h264
+            self.assertEqual(
+                kms_mosaic_web.configure_h264_encoder_bitrate("quality"),
+                (8000, 12000, 2000),
+            )
+            self.assertEqual(fake_h264.DEFAULT_BITRATE, 8_000_000)
+            self.assertEqual(fake_h264.MAX_BITRATE, 12_000_000)
+            self.assertEqual(fake_h264.MIN_BITRATE, 2_000_000)
+        finally:
+            kms_mosaic_web.aiortc_h264 = original
+
     def test_pane_media_parser_clears_seeded_terminal_commands(self) -> None:
         text = textwrap.dedent(
             """

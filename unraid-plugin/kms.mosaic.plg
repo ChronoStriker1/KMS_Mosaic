@@ -2,13 +2,19 @@
 <PLUGIN
   name="kms.mosaic"
   author="OpenAI / chronostriker1"
-  version="2026.07.23.2"
+  version="2026.08.11"
   launch="Settings/KMSMosaic"
   pluginURL="https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/unraid-plugin/kms.mosaic.plg"
   icon="desktop"
   description="Direct-rendered DRM video wall and terminal compositor with pane layout editing, mpv-backed media panes, and live preview management from Unraid.">
 
 <CHANGES>
+###2026.08.11
+- Let Unraid finish booting when the array is stopped and configured media paths are unavailable.
+- Restart the preview service onto the WebRTC-capable Python venv when `/mnt/cache` becomes available after boot.
+- Raise Quality preview capture to a 1080-pixel edge and enforce an 8-12 Mbps H.264 encoder range.
+- Keep Balanced and Economy preview profiles available for lower-bandwidth clients.
+
 ###2026.07.23.2
 - Replace in-process config re-execs with fresh supervisor-managed processes.
 - Detect a live compositor that stops rendering and restart it automatically.
@@ -45,12 +51,12 @@
 - Host the full configuration UI directly inside the Unraid Settings page.
 </CHANGES>
 
-<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.07.23.2.tgz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.07.23.2.tgz</URL>
+<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.08.11.tgz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.08.11.tgz</URL>
 </FILE>
 
-<FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.07.23.2-x86_64-1.txz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.07.23.2-x86_64-1.txz</URL>
+<FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.08.11-x86_64-1.txz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.08.11-x86_64-1.txz</URL>
 </FILE>
 
 <FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic.cfg">
@@ -83,14 +89,14 @@ mkdir -p /usr/local/emhttp/plugins/kms.mosaic
 rm -rf /usr/local/emhttp/plugins/usr
 rm -rf /usr/local/emhttp/plugins/kms.mosaic.backup
 # Remove any older versioned artifacts from prior installs so only the current version remains.
-find /boot/config/plugins/kms.mosaic -maxdepth 1 -type f \( -name 'kms.mosaic-*.tgz' -o -name 'kms_mosaic-*-x86_64-1.txz' \) ! -name 'kms.mosaic-2026.07.23.2.tgz' ! -name 'kms_mosaic-2026.07.23.2-x86_64-1.txz' -delete 2>/dev/null || true
-tar --no-overwrite-dir --no-same-owner -xzf /boot/config/plugins/kms.mosaic/kms.mosaic-2026.07.23.2.tgz -C /
+find /boot/config/plugins/kms.mosaic -maxdepth 1 -type f \( -name 'kms.mosaic-*.tgz' -o -name 'kms_mosaic-*-x86_64-1.txz' \) ! -name 'kms.mosaic-2026.08.11.tgz' ! -name 'kms_mosaic-2026.08.11-x86_64-1.txz' -delete 2>/dev/null || true
+tar --no-overwrite-dir --no-same-owner -xzf /boot/config/plugins/kms.mosaic/kms.mosaic-2026.08.11.tgz -C /
 chown root:root /usr/local /usr/local/bin /usr/local/emhttp /usr/local/emhttp/plugins
 chown -R root:root /usr/local/emhttp/plugins/kms.mosaic
 chown root:root /usr/local/bin/kms_mosaic_web /usr/local/bin/kms_mosaic_web.py
 find /usr/local/emhttp/plugins/kms.mosaic -type d -exec chmod 0755 {} +
 find /usr/local/emhttp/plugins/kms.mosaic -type f -exec chmod 0644 {} +
-upgradepkg --install-new --reinstall /boot/config/plugins/kms.mosaic/kms_mosaic-2026.07.23.2-x86_64-1.txz
+upgradepkg --install-new --reinstall /boot/config/plugins/kms.mosaic/kms_mosaic-2026.08.11-x86_64-1.txz
 rm -f /usr/local/lib/kms_mosaic/libdrm*.so* \
       /usr/local/lib/kms_mosaic/libgbm.so* \
       /usr/local/lib/kms_mosaic/libEGL*.so* \
@@ -135,7 +141,7 @@ rm -f /tmp/start_kms_mosaic.log /tmp/kms_mosaic_web.log 2>/dev/null || true
 echo ""
 echo "-----------------------------------------------------------"
 echo " Plugin kms.mosaic is installed."
-echo " Version: 2026.07.23.2"
+echo " Version: 2026.08.11"
 echo "-----------------------------------------------------------"
 echo ""
 ]]>
