@@ -225,8 +225,8 @@ The preferred Unraid deployment path is now the native plugin under
 Plugin artifacts:
 
 - plugin manifest: `dist/kms.mosaic.plg`
-- plugin payload bundle: `dist/kms.mosaic-2026.07.23.2.tgz`
-- Linux package: `dist/kms_mosaic-2026.07.23.2-x86_64-1.txz`
+- plugin payload bundle: `dist/kms.mosaic-2026.08.11.tgz`
+- Linux package: `dist/kms_mosaic-2026.08.11-x86_64-1.txz`
 
 Build the plugin artifacts after building the Linux package:
 
@@ -246,12 +246,14 @@ with the Unraid `plugin install` command. The plugin:
 - retires the old `Start kms_mosaic` userscript automatically so boot ownership does not race
 - extracts plugin payloads without preserving foreign ownership metadata
 - keeps config-watch reloads on the wrapper path so packaged library resolution survives live reexecs
+- recovers the preview service after boot if it initially starts before the `/mnt/cache/appdata/kms_mosaic` Python venv is available, so WebRTC preview dependencies are restored without manual intervention
 
 Important operational note:
 
 - Stop and start must be sequential.
 - Do not use a parallel stop/start restart pattern.
 - Prefer `pkill -x kms_mosaic.bin`, wait briefly, then launch the plugin service or `/usr/local/bin/kms_mosaic` wrapper.
+- If the live preview UI loads but browser playback is blank after boot, check that the web process is running through `/mnt/cache/appdata/kms_mosaic/venv/bin/python`; the supervisor records `restarting-for-webrtc-deps` when it corrects this automatically.
 - A very fast restart can still lose DRM master and fail with `drmModeAtomicCommit (modeset): Permission denied`; a delayed second restart has been sufficient on the current Unraid host.
 - Do not re-enable the old userscript after installing the plugin, or both launch paths can race on boot.
 

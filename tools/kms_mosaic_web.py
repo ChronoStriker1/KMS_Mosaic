@@ -31,6 +31,7 @@ try:
     import av
     from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
     from aiortc.contrib.media import MediaRelay
+    from aiortc.codecs import h264 as aiortc_h264
     from aiortc.mediastreams import MediaStreamError
     from aiortc.rtcrtpsender import RTCRtpSender
 except ImportError:  # pragma: no cover
@@ -39,6 +40,7 @@ except ImportError:  # pragma: no cover
     RTCSessionDescription = None
     VideoStreamTrack = object
     MediaRelay = None
+    aiortc_h264 = None
     MediaStreamError = RuntimeError
     RTCRtpSender = None
 
@@ -60,6 +62,11 @@ DDC_CONTROL_CODES = {
     "contrast": (0x12, 0, 100),
     "input": (0x14, 1, 255),
     "power": (0xD6, 1, 5),
+}
+PREVIEW_PROFILES = {
+    "quality": (33, 1080, 8000, 12000, 2000),
+    "balanced": (33, 720, 5000, 8000, 1200),
+    "economy": (100, 480, 1800, 3000, 500),
 }
 
 
@@ -1625,20 +1632,21 @@ class HealthMonitor:
         }
 
 
-def write_preview_lease(app_config: WebConfig, interval_ms: int) -> None:
+def write_preview_lease(app_config: WebConfig, interval_ms: int, max_edge: int = 720) -> None:
     interval_ms = max(1, min(int(interval_ms), 1000))
-    write_text_atomic(app_config.preview_lease_path, f"{interval_ms}\n{time.time_ns()}\n")
+    max_edge = max(240, min(int(max_edge), 2160))
+    write_text_atomic(app_config.preview_lease_path, f"{interval_ms}\n{time.time_ns()}\n{max_edge}\n")
 
 
 def read_latest_raw_preview_frame(app_config: WebConfig, last_mtime_ns: int = 0, interval_ms: int = 16,
-                                  timeout_sec: float = 3.0) -> tuple[bytes, int]:
+                                  timeout_sec: float = 3.0, max_edge: int = 720) -> tuple[bytes, int]:
     output_path = app_config.snapshot_output_path
     now = time.monotonic()
     deadline = now + timeout_sec
     next_lease_refresh = now
     while now < deadline:
         if now >= next_lease_refresh:
-            write_preview_lease(app_config, interval_ms)
+            write_preview_lease(app_config, interval_ms, max_edge)
             next_lease_refresh = now + 0.25
         if output_path.exists():
             st = output_path.stat()
@@ -1683,6 +1691,16 @@ def preview_encode_dimensions(width: int, height: int, max_edge: int) -> tuple[i
     scaled_w = max(2, int(round(width * scale)))
     scaled_h = max(2, int(round(height * scale)))
     return scaled_w - scaled_w % 2, scaled_h - scaled_h % 2
+
+
+def configure_h264_encoder_bitrate(profile: str) -> tuple[int, int, int]:
+    selected = profile if profile in PREVIEW_PROFILES else "balanced"
+    _, _, start_kbps, max_kbps, min_kbps = PREVIEW_PROFILES[selected]
+    if aiortc_h264 is not None:
+        aiortc_h264.DEFAULT_BITRATE = start_kbps * 1000
+        aiortc_h264.MAX_BITRATE = max_kbps * 1000
+        aiortc_h264.MIN_BITRATE = min_kbps * 1000
+    return start_kbps, max_kbps, min_kbps
 
 
 def boost_h264_bitrate_sdp(sdp: str, start_kbps: int = 8000, max_kbps: int = 12000, min_kbps: int = 2000) -> str:
@@ -1752,13 +1770,8 @@ class RawPreviewVideoTrack(VideoStreamTrack):
         self.max_edge = 720
 
     def configure(self, profile: str) -> str:
-        profiles = {
-            "quality": (16, 720),
-            "balanced": (33, 720),
-            "economy": (100, 480),
-        }
-        selected = profile if profile in profiles else "balanced"
-        self.interval_ms, self.max_edge = profiles[selected]
+        selected = profile if profile in PREVIEW_PROFILES else "balanced"
+        self.interval_ms, self.max_edge = PREVIEW_PROFILES[selected][:2]
         return selected
 
     async def recv(self) -> av.VideoFrame:
@@ -1771,6 +1784,7 @@ class RawPreviewVideoTrack(VideoStreamTrack):
                 self.last_mtime_ns,
                 self.interval_ms,
                 2.0,
+                self.max_edge,
             )
             width, height, rgba = decode_raw_preview_frame(frame_bytes)
             frame = av.VideoFrame(width, height, "rgba")
@@ -1887,6 +1901,7 @@ class WebRTCBridge:
             if self.preview_source is None:
                 raise RuntimeError("WebRTC preview source is unavailable")
             selected_profile = self.preview_source.configure(preview_profile)
+            start_kbps, max_kbps, min_kbps = configure_h264_encoder_bitrate(selected_profile)
             track = self.relay.subscribe(self.preview_source) if self.relay is not None else self.preview_source
             sender = pc.addTrack(track)
             transceiver = next(
@@ -1914,12 +1929,6 @@ class WebRTCBridge:
             await self._wait_for_ice_complete(pc)
             assert pc.localDescription is not None
             self.peer_expiry[pc] = asyncio.create_task(self._expire_peer(pc, peer_id))
-            bitrate_profiles = {
-                "quality": (8000, 12000, 2000),
-                "balanced": (5000, 8000, 1200),
-                "economy": (1800, 3000, 500),
-            }
-            start_kbps, max_kbps, min_kbps = bitrate_profiles[selected_profile]
             return {
                 "sdp": boost_h264_bitrate_sdp(pc.localDescription.sdp, start_kbps, max_kbps, min_kbps),
                 "type": pc.localDescription.type,
@@ -3206,7 +3215,7 @@ HTML = r"""<!doctype html>
             <label>Preview
               <select id="previewProfile">
                 <option value="auto">Auto</option>
-                <option value="quality">Quality · 60 fps</option>
+                <option value="quality">Quality · high detail · 30 fps</option>
                 <option value="balanced">Balanced · 30 fps</option>
                 <option value="economy">Economy · 10 fps</option>
               </select>
@@ -3484,7 +3493,7 @@ HTML = r"""<!doctype html>
       const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
       if (connection?.saveData || ["slow-2g", "2g"].includes(connection?.effectiveType)) return "economy";
       if (Number(navigator.deviceMemory || 8) <= 2) return "economy";
-      return "balanced";
+      return "quality";
     }
 
     try {

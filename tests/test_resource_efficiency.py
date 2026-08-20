@@ -48,7 +48,9 @@ class ResourceEfficiencyTests(unittest.TestCase):
 
     def test_preview_downscales_before_reusable_readback(self) -> None:
         self.assertIn("render_gl_write_preview_frame(", FRAME_C)
-        self.assertIn("logical_w, logical_h, 720", FRAME_C)
+        self.assertIn("logical_w, logical_h, snapshot_max_edge", FRAME_C)
+        self.assertIn("app_snapshot_watch_max_edge(&snap_watch)", APP_C)
+        self.assertIn("watch->stream_max_edge = parsed", APP_C)
         self.assertIn("ctx->preview_pixels_cap < pixel_bytes", RENDER_GL_C)
         self.assertIn("glBindFramebuffer(GL_FRAMEBUFFER, ctx->preview_fbo);", RENDER_GL_C)
 
@@ -228,11 +230,15 @@ class ResourceEfficiencyTests(unittest.TestCase):
     def test_preview_profiles_trade_cadence_and_resolution_without_polling_when_idle(self) -> None:
         web_source = (ROOT / "tools" / "kms_mosaic_web.py").read_text(encoding="utf-8")
 
-        self.assertIn('"quality": (16, 720)', web_source)
-        self.assertIn('"balanced": (33, 720)', web_source)
-        self.assertIn('"economy": (100, 480)', web_source)
+        self.assertIn('"quality": (33, 1080, 8000, 12000, 2000)', web_source)
+        self.assertIn('"balanced": (33, 720, 5000, 8000, 1200)', web_source)
+        self.assertIn('"economy": (100, 480, 1800, 3000, 500)', web_source)
+        self.assertIn("aiortc_h264.DEFAULT_BITRATE = start_kbps * 1000", web_source)
+        self.assertIn("aiortc_h264.MAX_BITRATE = max_kbps * 1000", web_source)
+        self.assertIn("write_preview_lease(app_config, interval_ms, max_edge)", web_source)
         self.assertIn('id="previewProfile"', web_source)
         self.assertIn("connection?.saveData", web_source)
+        self.assertIn('return "quality";', web_source)
         self.assertIn("preview_profile: resolvedPreviewProfile()", web_source)
         self.assertIn("if not self.peers and self.preview_source is not None:", web_source)
 

@@ -108,6 +108,7 @@ typedef struct {
     bool request_exists;
     bool request_pending;
     int stream_interval_ms;
+    int stream_max_edge;
     double stream_next_frame_sec;
     bool stream_active;
     double next_check_sec;
@@ -442,6 +443,7 @@ static void app_snapshot_watch_init(snapshot_watch *watch) {
     watch->lease_path = "/tmp/kms_mosaic_preview.active";
     watch->output_path = "/tmp/kms_mosaic_preview.rgba";
     watch->stream_interval_ms = 16;
+    watch->stream_max_edge = 720;
     watch->next_check_sec = app_now_sec();
 }
 
@@ -456,6 +458,13 @@ static int app_snapshot_watch_interval_ms(const snapshot_watch *watch) {
     if (watch->stream_interval_ms < 1) return 1;
     if (watch->stream_interval_ms > 1000) return 1000;
     return watch->stream_interval_ms;
+}
+
+static int app_snapshot_watch_max_edge(const snapshot_watch *watch) {
+    if (!watch) return 720;
+    if (watch->stream_max_edge < 240) return 240;
+    if (watch->stream_max_edge > 2160) return 2160;
+    return watch->stream_max_edge;
 }
 
 static void app_snapshot_watch_poll(snapshot_watch *watch) {
@@ -511,6 +520,12 @@ static void app_snapshot_watch_poll(snapshot_watch *watch) {
             if (fgets(line, sizeof(line), fp)) {
                 int parsed = atoi(line);
                 if (parsed > 0) watch->stream_interval_ms = parsed;
+            }
+            /* The second line is the writer timestamp for diagnostics. */
+            if (!fgets(line, sizeof(line), fp)) line[0] = '\0';
+            if (fgets(line, sizeof(line), fp)) {
+                int parsed = atoi(line);
+                if (parsed > 0) watch->stream_max_edge = parsed;
             }
             fclose(fp);
         }
@@ -1016,7 +1031,7 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
                          scene.slot_layouts, scene.pane_layouts, scene.pane_count, scene.logical_w, scene.logical_h,
                          scene.fb_w, scene.fb_h, scene.screen_w, scene.screen_h, scene.pane_font_px,
                          use_mpv, scene.pane_ready, *debug,
-                         snapshot_path, &snapshot_written);
+                         snapshot_path, app_snapshot_watch_max_edge(&snap_watch), &snapshot_written);
             rt.render_dirty = ui.layout_reinit_countdown > 0;
         }
         if (snapshot_written) {

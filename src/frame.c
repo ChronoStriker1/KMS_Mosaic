@@ -20,7 +20,7 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
                   int logical_h, int fb_w, int fb_h, int screen_w, int screen_h,
                   const int *pane_font_px, bool use_mpv,
                   const bool *pane_ready, bool debug,
-                  const char *snapshot_path, bool *snapshot_written) {
+                  const char *snapshot_path, int snapshot_max_edge, bool *snapshot_written) {
     (void)slot_layouts;
     bool has_pane_media = false;
     for (int i = 0; i < pane_count; ++i) {
@@ -180,7 +180,7 @@ void frame_render(const options_t *opt, runtime_state *rt, render_gl_ctx *rg, me
 
     if (snapshot_path && snapshot_written && !rt->direct_mode) {
         *snapshot_written = render_gl_write_preview_frame(rg, snapshot_path, rg->rt_tex,
-                                                          logical_w, logical_h, 720);
+                                                          logical_w, logical_h, snapshot_max_edge);
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
