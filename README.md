@@ -1,281 +1,157 @@
-KMS Mosaic
-==========
+# KMS Mosaic
 
-Direct-to-KMS video + terminal compositor for the Linux console.
+KMS Mosaic displays video and terminal panes directly on a Linux console using DRM/KMS. It is useful for a dedicated monitor showing media, system statistics, and logs without a desktop session.
 
-It uses DRM/KMS + GBM + EGL/GLES2 for scanout, libmpv for video rendering, and
-libvterm for terminal panes. Every pane uses the same indexed model and can be
-configured as either a terminal or an independent mpv media pane.
+Each pane can run a terminal command or an independent mpv media queue. The companion web interface edits layouts and playlists, controls playback, and shows a live preview. An Unraid plugin integrates the controls into the server's Settings page.
 
-The runtime is modular now. The old single-file compositor has been split into:
+## Features
 
-- `src/kms_mosaic.c`: process entrypoint and signal wiring
-- `src/app.c`: application lifecycle, startup, loop, cleanup
-- `src/display.c`: DRM/GBM/EGL setup and page flips
-- `src/media.c`: libmpv setup, wakeups, playlist FIFO handling
-- `src/render_gl.c`: GL render-target and blit helpers
-- `src/frame.c`: per-frame composition and presentation
-- `src/panes.c`: terminal-pane creation, font sizing, layout sync
-- `src/layout.c`: geometric layout computation
-- `src/options.c`: CLI/config parsing and config save path
-- `src/runtime.c`: pollfd/runtime state helpers
-- `src/ui.c`: OSD focus and fullscreen-cycle state
-- `src/term_pane.c`: libvterm terminal emulation and texture updates
+- Configurable pane counts from 1 to 64, split layouts, overlays, and display rotation.
+- Independent media panes with playlists, FIFOs, audio settings, and mpv options.
+- Drag-and-resize Layout Studio with snapping and undo/redo.
+- Named scenes and schedules, OSD, fullscreen selection, and fullscreen cycling.
+- Playback watchdogs, pane restart controls, and synchronization groups.
+- WebRTC preview, configuration history, and supported DDC/CI monitor controls.
 
-Status
-------
+## How it works
 
-Implemented:
+The C compositor uses DRM/KMS for display ownership, GBM and EGL/GLES2 for rendering, libmpv for video, and libvterm for terminal emulation. Terminal commands run in PTYs. An event-driven loop handles input from those processes, media updates, configuration changes, and display presentation.
 
-- Event-driven PTY polling through the compositor `poll(2)` loop
-- Event-driven config and control-file watching on Linux
-- In-process reloads for layout, OSD, fullscreen, and other display-only changes
-- Wrapper-based self-reexec when a config change requires media/process reconstruction
-- Bounded hash-backed terminal glyph cache
-- libvterm damage callbacks for pane redraw tracking
-- Indexed pane-array plumbing through `app`, `frame`, and `panes` instead of separate A/B argument chains
-- Slot-indexed layout output through `layout`, `app`, and `frame` instead of named `video` / `pane_a` / `pane_b` layout fields
-- Indexed pane pollfd handling through `runtime` instead of dedicated pane-A/pane-B poll slots
-- User-facing variable terminal pane counts
-- Runtime pane, scene, UI, and pollfd storage now allocates from the configured pane count instead of fixed-cap live buffers
-- Option parsing and layout output now allocate pane/role storage dynamically, including generic `--pane N "CMD"` support
-- Consistent user-facing pane indices across config parsing, split trees, rendering, preview, and the Layout Studio
-- Independent pane-local mpv render targets so differently sized video panes do not thrash one shared FBO
-- Pane-local playback watchdogs, manual restart controls, and synchronization groups
-- Config-driven OSD and fullscreen-pane selection; interactive console controls are intentionally removed
-- DRM atomic modesetting with optional nonblocking flips
-- Containerized Linux build path from macOS and other non-Linux hosts
-- Unraid deployment workflow through a native Unraid plugin with start/stop and a native settings page that hosts the full editor through same-origin plugin proxies
+The Python web service runs separately from the compositor. It writes configuration atomically and streams captured compositor frames over WebRTC. Layout and display-only changes can apply in process; changes that rebuild media or child processes use the packaged restart path.
 
-Still not implemented:
+## Requirements
 
-- Richer layout families for very large pane counts
-- More polished naming/help text for very high pane counts
-- Further terminal rendering/performance tuning under heavy Unicode and scroll load
+- Linux with a working DRM/KMS graphics driver, an attached display, and permission to control the selected DRM device.
+- Available DRM display ownership. An active desktop compositor can prevent KMS Mosaic from acquiring it.
+- The commands used by terminal panes, such as `btop`, installed on the host.
+- For source builds: a C compiler, Make, pkg-config, and the development libraries listed below.
+- For the optional web preview: Python 3 with aiortc and PyAV.
 
-Build
------
+macOS can build the Linux package through Docker, but cannot run the DRM/KMS compositor.
 
-Native build on Linux:
+## Install on Unraid
+
+In Unraid, open **Plugins → Install Plugin** and use this manifest URL:
+
+```text
+https://raw.githubusercontent.com/ChronoStriker1/KMS_Mosaic/main/unraid-plugin/kms.mosaic.plg
+```
+
+The manifest downloads its matching binary package and web payload. After installation, open **Settings → KMS Mosaic**, configure the display and panes, save, and start the service.
+
+The plugin manages compositor and web-service startup. Do not run a second compositor or re-enable an older startup userscript alongside it.
+
+Configuration lives at:
+
+- `/boot/config/kms_mosaic.conf` for pane and display settings.
+- `/boot/config/plugins/kms.mosaic/kms.mosaic.cfg` for plugin settings.
+
+Use the plugin's controls to stop or restart. Stop and start must complete sequentially so the old process releases the display.
+
+## Build from source
+
+```sh
+git clone https://github.com/ChronoStriker1/KMS_Mosaic.git
+cd KMS_Mosaic
+```
+
+On Linux, install development packages providing these pkg-config modules:
+
+```text
+libdrm gbm egl glesv2 mpv vterm freetype2 fontconfig
+```
+
+Then:
 
 ```sh
 make
 ```
 
-Required development packages:
-
-- `libdrm`
-- `gbm`
-- `egl`
-- `glesv2`
-- `libmpv`
-- `libvterm`
-- `freetype2`
-- `fontconfig`
-- `pkg-config`
-- C toolchain
-
-Preferred validation/build path on macOS or other non-Linux hosts:
+For a containerized Linux build, start Docker and run:
 
 ```sh
 scripts/macos_build_pkg.sh
 ```
 
-That path builds inside Docker and produces a Linux binary plus a Slackware-style
-package under `dist/`.
-
-Run
----
-
-Examples:
-
-```sh
-./kms_mosaic --video /path/to/video.mp4
-./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90
-./kms_mosaic --no-config --smooth --loop --video-rotate 270 --panscan 1 --layout 2x1 --video /path/to/movie.mp4
-./kms_mosaic --no-video --pane-a "btop" --pane-b "journalctl -f" --font-size 22
-./kms_mosaic --pane-count 4 --pane-c "htop" --pane-d "watch sensors"
-./kms_mosaic --pane-count 6 --pane 5 "watch -n1 sensors" --pane 6 "iftop"
-./kms_mosaic --pane-media 2 --pane-video 2 /mnt/user/video/clip.mp4
-./kms_mosaic --pane-media 3 --pane-playlist 3 /boot/config/pane3.m3u
-./kms_mosaic --pane-media 2 --pane-playlist-fifo 2 /tmp/pane2.fifo --pane-media 3 --pane-playlist-fifo 3 /tmp/pane3.fifo
-./kms_mosaic --pane-media 2 --pane-mpv-opt 2 mute=yes --pane-mpv-opt 2 video-rotate=90
-./kms_mosaic --playlist-extended mylist.txt --loop-playlist --shuffle
-./kms_mosaic --playlist-fifo /tmp/mosaic.fifo --mpv-out /tmp/mpv.log
-./kms_mosaic --config /path/profile.conf
-./kms_mosaic --save-config-default
-./kms_mosaic --layout overlay /path/to/video.mp4
-```
-
-Web UI
-------
-
-There is also a companion web control surface:
-
-```sh
-python3 tools/kms_mosaic_web.py --config /boot/config/kms_mosaic.conf --host 0.0.0.0 --port 8788
-```
-
-That service:
-
-- reads the active `kms_mosaic.conf`
-- streams the live compositor preview into the browser over WebRTC
-- mirrors the exact live preview stream beneath the Layout Studio pane outlines so the editor, preview, and physical output share the same content and coordinates
-- exposes a pane-oriented Layout Studio with drag/drop placement, edge/corner resize handles, snapping, and undo/redo for the saved `--split-tree`
-- lets you add/remove panes, switch panes between terminal and mpv, and edit each mpv pane's media queue from an explicit playlist target bar instead of tying queue edits to the selected studio pane
-- lets you attach pane-local mpv options to mpv panes so each media pane can override the global mpv defaults
-- lets each mpv pane keep its own playlist file or playlist FIFO so multiple mpv panes do not share one live queue
-- exposes the same structured mpv controls on the video pane and extra mpv panes so playlist, playlist-extended, fifo, mute, loop-file, audio, video-only/audio-only mode, shader settings, mpv log output, panscan, and video rotation stay consistent across all media panes
-- gives the Media section its own pane target bar, so the same per-mpv-pane fields are editable there instead of only through the selected pane inspector
-- exposes structured pane-local mpv controls in the pane inspector for audio, mute, loop-file, video-only/audio-only mode, and shader stacks while preserving a smaller raw per-pane options box for anything else
-- exposes pane-local watchdog, synchronization-group, and restart controls
-- rotates playlist preview thumbnails to match the effective KMS rotation plus pane-specific video rotation instead of always rendering them upright
-- sizes playlist thumbnails from the selected pane's actual layout geometry and panscan behavior, including portrait-pane treatments
-- keeps playlist thumbnails fitted inside their preview frame, overlays video durations on the preview, and moves bulk queue editing into a collapsed section under the playlist editor
-- keeps the terminal-pane command editor focused on terminal panes only, so mpv panes are configured through the playlist/media surfaces instead of the Panes section
-- lets you split the selected pane vertically or horizontally from the studio itself
-- treats the old layout presets as starter suggestions instead of the main editing surface
-- moves scene rules, raw config, and raw mpv option text under Advanced
-- saves, applies, schedules, and deletes named scenes
-- reports compositor/web/GPU health, recent errors, and recovery state
-- provides config history with diff and rollback actions
-- provides DDC/CI monitor power, input, brightness, and contrast controls when supported by the display
-- exposes playback OSD, OSD source pane, fullscreen pane, and fullscreen cycling on the config page
-- exposes common global mpv controls such as audio mode and shader stack as structured fields
-- shows inline playlist previews in the queue editor using browser-decoded media frames served from the Unraid host
-- writes config changes back atomically
-- relies on the compositor's file-watch reload path to apply changes live
-
-It is intentionally separate from the KMS compositor process so web serving
-does not destabilize scanout or the media render loop.
-
-Current limitation:
-
-- The browser preview is a true content mirror of compositor capture, but capture and encode are not yet a zero-copy path.
-
-Defaults:
-
-- Pane A default command: `btop --utf-force`
-- Pane B default command: `tail -F /var/log/syslog -n 500`
-  - Fallbacks: `journalctl -f`, then `/var/log/messages`
-- Supported pane count range: `1-64` via `--pane-count N`
-- Single-video runs auto-enable loop mode unless a playlist is in use
-
-Runtime control
----------------
-
-Runtime behavior is managed through the plugin config page. Layout changes,
-pane selection, OSD, fullscreen behavior, media queues, pane restart, scenes,
-monitor controls, and service actions do not require console keyboard access.
-Options that cannot be represented through the config page are not exposed as
-interactive runtime controls.
-
-Layouts
--------
-
-- `stack`: three rows
-- `row`: three columns
-- `2x1`: left column split, right full-height
-- `1x2`: left full-height, right column split
-- `2over1`: top row split, bottom full-width
-- `1over2`: top full-width, bottom row split
-- `overlay`: full-screen video with both panes alpha-blended on top
-
-Atomic modesetting
-------------------
-
-- `--atomic`: enable DRM atomic modesetting
-- `--atomic-nonblock`: enable nonblocking atomic flips
-- `--gl-finish`: force `glFinish()` before flips
-
-If atomic init fails, the compositor falls back to legacy KMS.
-
-Configuration
--------------
-
-Default config path:
-
-- Unraid: `/boot/config/kms_mosaic.conf`
-- Elsewhere: `$XDG_CONFIG_HOME/kms_mosaic.conf`
-- Fallback: `~/.config/kms_mosaic.conf`
-
-Config files use the same CLI flags as the command line and support quoting plus
-`#` comments.
-
-When the active config changes, layout/UI-only settings are applied in-process
-without rebuilding media panes. Changes to pane types, commands, queues, or
-other process-level settings trigger a self-reexec through the packaged wrapper
-so shared-library resolution and launch arguments remain stable.
-
-Debugging
----------
-
-- `KMS_MPV_DEBUG=1`: verbose logs
-- `KMS_MPV_DIRECT=1`: direct mpv-to-default-FB path
-- `KMS_MPV_DIRECT_FBO=1`: direct mode via an intermediate FBO
-- `KMS_MPV_DIRECT_TEST=1`: diagnostic direct-mode red frame path
-- `KMS_MPV_FLIPY=1`: flip mpv direct rendering vertically
-
-Unraid notes
-------------
-
-The preferred Unraid deployment path is now the native plugin under
-`unraid-plugin/`, not the old userscript.
-
-Plugin artifacts:
-
-- plugin manifest: `dist/kms.mosaic.plg`
-- plugin payload bundle: `dist/kms.mosaic-2026.08.11.tgz`
-- Linux package: `dist/kms_mosaic-2026.08.11-x86_64-1.txz`
-
-Build the plugin artifacts after building the Linux package:
+This defaults to `linux/amd64` and produces a Linux binary and Slackware-style package under `dist/`. To build the Unraid payload after that package exists:
 
 ```sh
 scripts/build_unraid_plugin.sh
 ```
 
-On the Unraid host, install the generated `.plg` through the Plugins page or
-with the Unraid `plugin install` command. The plugin:
+The plugin builder uses GNU tar options. On macOS, install GNU tar and place it on PATH for that command, for example:
 
-- installs the packaged `kms_mosaic` binary
-- installs the web UI under `/usr/local/bin/kms_mosaic_web.py`
-- adds an Unraid settings entry for `KMS Mosaic`, and the Plugins tab launches that same page directly
-- proxies the standalone editor APIs through the plugin page so the full layout/media/playlist editor runs inside the Unraid settings page instead of an iframe
-- manages boot/start/stop/restart for both `kms_mosaic` and the web UI
-- stores plugin settings in `/boot/config/plugins/kms.mosaic/kms.mosaic.cfg`
-- retires the old `Start kms_mosaic` userscript automatically so boot ownership does not race
-- extracts plugin payloads without preserving foreign ownership metadata
-- keeps config-watch reloads on the wrapper path so packaged library resolution survives live reexecs
-- recovers the preview service after boot if it initially starts before the `/mnt/cache/appdata/kms_mosaic` Python venv is available, so WebRTC preview dependencies are restored without manual intervention
+```sh
+brew install gnu-tar
+PATH="$(brew --prefix gnu-tar)/libexec/gnubin:$PATH" scripts/build_unraid_plugin.sh
+```
 
-Important operational note:
+## Run on Linux
 
-- Stop and start must be sequential.
-- Do not use a parallel stop/start restart pattern.
-- Prefer `pkill -x kms_mosaic.bin`, wait briefly, then launch the plugin service or `/usr/local/bin/kms_mosaic` wrapper.
-- If the live preview UI loads but browser playback is blank after boot, check that the web process is running through `/mnt/cache/appdata/kms_mosaic/venv/bin/python`; the supervisor records `restarting-for-webrtc-deps` when it corrects this automatically.
-- A very fast restart can still lose DRM master and fail with `drmModeAtomicCommit (modeset): Permission denied`; a delayed second restart has been sufficient on the current Unraid host.
-- Do not re-enable the old userscript after installing the plugin, or both launch paths can race on boot.
+Start from a console session with access to the DRM device. Use a media file that exists on that machine:
 
-Release workflow
-----------------
+```sh
+./kms_mosaic --no-config --video /path/to/video.mp4
+```
 
-For every program update:
+Examples:
 
-1. Run the full automated test suite and build the Linux package.
-2. Rebuild the Unraid plugin so its web payload and native-package reference match the current build.
-3. Copy the completed artifacts to TOWER and install both the native package and plugin payload.
-4. Restart services sequentially when required; never overlap stop and start.
-5. Verify the installed hashes, service health, physical display, advancing compositor frames, WebRTC preview, and pane/content alignment on TOWER.
-6. Commit and push to GitHub only after the deployed version passes those checks.
+```sh
+# Terminal panes without video
+./kms_mosaic --no-config --no-video --pane-a "btop" --pane-b "journalctl -f"
 
-Roadmap
--------
+# Portrait display
+./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90
 
-High-value remaining work:
+# A separate media queue in pane 2
+./kms_mosaic --pane-media 2 --pane-playlist 2 /path/to/playlist.m3u
 
-- Add more intentional layouts for higher pane counts instead of relying mostly on split-and-tile behavior
-- Continue expanding structured mpv controls where a commonly used option still requires raw text
-- Pursue lower-copy preview capture/encoding where supported by the host graphics and codec stack
-- Keep tightening terminal performance under heavy Unicode and scroll loads
-- Simplify pane naming/help text so higher-count configurations read more naturally in the UI and saved configs
+# More terminal panes
+./kms_mosaic --pane-count 6 --pane 5 "watch -n1 sensors" --pane 6 "iftop"
+
+# Read an explicit profile
+./kms_mosaic --config /path/to/profile.conf
+```
+
+Replace connector names, modes, commands, and file paths to match the host. A single video loops automatically unless a playlist is in use. See `./kms_mosaic --help` for the available options.
+
+For packaged Unraid installations, use `/usr/local/bin/kms_mosaic`, which sets up library paths, instead of the internal `kms_mosaic.bin`.
+
+## Web interface
+
+On Unraid, use the installed Settings page and managed web service. For a standalone Linux checkout:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install aiortc av
+.venv/bin/python tools/kms_mosaic_web.py --config "$HOME/.config/kms_mosaic.conf" --host 127.0.0.1 --port 8788
+```
+
+Open `http://127.0.0.1:8788`. Start the compositor with that same config path for changes to affect the display.
+
+The web service can edit terminal commands and local media settings. Bind it to a trusted interface and restrict access if you expose it to other computers. Changing `--host` to `0.0.0.0` listens on all interfaces.
+
+Preview requires a running compositor and the WebRTC dependencies. Capture and encoding are not zero-copy, so preview quality can add CPU cost.
+
+## Configuration
+
+Config files contain the same flags as the command line, with quoting and `#` comments. The default path is `/boot/config/kms_mosaic.conf` on Unraid, otherwise `$XDG_CONFIG_HOME/kms_mosaic.conf` or `~/.config/kms_mosaic.conf`.
+
+Starter layouts include `stack`, `row`, `2x1`, `1x2`, `2over1`, `1over2`, and `overlay`. Layout Studio saves custom split trees for more detailed arrangements.
+
+Atomic modesetting is available through `--atomic` and `--atomic-nonblock`; initialization falls back to legacy KMS if atomic setup fails.
+
+## Troubleshooting
+
+- **DRM permission or display-ownership error:** check device permissions and competing display processes. After stopping a previous instance, allow it to exit before restarting.
+- **Missing shared library on Unraid:** launch through the installed wrapper and ensure the binary and plugin payload belong to the same package.
+- **Blank preview:** confirm the compositor is producing frames and the web service uses a Python environment with aiortc/PyAV.
+- **Empty terminal pane:** check that the configured command exists and runs as the service user.
+- **Slow media transitions:** test without expensive shader stacks or forced hardware-decoding overrides.
+- **DDC/CI controls unavailable:** the monitor, connection, and host I2C permissions must support them.
+
+The Unraid supervisors retain recent application output in `/tmp/start_kms_mosaic.log` and `/tmp/kms_mosaic_web.log`, plus lifecycle events in `/boot/config/plugins/kms.mosaic/lifecycle.log`.
+
+## Source layout
+
+`src/` contains the compositor's display, media, layout, terminal, and rendering modules. `tools/kms_mosaic_web.py` contains the web editor and preview service. `unraid-plugin/` contains the plugin integration, and `tests/` contains automated checks.
