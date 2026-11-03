@@ -29,12 +29,12 @@ class UnraidActionsProxyTests(unittest.TestCase):
             "/api/scenes",
             "/api/templates",
             "/api/panes/restart",
-            "/api/monitors/set",
             "/api/history/diff",
             "/api/webrtc-close",
             "/api/webrtc-keepalive",
         ):
             self.assertIn(f"'{path}'", src)
+        self.assertNotIn("/api/monitors", src)
         self.assertIn("proxy_backend_request($method, $backend . $path, $body, $content_type)", src)
 
 

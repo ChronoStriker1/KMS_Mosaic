@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import difflib
-import fcntl
 from fractions import Fraction
 import hashlib
 import io
@@ -55,14 +54,6 @@ WEB_STATE_PREFIX = "# kms_mosaic_web_state "
 THUMB_CACHE_MAX_BYTES = 64 * 1024 * 1024
 THUMB_CACHE_MAX_FILES = 512
 THUMB_CACHE_MAX_AGE_SEC = 7 * 24 * 60 * 60
-DDC_I2C_ADDRESS = 0x37
-DDC_I2C_SLAVE_FORCE = 0x0706
-DDC_CONTROL_CODES = {
-    "brightness": (0x10, 0, 100),
-    "contrast": (0x12, 0, 100),
-    "input": (0x14, 1, 255),
-    "power": (0xD6, 1, 5),
-}
 PREVIEW_PROFILES = {
     "quality": (33, 1080, 8000, 12000, 2000),
     "balanced": (33, 720, 5000, 8000, 1200),
@@ -133,79 +124,6 @@ def list_connectors() -> list[dict[str, Any]]:
         if connectors:
             return connectors
     return []
-
-
-def _edid_monitor_name(data: bytes) -> str:
-    for offset in range(54, min(len(data), 126), 18):
-        descriptor = data[offset:offset + 18]
-        if len(descriptor) == 18 and descriptor[:3] == b"\0\0\0" and descriptor[3] == 0xFC:
-            return descriptor[5:18].decode("ascii", errors="ignore").strip(" \0\n\r")
-    return ""
-
-
-def list_ddc_monitors(
-    sysfs_root: Path = Path("/sys/class/drm"),
-    dev_root: Path = Path("/dev"),
-) -> list[dict[str, Any]]:
-    monitors: list[dict[str, Any]] = []
-    for status_path in sorted(sysfs_root.glob("card*-*/status")):
-        try:
-            if status_path.read_text(encoding="utf-8").strip() != "connected":
-                continue
-        except OSError:
-            continue
-        connector_dir = status_path.parent
-        connector = connector_dir.name.split("-", 1)[-1]
-        ddc_path = connector_dir / "ddc"
-        try:
-            bus_name = Path(os.path.realpath(ddc_path)).name
-        except OSError:
-            continue
-        if not re.fullmatch(r"i2c-\d+", bus_name):
-            continue
-        bus_path = dev_root / bus_name
-        try:
-            edid = (connector_dir / "edid").read_bytes()
-        except OSError:
-            edid = b""
-        model = _edid_monitor_name(edid)
-        monitors.append({
-            "connector": connector,
-            "model": model,
-            "label": f"{connector} · {model}" if model else connector,
-            "bus": str(bus_path),
-            "available": bus_path.exists() and os.access(bus_path, os.R_OK | os.W_OK),
-        })
-    return monitors
-
-
-def build_ddc_vcp_message(control: str, value: int) -> bytes:
-    if control not in DDC_CONTROL_CODES:
-        raise ValueError("Unsupported monitor control")
-    code, minimum, maximum = DDC_CONTROL_CODES[control]
-    value = int(value)
-    if value < minimum or value > maximum:
-        raise ValueError(f"{control.capitalize()} must be between {minimum} and {maximum}")
-    if control == "power" and value not in (1, 4, 5):
-        raise ValueError("Power must be on, off, or standby")
-    payload = [0x51, 0x84, 0x03, code, (value >> 8) & 0xFF, value & 0xFF]
-    checksum = 0x6E
-    for byte in payload:
-        checksum ^= byte
-    return bytes(payload + [checksum])
-
-
-def write_ddc_control(bus_path: str, control: str, value: int) -> None:
-    if not re.fullmatch(r"/dev/i2c-\d+", bus_path):
-        raise ValueError("Invalid DDC bus")
-    message = build_ddc_vcp_message(control, value)
-    fd = os.open(bus_path, os.O_RDWR)
-    try:
-        fcntl.ioctl(fd, DDC_I2C_SLAVE_FORCE, DDC_I2C_ADDRESS)
-        if os.write(fd, message) != len(message):
-            raise OSError("Incomplete DDC/CI write")
-    finally:
-        os.close(fd)
 
 
 def write_text_atomic(target_path: Path, text: str) -> None:
@@ -2478,14 +2396,6 @@ HTML = r"""<!doctype html>
     .health-processes, .health-errors { margin-top: 10px; font: 11px/1.5 "Menlo", "Consolas", monospace; white-space: pre-wrap; }
     .health-ok { color: #4a8c5c; }
     .health-bad { color: var(--danger); }
-    .monitor-controls { display: grid; gap: 10px; }
-    .monitor-control-row {
-      display: grid;
-      grid-template-columns: minmax(150px, 1fr) auto;
-      gap: 8px;
-      align-items: end;
-    }
-    .monitor-power-actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .remote-shell { display: none; max-width: 620px; margin: 0 auto; padding: 12px; }
     body.remote-mode .shell { display: none; }
     body.remote-mode .remote-shell { display: grid; gap: 12px; }
@@ -3269,45 +3179,6 @@ HTML = r"""<!doctype html>
             <div class="health-grid" id="healthGrid"></div>
             <div class="health-processes" id="healthProcesses"></div>
             <div class="health-errors" id="healthErrors"></div>
-          </div>
-        </details>
-
-        <details class="advanced-block panel-wide" id="monitorPanel">
-          <summary>Monitor Controls</summary>
-          <div class="advanced-body monitor-controls">
-            <label>Connected Display
-              <select id="monitorConnector"><option value="">Open panel to discover displays…</option></select>
-            </label>
-            <div class="monitor-control-row">
-              <label>Brightness
-                <input id="monitorBrightness" type="number" min="0" max="100" value="100" />
-              </label>
-              <button type="button" class="secondary" data-monitor-control="brightness" data-monitor-value-id="monitorBrightness">Apply</button>
-            </div>
-            <div class="monitor-control-row">
-              <label>Contrast
-                <input id="monitorContrast" type="number" min="0" max="100" value="100" />
-              </label>
-              <button type="button" class="secondary" data-monitor-control="contrast" data-monitor-value-id="monitorContrast">Apply</button>
-            </div>
-            <div class="monitor-control-row">
-              <label>Input Source
-                <select id="monitorInput">
-                  <option value="17">HDMI 1 (0x11)</option>
-                  <option value="18">HDMI 2 (0x12)</option>
-                  <option value="15">DisplayPort 1 (0x0F)</option>
-                  <option value="16">DisplayPort 2 (0x10)</option>
-                  <option value="6">Legacy / monitor-specific (0x06)</option>
-                </select>
-              </label>
-              <button type="button" class="secondary" data-monitor-control="input" data-monitor-value-id="monitorInput">Apply</button>
-            </div>
-            <div class="monitor-power-actions">
-              <button type="button" class="secondary" data-monitor-control="power" data-monitor-value="1">Power On</button>
-              <button type="button" class="secondary danger" data-monitor-control="power" data-monitor-value="4">Power Off</button>
-              <button type="button" class="secondary" data-monitor-control="power" data-monitor-value="5">Standby</button>
-            </div>
-            <p class="muted-note" id="monitorStatus">Controls are sent only when a button is pressed. Unsupported values may be ignored by the monitor.</p>
           </div>
         </details>
 
@@ -6639,51 +6510,6 @@ HTML = r"""<!doctype html>
       renderHealth(payload);
     }
 
-    async function loadMonitors() {
-      const select = document.getElementById("monitorConnector");
-      const note = document.getElementById("monitorStatus");
-      if (!select || !note) return;
-      const response = await fetch("/api/monitors");
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Failed to discover monitor controls");
-      const monitors = Array.isArray(payload.monitors) ? payload.monitors : [];
-      select.innerHTML = "";
-      monitors.forEach((monitor) => {
-        const option = document.createElement("option");
-        option.value = String(monitor.connector || "");
-        option.textContent = `${monitor.label || monitor.connector}${monitor.available ? "" : " · unavailable"}`;
-        option.disabled = !monitor.available;
-        select.appendChild(option);
-      });
-      if (!monitors.length) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "No connected DDC/CI displays found";
-        select.appendChild(option);
-      }
-      const available = monitors.find((monitor) => monitor.available);
-      if (available) select.value = String(available.connector || "");
-      note.textContent = available
-        ? `Ready on ${available.bus}. Controls are sent only when a button is pressed.`
-        : "No writable DDC/CI bus is available for a connected display.";
-    }
-
-    async function applyMonitorControl(control, value) {
-      const connector = document.getElementById("monitorConnector")?.value || "";
-      if (!connector) throw new Error("Select an available display first");
-      if (control === "power" && Number(value) === 4 && !window.confirm("Power off this display?")) return;
-      const response = await fetch("/api/monitors/set", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ connector, control, value: Number(value) }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "Monitor control failed");
-      const note = document.getElementById("monitorStatus");
-      if (note) note.textContent = `Sent ${control} = ${value} to ${connector}.`;
-      setStatus(`Sent monitor ${control} control.`, false, true);
-    }
-
     function renderConfigHistory(entries) {
       const list = document.getElementById("historyList");
       if (!list) return;
@@ -7144,9 +6970,6 @@ HTML = r"""<!doctype html>
         .then(() => setRemoteStatus(`Restart queued for ${roleName(Number(button.dataset.remotePane))}.`))
         .catch((err) => setRemoteStatus(err.message, true));
     });
-    document.getElementById("monitorPanel")?.addEventListener("toggle", (event) => {
-      if (event.currentTarget.open) loadMonitors().catch((err) => setStatus(err.message, true));
-    });
     document.getElementById("configHistoryPanel")?.addEventListener("toggle", (event) => {
       if (event.currentTarget.open) loadConfigHistory().catch((err) => setStatus(err.message, true));
     });
@@ -7161,16 +6984,6 @@ HTML = r"""<!doctype html>
       } else if (rollbackButton) {
         rollbackConfigHistory(rollbackButton.dataset.historyRollback || "").catch((err) => setStatus(err.message, true));
       }
-    });
-    document.getElementById("monitorPanel")?.addEventListener("click", (event) => {
-      const button = event.target?.closest?.("[data-monitor-control]");
-      if (!button) return;
-      const valueElement = button.dataset.monitorValueId
-        ? document.getElementById(button.dataset.monitorValueId)
-        : null;
-      const value = valueElement?.value ?? button.dataset.monitorValue;
-      applyMonitorControl(button.dataset.monitorControl || "", value)
-        .catch((err) => setStatus(err.message, true));
     });
     previewProfileSelect?.addEventListener("change", () => {
       try { localStorage.setItem("kmsMosaicPreviewProfile", selectedPreviewProfile()); } catch (err) {}
@@ -7236,7 +7049,6 @@ HTML = r"""<!doctype html>
     window.loadConnectorOptions = loadConnectorOptions;
     window.loadScenes = loadScenes;
     window.loadHealth = loadHealth;
-    window.loadMonitors = loadMonitors;
     window.loadConfigHistory = loadConfigHistory;
     window.loadPaneTemplates = loadPaneTemplates;
     window.loadState = loadState;
@@ -7530,10 +7342,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(self.health.snapshot(len(self.webrtc.peers)))
             return
 
-        if parsed.path == "/api/monitors":
-            self._send_json({"monitors": list_ddc_monitors()})
-            return
-
         if parsed.path == "/api/history":
             self._send_json({"entries": self.history.entries()})
             return
@@ -7614,7 +7422,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/schedules/save", "/api/schedules/delete",
         }
         template_paths = {"/api/templates/save", "/api/templates/delete"}
-        control_paths = {"/api/panes/restart", "/api/monitors/set", "/api/history/rollback"}
+        control_paths = {"/api/panes/restart", "/api/history/rollback"}
         if self.path not in config_paths:
             if self.path not in rtc_paths | scene_paths | template_paths | control_paths:
                 self._send_json({"error": "Not found"}, status=404)
@@ -7647,24 +7455,6 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Pane index is out of range")
                 write_text_atomic(self.app_config.control_request_path, f"restart-pane {pane_index}\n")
                 self._send_json({"ok": True, "pane": pane_index, "queued": True})
-                return
-            if self.path == "/api/monitors/set":
-                connector = str(payload.get("connector") or "")
-                control = str(payload.get("control") or "")
-                value = int(payload.get("value", -1))
-                monitor = next(
-                    (item for item in list_ddc_monitors() if item["connector"] == connector),
-                    None,
-                )
-                if not monitor or not monitor["available"]:
-                    raise ValueError("Selected display has no writable DDC/CI bus")
-                write_ddc_control(str(monitor["bus"]), control, value)
-                self._send_json({
-                    "ok": True,
-                    "connector": connector,
-                    "control": control,
-                    "value": value,
-                })
                 return
             if self.path == "/api/history/rollback":
                 entry_id = str(payload.get("id") or "")

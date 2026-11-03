@@ -73,5 +73,11 @@ class UnraidPluginMetadataTests(unittest.TestCase):
         self.assertIn('"$STAGE/usr/local/bin/kms_mosaic_web"', text)
 
 
+    def test_plugin_version_file_matches_release_version(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        plugin_version = root / "unraid-plugin/package-root/usr/local/emhttp/plugins/kms.mosaic/VERSION"
+        self.assertEqual(plugin_version.read_text().strip(), (root / "VERSION").read_text().strip())
+
+
 if __name__ == "__main__":
     unittest.main()

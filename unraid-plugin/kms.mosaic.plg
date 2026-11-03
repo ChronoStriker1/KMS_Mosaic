@@ -2,13 +2,17 @@
 <PLUGIN
   name="kms.mosaic"
   author="OpenAI / chronostriker1"
-  version="2026.08.11"
+  version="2026.11.03"
   launch="Settings/KMSMosaic"
   pluginURL="https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/unraid-plugin/kms.mosaic.plg"
   icon="desktop"
   description="Direct-rendered DRM video wall and terminal compositor with pane layout editing, mpv-backed media panes, and live preview management from Unraid.">
 
 <CHANGES>
+###2026.11.03
+- Stop sending DDC/CI commands to the monitor. The Monitor Control plugin owns monitor settings.
+- Remove the startup DDC write, its settings, and the Monitor Controls panel and API.
+
 ###2026.08.11
 - Let Unraid finish booting when the array is stopped and configured media paths are unavailable.
 - Restart the preview service onto the WebRTC-capable Python venv when `/mnt/cache` becomes available after boot.
@@ -51,12 +55,12 @@
 - Host the full configuration UI directly inside the Unraid Settings page.
 </CHANGES>
 
-<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.08.11.tgz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.08.11.tgz</URL>
+<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.11.03.tgz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.11.03.tgz</URL>
 </FILE>
 
-<FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.08.11-x86_64-1.txz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.08.11-x86_64-1.txz</URL>
+<FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.11.03-x86_64-1.txz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.11.03-x86_64-1.txz</URL>
 </FILE>
 
 <FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic.cfg">
@@ -68,14 +72,6 @@ WEB_PORT="8788"
 CONFIG_PATH="/boot/config/kms_mosaic.conf"
 LOG_ENABLE="disable"
 KMS_ARGS="--atomic-nonblock"
-DDC_STARTUP="enable"
-DDC_CONNECTOR=""
-DDC_BUS=""
-DDC_INPUT_CODE="20"
-DDC_INPUT_VALUE="6"
-DDC_BRIGHTNESS="100"
-DDC_CONTRAST="100"
-DDC_SAVE="enable"
 ]]>
 </INLINE>
 </FILE>
@@ -89,14 +85,14 @@ mkdir -p /usr/local/emhttp/plugins/kms.mosaic
 rm -rf /usr/local/emhttp/plugins/usr
 rm -rf /usr/local/emhttp/plugins/kms.mosaic.backup
 # Remove any older versioned artifacts from prior installs so only the current version remains.
-find /boot/config/plugins/kms.mosaic -maxdepth 1 -type f \( -name 'kms.mosaic-*.tgz' -o -name 'kms_mosaic-*-x86_64-1.txz' \) ! -name 'kms.mosaic-2026.08.11.tgz' ! -name 'kms_mosaic-2026.08.11-x86_64-1.txz' -delete 2>/dev/null || true
-tar --no-overwrite-dir --no-same-owner -xzf /boot/config/plugins/kms.mosaic/kms.mosaic-2026.08.11.tgz -C /
+find /boot/config/plugins/kms.mosaic -maxdepth 1 -type f \( -name 'kms.mosaic-*.tgz' -o -name 'kms_mosaic-*-x86_64-1.txz' \) ! -name 'kms.mosaic-2026.11.03.tgz' ! -name 'kms_mosaic-2026.11.03-x86_64-1.txz' -delete 2>/dev/null || true
+tar --no-overwrite-dir --no-same-owner -xzf /boot/config/plugins/kms.mosaic/kms.mosaic-2026.11.03.tgz -C /
 chown root:root /usr/local /usr/local/bin /usr/local/emhttp /usr/local/emhttp/plugins
 chown -R root:root /usr/local/emhttp/plugins/kms.mosaic
 chown root:root /usr/local/bin/kms_mosaic_web /usr/local/bin/kms_mosaic_web.py
 find /usr/local/emhttp/plugins/kms.mosaic -type d -exec chmod 0755 {} +
 find /usr/local/emhttp/plugins/kms.mosaic -type f -exec chmod 0644 {} +
-upgradepkg --install-new --reinstall /boot/config/plugins/kms.mosaic/kms_mosaic-2026.08.11-x86_64-1.txz
+upgradepkg --install-new --reinstall /boot/config/plugins/kms.mosaic/kms_mosaic-2026.11.03-x86_64-1.txz
 rm -f /usr/local/lib/kms_mosaic/libdrm*.so* \
       /usr/local/lib/kms_mosaic/libgbm.so* \
       /usr/local/lib/kms_mosaic/libEGL*.so* \
@@ -135,13 +131,15 @@ legacy_backup="/boot/config/plugins/user.scripts/scripts/Start kms_mosaic.disabl
 if [ -d "$legacy_userscript" ] && [ ! -e "$legacy_backup" ]; then
   mv "$legacy_userscript" "$legacy_backup"
 fi
+# Monitor settings moved out of this plugin. Older configs still carry these keys.
+sed -i '/^DDC_/d' /boot/config/plugins/kms.mosaic/kms.mosaic.cfg
 # Drop any previously-created noisy log files so fresh install starts clean.
 rm -f /tmp/start_kms_mosaic.log /tmp/kms_mosaic_web.log 2>/dev/null || true
 /usr/local/emhttp/plugins/kms.mosaic/scripts/kms_mosaic-service restart >/dev/null 2>&1 || true
 echo ""
 echo "-----------------------------------------------------------"
 echo " Plugin kms.mosaic is installed."
-echo " Version: 2026.08.11"
+echo " Version: 2026.11.03"
 echo "-----------------------------------------------------------"
 echo ""
 ]]>

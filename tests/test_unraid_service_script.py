@@ -329,16 +329,14 @@ class UnraidServiceScriptTests(unittest.TestCase):
         self.assertIn('local args="${KMS_ARGS:-}"', text)
         self.assertIn('args="${args:+${args} }--debug"', text)
 
-    def test_startup_ddc_is_configurable_and_connector_aware(self) -> None:
+    def test_service_and_manifest_send_no_monitor_commands(self) -> None:
         text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+        manifest = (ROOT / "unraid-plugin" / "kms.mosaic.plg").read_text(encoding="utf-8")
 
-        self.assertIn('DDC_STARTUP="enable"', text)
-        self.assertIn('DDC_CONNECTOR=""', text)
-        self.assertIn('DDC_BUS=""', text)
-        self.assertIn('Path("/sys/class/drm").glob("card*-*")', text)
-        self.assertIn('if status.read_text().strip() != "connected"', text)
-        self.assertIn('return unique[0] if len(unique) == 1 else ""', text)
-        self.assertNotIn('BUS = "/dev/i2c-3"', text)
+        for removed in ("post_start_ddc", "DDC_", "I2C_SLAVE", "/dev/i2c"):
+            self.assertNotIn(removed, text)
+        self.assertNotIn('DDC_STARTUP=', manifest)
+        self.assertIn("sed -i '/^DDC_/d' /boot/config/plugins/kms.mosaic/kms.mosaic.cfg", manifest)
 
 
 if __name__ == "__main__":

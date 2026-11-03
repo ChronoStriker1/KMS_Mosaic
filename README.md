@@ -11,7 +11,7 @@ Each pane can run a terminal command or an independent mpv media queue. The comp
 - Drag-and-resize Layout Studio with snapping and undo/redo.
 - Named scenes and schedules, OSD, fullscreen selection, and fullscreen cycling.
 - Playback watchdogs, pane restart controls, and synchronization groups.
-- WebRTC preview, configuration history, and supported DDC/CI monitor controls.
+- WebRTC preview and configuration history.
 
 ## How it works
 
@@ -148,7 +148,6 @@ Atomic modesetting is available through `--atomic` and `--atomic-nonblock`; init
 - **Blank preview:** confirm the compositor is producing frames and the web service uses a Python environment with aiortc/PyAV.
 - **Empty terminal pane:** check that the configured command exists and runs as the service user.
 - **Slow media transitions:** test without expensive shader stacks or forced hardware-decoding overrides.
-- **DDC/CI controls unavailable:** the monitor, connection, and host I2C permissions must support them.
 
 The Unraid supervisors retain recent application output in `/tmp/start_kms_mosaic.log` and `/tmp/kms_mosaic_web.log`, plus lifecycle events in `/boot/config/plugins/kms.mosaic/lifecycle.log`.
 

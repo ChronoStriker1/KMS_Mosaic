@@ -271,8 +271,6 @@ function validate_backend_api_path($path) {
     '/api/templates/save',
     '/api/templates/delete',
     '/api/panes/restart',
-    '/api/monitors',
-    '/api/monitors/set',
     '/api/history',
     '/api/history/diff',
     '/api/history/rollback',

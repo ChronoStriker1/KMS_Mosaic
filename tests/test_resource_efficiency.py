@@ -258,43 +258,12 @@ class ResourceEfficiencyTests(unittest.TestCase):
         render_source = (ROOT / "src" / "render_gl.c").read_text(encoding="utf-8")
         self.assertIn("c.rgb*u_brightness", render_source)
 
-    def test_monitor_controls_are_discovered_and_written_only_on_demand(self) -> None:
-        from tools import kms_mosaic_web
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            sysfs = root / "drm"
-            dev = root / "dev"
-            connector = sysfs / "card0-HDMI-A-1"
-            bus_target = root / "i2c-3"
-            connector.mkdir(parents=True)
-            dev.mkdir()
-            bus_target.mkdir()
-            (dev / "i2c-3").write_bytes(b"")
-            (connector / "status").write_text("connected\n", encoding="utf-8")
-            (connector / "ddc").symlink_to(bus_target)
-            edid = bytearray(128)
-            edid[54:72] = b"\0\0\0\xfc\0Test Panel  \n"
-            (connector / "edid").write_bytes(edid)
-
-            monitors = kms_mosaic_web.list_ddc_monitors(sysfs, dev)
-
-            self.assertEqual(monitors[0]["connector"], "HDMI-A-1")
-            self.assertEqual(monitors[0]["model"], "Test Panel")
-            self.assertEqual(monitors[0]["bus"], str(dev / "i2c-3"))
-            message = kms_mosaic_web.build_ddc_vcp_message("brightness", 75)
-            self.assertEqual(message[:6], bytes([0x51, 0x84, 0x03, 0x10, 0x00, 75]))
-            self.assertEqual(message[-1], 0x6E ^ 0x51 ^ 0x84 ^ 0x03 ^ 0x10 ^ 0x00 ^ 75)
-            with self.assertRaises(ValueError):
-                kms_mosaic_web.build_ddc_vcp_message("brightness", 101)
-
+    def test_web_service_sends_no_monitor_commands(self) -> None:
         web_source = (ROOT / "tools" / "kms_mosaic_web.py").read_text(encoding="utf-8")
-        self.assertIn('if (event.currentTarget.open) loadMonitors()', web_source)
-        self.assertIn('"/api/monitors/set"', web_source)
-        monitor_section = web_source[web_source.index("async function loadMonitors"):
-                                     web_source.index("function scheduleHealthPolling")]
-        self.assertNotIn("setInterval", monitor_section)
 
+        for removed in ("/api/monitors", "monitorPanel", "loadMonitors", "applyMonitorControl",
+                        "I2C_SLAVE", "/dev/i2c", "fcntl"):
+            self.assertNotIn(removed, web_source)
     def test_mobile_remote_skips_preview_and_reuses_targeted_apis(self) -> None:
         web_source = (ROOT / "tools" / "kms_mosaic_web.py").read_text(encoding="utf-8")
 
