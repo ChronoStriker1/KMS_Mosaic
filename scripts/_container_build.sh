@@ -124,7 +124,7 @@ fi
 
 # Guarantee the two primary non-system runtime libs are present even if the
 # recursive walk misses them due to loader output differences.
-for needed in libmpv.so.1 libvterm.so.0; do
+for needed in libmpv.so.2 libvterm.so.0; do
   if [ ! -e "$LIBDIR/$needed" ] && command -v ldconfig >/dev/null 2>&1; then
     found="$(ldconfig -p 2>/dev/null | awk -v so="$needed" '$1 == so { print $NF; exit }')"
     [ -n "$found" ] && bundle_one "$found"

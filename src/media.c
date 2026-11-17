@@ -53,11 +53,6 @@ static int media_key_matches(const char *kv, const char *key) {
     return kl == strlen(key) && strncmp(kv, key, kl) == 0;
 }
 
-static const char *media_normalize_hwdec_value(const char *value) {
-    if (value && strcmp(value, "vaapi") == 0) return "vaapi-copy";
-    return value;
-}
-
 static void media_free_owned_node(mpv_node *node) {
     if (!node) return;
     if (node->format == MPV_FORMAT_STRING) {
@@ -177,7 +172,6 @@ static void media_apply_option_list(media_ctx *m, const char *const *opts, int c
         memcpy(key, kv, kl);
         key[kl] = '\0';
         const char *value = eq + 1;
-        if (media_key_matches(kv, "hwdec")) value = media_normalize_hwdec_value(value);
         mpv_set_option_string(m->mpv, key, value);
         if (strcmp(key, "hwdec") == 0) *user_set_hwdec = true;
         if (media_key_matches(kv, "video-sync")) *user_set_vsync = true;
@@ -195,9 +189,9 @@ static void media_apply_option_list(media_ctx *m, const char *const *opts, int c
 }
 
 static void media_apply_options(media_ctx *m, const options_t *opt, const pane_media_config *pane_media,
-                                const char *decode_device) {
-    mpv_set_option_string(m->mpv, "gpu-hwdec-interop", "no");
-    if (decode_device) mpv_set_option_string(m->mpv, "vaapi-device", decode_device);
+                                const media_decode_device *decode) {
+    mpv_set_option_string(m->mpv, "gpu-hwdec-interop", "vaapi");
+    if (decode->path) mpv_set_option_string(m->mpv, "vaapi-device", decode->path);
     bool user_set_hwdec = false;
     bool user_set_vsync = false;
     bool user_set_keepaspect = false;
@@ -228,7 +222,7 @@ static void media_apply_options(media_ctx *m, const options_t *opt, const pane_m
         mpv_set_option_string(m->mpv, "pause", "yes");
     }
 
-    if (!user_set_hwdec) mpv_set_option_string(m->mpv, "hwdec", "vaapi-copy");
+    if (!user_set_hwdec) mpv_set_option_string(m->mpv, "hwdec", "vaapi");
     mpv_set_option_string(m->mpv, "audio", "no");
     mpv_set_option_string(m->mpv, "aid", "no");
     if (!user_set_shader_cache) mpv_set_option_string(m->mpv, "gpu-shader-cache", "yes");
@@ -430,7 +424,7 @@ bool media_should_use_pane(const pane_media_config *pane_media) {
 }
 
 static bool media_init_source(media_ctx *m, const options_t *opt, const pane_media_config *pane_media,
-                              const char *decode_device, bool debug) {
+                              const media_decode_device *decode, bool debug) {
     if (!m || !opt) return false;
     memset(m, 0, sizeof(*m));
     m->wakeup_fd[0] = -1;
@@ -462,7 +456,7 @@ static bool media_init_source(media_ctx *m, const options_t *opt, const pane_med
     mpv_set_option_string(m->mpv, "vo", "libmpv");
     const char *glver = (const char *)glGetString(GL_VERSION);
     if (glver && strstr(glver, "OpenGL ES")) mpv_set_option_string(m->mpv, "opengl-es", "yes");
-    media_apply_options(m, opt, pane_media, decode_device);
+    media_apply_options(m, opt, pane_media, decode);
     if (debug) mpv_request_log_messages(m->mpv, "debug");
     if (mpv_initialize(m->mpv) < 0) {
         fprintf(stderr, "mpv_initialize failed\n");
@@ -476,11 +470,15 @@ static bool media_init_source(media_ctx *m, const options_t *opt, const pane_med
     m->last_progress_sec = media_now_sec();
 
     int adv = 1;
+    m->decode_display = (mpv_opengl_drm_params_v2){
+        .fd = -1, .crtc_id = -1, .connector_id = -1, .atomic_request_ptr = NULL, .render_fd = decode->fd,
+    };
     mpv_render_param params[] = {
         { MPV_RENDER_PARAM_API_TYPE, (void *)MPV_RENDER_API_TYPE_OPENGL },
         { MPV_RENDER_PARAM_OPENGL_INIT_PARAMS,
           &(mpv_opengl_init_params){ .get_proc_address = media_get_proc_address, .get_proc_address_ctx = NULL } },
         { MPV_RENDER_PARAM_ADVANCED_CONTROL, &adv },
+        { decode->fd >= 0 ? MPV_RENDER_PARAM_DRM_DISPLAY_V2 : MPV_RENDER_PARAM_INVALID, &m->decode_display },
         { 0 }
     };
     if (mpv_render_context_create(&m->mpv_gl, m->mpv, params) < 0) {
@@ -505,13 +503,13 @@ static bool media_init_source(media_ctx *m, const options_t *opt, const pane_med
     return true;
 }
 
-bool media_init(media_ctx *m, const options_t *opt, const char *decode_device, bool debug) {
-    return media_init_source(m, opt, NULL, decode_device, debug);
+bool media_init(media_ctx *m, const options_t *opt, const media_decode_device *decode, bool debug) {
+    return media_init_source(m, opt, NULL, decode, debug);
 }
 
 bool media_init_pane(media_ctx *m, const options_t *opt, const pane_media_config *pane_media,
-                     const char *decode_device, bool debug) {
-    return media_init_source(m, opt, pane_media, decode_device, debug);
+                     const media_decode_device *decode, bool debug) {
+    return media_init_source(m, opt, pane_media, decode, debug);
 }
 
 bool media_restart(media_ctx *m) {

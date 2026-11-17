@@ -12,8 +12,8 @@ if [[ ! -f "$VERSION_FILE" ]]; then
   exit 1
 fi
 
-# Base image can be overridden; default to Ubuntu for easy deps
-BASE_IMAGE="${BASE_IMAGE:-ubuntu:22.04}"
+# Base image can be overridden; Debian trixie provides libmpv 0.40 for VA-API zero-copy
+BASE_IMAGE="${BASE_IMAGE:-debian:trixie}"
 # Allow forcing target architecture; default to linux/amd64 so binaries run on typical Unraid servers
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 
@@ -144,7 +144,7 @@ fi
 
 # Guarantee the two primary non-system runtime libs are present even if the
 # recursive walk misses them due to loader output differences.
-for needed in libmpv.so.1 libvterm.so.0; do
+for needed in libmpv.so.2 libvterm.so.0; do
   if [ ! -e "$LIBDIR/$needed" ] && command -v ldconfig >/dev/null 2>&1; then
     found="$(ldconfig -p 2>/dev/null | awk -v so="$needed" '$1 == so { print $NF; exit }')"
     [ -n "$found" ] && bundle_one "$found"
