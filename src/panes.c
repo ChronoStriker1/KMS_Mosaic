@@ -69,8 +69,8 @@ void panes_compute_font_sizes(const options_t *opt, const pane_layout *layouts,
         int cell_w = 0;
         int cell_h = 0;
         int requested = (i == 0) ? base_font : font_sizes[i - 1];
-        int min_cols = (i == 0) ? 80 : (i == 1 ? 60 : 50);
-        int min_rows = (i == 0) ? 24 : (i == 1 ? 20 : 16);
+        int min_cols = (i == 0) ? 80 : (i == 1 ? 45 : 50);
+        int min_rows = (i == 0) ? 24 : 16;
         font_sizes[i] = panes_fit_font_px(requested, &layouts[i], min_cols, min_rows, &cell_w, &cell_h);
     }
 }
