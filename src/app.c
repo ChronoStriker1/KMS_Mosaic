@@ -891,6 +891,7 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     int *pane_pfifo_lens = NULL;
     int rc = 0;
     char *hot_split_tree = NULL;
+    int decode_fd = -1;
 
     if (options_parse_cli(&opt, argc, argv, debug)) return 0;
     term_pane_set_font_path(opt.font_path);
@@ -909,7 +910,12 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     display_gbm_init(&g, d.fd, d.mode.hdisplay, d.mode.vdisplay, *debug);
     display_egl_init(&e, &g, *debug);
 
-    bool use_mpv = media_init(&m, &opt, *debug);
+    char *decode_device = drmGetRenderDeviceNameFromFd(d.fd);
+    if (decode_device) decode_fd = open(decode_device, O_RDWR | O_CLOEXEC);
+    fprintf(stderr, "Video decode device: %s%s\n", decode_device ? decode_device : "(none)",
+            decode_device && decode_fd < 0 ? " (open failed, decoding on the CPU)" : "");
+    free(decode_device);
+    bool use_mpv = media_init(&m, &opt, decode_fd, *debug);
     pane_media = calloc((size_t)opt.pane_count, sizeof(*pane_media));
     if (!pane_media) app_die("calloc pane_media");
     pane_pfifo_bufs = calloc((size_t)opt.pane_count, sizeof(*pane_pfifo_bufs));
@@ -917,7 +923,7 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     if (!pane_pfifo_bufs || !pane_pfifo_lens) app_die("calloc pane playlist fifo buffers");
     for (int i = 0; i < opt.pane_count; ++i) {
         if (opt.pane_media && opt.pane_media[i].enabled) {
-            (void)media_init_pane(&pane_media[i], &opt, &opt.pane_media[i], *debug);
+            (void)media_init_pane(&pane_media[i], &opt, &opt.pane_media[i], decode_fd, *debug);
         }
     }
     bool has_legacy_root_media =
@@ -1060,6 +1066,7 @@ cleanup:
     free(pane_pfifo_lens);
     app_cleanup(&opt, &m, pane_media, &rg, &d, &g, &e, &panes);
     free(hot_split_tree);
+    if (decode_fd >= 0) close(decode_fd);
     options_destroy(&opt);
     return rc;
 }

@@ -30,10 +30,18 @@ class MediaDebuggingTests(unittest.TestCase):
         self.assertIn('if (!user_set_keep_open) mpv_set_option_string(m->mpv, "keep-open", "no");', src)
         self.assertNotIn('mpv_set_option_string(m->mpv, "keep-open", "yes");', src)
 
-    def test_embedded_mpv_defaults_to_auto_copy_safe_hwdec(self) -> None:
+    def test_embedded_mpv_decodes_with_vaapi_on_the_display_gpu_by_default(self) -> None:
         src = MEDIA_C.read_text(encoding="utf-8")
         self.assertIn("bool user_set_hwdec = false;", src)
-        self.assertIn('if (!user_set_hwdec) mpv_set_option_string(m->mpv, "hwdec", "auto-copy-safe");', src)
+        self.assertIn('if (!user_set_hwdec) mpv_set_option_string(m->mpv, "hwdec", "vaapi");', src)
+        self.assertIn('mpv_set_option_string(m->mpv, "gpu-hwdec-interop", "vaapi-egl");', src)
+        self.assertIn(".render_fd = decode_fd", src)
+        self.assertIn("decode_fd >= 0 ? MPV_RENDER_PARAM_DRM_DISPLAY_V2 : MPV_RENDER_PARAM_INVALID", src)
+        self.assertNotIn('"auto-copy-safe"', src)
+        self.assertLess(
+            src.find('mpv_set_option_string(m->mpv, "gpu-hwdec-interop", "vaapi-egl");'),
+            src.find("media_apply_option_list(m, opt->mpv_opts"),
+        )
 
     def test_embedded_mpv_defaults_shader_cache_on_unless_user_overrides(self) -> None:
         src = MEDIA_C.read_text(encoding="utf-8")
@@ -45,12 +53,24 @@ class MediaDebuggingTests(unittest.TestCase):
             src.find("if (opt->smooth) {"),
         )
 
-    def test_legacy_vaapi_hwdec_is_normalized_to_auto_copy_safe(self) -> None:
-        src = MEDIA_C.read_text(encoding="utf-8")
-        self.assertIn('media_key_matches(kv, "hwdec")', src)
-        self.assertIn('static const char *media_normalize_hwdec_value', src)
-        self.assertIn('strcmp(value, "vaapi") == 0', src)
-        self.assertIn('return "auto-copy-safe";', src)
+    def test_decode_device_is_the_display_cards_render_node(self) -> None:
+        src = (ROOT / "src" / "app.c").read_text(encoding="utf-8")
+        self.assertIn("char *decode_device = drmGetRenderDeviceNameFromFd(d.fd);", src)
+        self.assertIn("decode_fd = open(decode_device, O_RDWR | O_CLOEXEC);", src)
+        self.assertIn("media_init(&m, &opt, decode_fd, *debug)", src)
+        self.assertIn("media_init_pane(&pane_media[i], &opt, &opt.pane_media[i], decode_fd, *debug)", src)
+
+    def test_egl_display_is_created_for_the_gbm_platform(self) -> None:
+        src = (ROOT / "src" / "display.c").read_text(encoding="utf-8")
+        self.assertIn("eglGetPlatformDisplay(EGL_PLATFORM_GBM_KHR, g->dev, NULL)", src)
+        self.assertNotIn("eglGetDisplay(", src)
+
+    def test_package_bundles_libva_new_enough_for_current_mesa(self) -> None:
+        for name in ("macos_build_pkg.sh", "_container_build.sh"):
+            src = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+            self.assertIn("LIBVA_VERSION=2.24.1", src, name)
+            self.assertIn('sha256sum -c -', src, name)
+            self.assertIn('install -m0755 "$LIBVA_BUILD/build/va/$lib.so.2" "$LIBDIR/$lib.so.2"', src, name)
 
     def test_embedded_mpv_always_loops_playlist(self) -> None:
         src = MEDIA_C.read_text(encoding="utf-8")

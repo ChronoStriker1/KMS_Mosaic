@@ -6,7 +6,20 @@ apt-get install -y --no-install-recommends \
   build-essential pkg-config binutils file binutils-aarch64-linux-gnu \
   libdrm-dev libgbm-dev libegl1-mesa-dev libgles2-mesa-dev \
   libmpv-dev libvterm-dev libfreetype6-dev libfontconfig1-dev \
-  ca-certificates
+  ca-certificates curl meson ninja-build \
+  libx11-dev libxext-dev libxfixes-dev libx11-xcb-dev libxcb-dri3-dev libwayland-dev
+
+LIBVA_VERSION=2.24.1
+LIBVA_SHA256=0b4a3649ee8d683b9cce2ef094df4fb039d276c0cef7e49337c43d3b297b9f42
+LIBVA_BUILD=/tmp/libva-build
+rm -rf "$LIBVA_BUILD"
+mkdir -p "$LIBVA_BUILD"
+curl -fsSL -o "$LIBVA_BUILD/libva.tar.gz" "https://github.com/intel/libva/archive/refs/tags/${LIBVA_VERSION}.tar.gz"
+echo "$LIBVA_SHA256  $LIBVA_BUILD/libva.tar.gz" | sha256sum -c -
+tar -C "$LIBVA_BUILD" -xzf "$LIBVA_BUILD/libva.tar.gz"
+meson setup "$LIBVA_BUILD/build" "$LIBVA_BUILD/libva-${LIBVA_VERSION}" --prefix=/usr --libdir=lib \
+  -Ddriverdir="/usr/lib64/dri:/usr/lib/$(gcc -dumpmachine)/dri" -Dwith_glx=no
+ninja -C "$LIBVA_BUILD/build"
 
 cd /work
 # Force a clean rebuild to avoid stale cross-arch artifacts
@@ -116,6 +129,10 @@ for needed in libmpv.so.1 libvterm.so.0; do
     found="$(ldconfig -p 2>/dev/null | awk -v so="$needed" '$1 == so { print $NF; exit }')"
     [ -n "$found" ] && bundle_one "$found"
   fi
+done
+
+for lib in libva libva-drm libva-x11 libva-wayland; do
+  install -m0755 "$LIBVA_BUILD/build/va/$lib.so.2" "$LIBDIR/$lib.so.2"
 done
 
 # Safety: ensure we never ship toolchain libs that might conflict with system drivers

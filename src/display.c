@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include <drm_fourcc.h>
+#include <EGL/eglext.h>
 #include <GLES2/gl2.h>
 
 static void display_die(const char *msg) {
@@ -465,8 +466,8 @@ void display_gbm_init(gbm_ctx *g, int drm_fd, int w, int h, bool debug) {
 }
 
 void display_egl_init(egl_ctx *e, gbm_ctx *g, bool debug) {
-    e->dpy = eglGetDisplay((EGLNativeDisplayType)g->dev);
-    if (e->dpy == EGL_NO_DISPLAY) display_die("eglGetDisplay");
+    e->dpy = eglGetPlatformDisplay(EGL_PLATFORM_GBM_KHR, g->dev, NULL);
+    if (e->dpy == EGL_NO_DISPLAY) display_die("eglGetPlatformDisplay");
     if (!eglInitialize(e->dpy, NULL, NULL)) display_die("eglInitialize");
     eglBindAPI(EGL_OPENGL_ES_API);
     EGLint renderable = EGL_OPENGL_ES2_BIT;

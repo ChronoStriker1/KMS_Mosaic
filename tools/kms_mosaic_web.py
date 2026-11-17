@@ -3622,7 +3622,7 @@ HTML = r"""<!doctype html>
         deband: "", interpolation: "", videoSync: "",
       };
       const structuredValues = {
-        hwdec: new Set(["auto-copy-safe", "no"]),
+        hwdec: new Set(["no"]),
         scale: new Set(["bilinear", "bicubic", "lanczos"]),
         deband: new Set(["yes", "no"]),
         interpolation: new Set(["yes", "no"]),
@@ -5382,8 +5382,7 @@ HTML = r"""<!doctype html>
             </label>
             <label>Hardware Decode
               <select id="inspectorPaneHwdec">
-                <option value="" ${paneMpvGroups.hwdec ? "" : "selected"}>Automatic default</option>
-                <option value="auto-copy-safe" ${paneMpvGroups.hwdec === "auto-copy-safe" ? "selected" : ""}>Auto copy-safe</option>
+                <option value="" ${paneMpvGroups.hwdec ? "" : "selected"}>Display GPU (VA-API)</option>
                 <option value="no" ${paneMpvGroups.hwdec === "no" ? "selected" : ""}>Software decode</option>
               </select>
             </label>
