@@ -8,6 +8,7 @@ WEB_PIDFILE="${WEB_PIDFILE:-/var/run/kms_mosaic_web.pid}"
 KMS_SUPERVISOR_PIDFILE="${KMS_SUPERVISOR_PIDFILE:-/var/run/kms_mosaic_supervisor.pid}"
 WEB_SUPERVISOR_PIDFILE="${WEB_SUPERVISOR_PIDFILE:-/var/run/kms_mosaic_web_supervisor.pid}"
 KMS_STOP_FILE="${KMS_STOP_FILE:-/var/run/kms_mosaic.stop}"
+KMS_OUTPUT_WAIT_FILE="${KMS_OUTPUT_WAIT_FILE:-/var/run/kms_mosaic.waiting-output}"
 WEB_STOP_FILE="${WEB_STOP_FILE:-/var/run/kms_mosaic_web.stop}"
 KMS_LOG="${KMS_LOG:-/tmp/start_kms_mosaic.log}"
 WEB_LOG="${WEB_LOG:-/tmp/kms_mosaic_web.log}"
@@ -335,6 +336,7 @@ request_fresh_render() {
   touch "$SNAPSHOT_REQUEST"
   while [ "$waited" -lt "$STARTUP_HEALTH_TIMEOUT" ]; do
     is_kms_running || return 1
+    [ -e "$KMS_OUTPUT_WAIT_FILE" ] && return 2
     if [ -s "$SNAPSHOT_OUTPUT" ]; then
       return 0
     fi
@@ -345,9 +347,9 @@ request_fresh_render() {
 }
 
 kms_render_healthy() {
-  request_fresh_render || return 1
+  request_fresh_render || return $?
   sleep 2
-  request_fresh_render || return 1
+  request_fresh_render || return $?
   rm -f "$SNAPSHOT_REQUEST" "$SNAPSHOT_OUTPUT" 2>/dev/null || true
   return 0
 }
@@ -405,9 +407,18 @@ monitor_kms_child() {
   local health_deadline=0
   local next_health_check=$SECONDS
 
+  local waiting_logged=0
+
   while supervised_child_is_active "$child"; do
     record_kms_child_groups "$child" "$groups_file"
-    if [ "$RUNTIME_HEALTH_INTERVAL" -gt 0 ]; then
+    if [ -e "$KMS_OUTPUT_WAIT_FILE" ]; then
+      if [ "$waiting_logged" -eq 0 ]; then
+        lifecycle_event "kms" "waiting-for-output" "$child" "connector=$(head -n1 "$KMS_OUTPUT_WAIT_FILE" 2>/dev/null || true)"
+        waiting_logged=1
+      fi
+      health_pending=0
+      next_health_check=$SECONDS
+    elif [ "$RUNTIME_HEALTH_INTERVAL" -gt 0 ]; then
       if [ "$health_pending" -eq 0 ] && [ "$SECONDS" -ge "$next_health_check" ]; then
         health_baseline="$(snapshot_fingerprint)"
         touch "$SNAPSHOT_REQUEST"
@@ -448,11 +459,12 @@ supervise_kms() {
     target="$(kms_log_target)"
     local extra
     extra="$(kms_extra_args)"
+    rm -f "$KMS_OUTPUT_WAIT_FILE" 2>/dev/null || true
     if [ -n "$extra" ]; then
-      KMS_MOSAIC_SUPERVISED_RELOAD=1 \
+      KMS_MOSAIC_SUPERVISED_RELOAD=1 KMS_MOSAIC_OUTPUT_WAIT_FILE="$KMS_OUTPUT_WAIT_FILE" \
         setsid "$KMS_WRAPPER" --config "$CONFIG_PATH" $extra >>"$target" 2>&1 &
     else
-      KMS_MOSAIC_SUPERVISED_RELOAD=1 \
+      KMS_MOSAIC_SUPERVISED_RELOAD=1 KMS_MOSAIC_OUTPUT_WAIT_FILE="$KMS_OUTPUT_WAIT_FILE" \
         setsid "$KMS_WRAPPER" --config "$CONFIG_PATH" >>"$target" 2>&1 &
     fi
     local child=$!
@@ -471,6 +483,7 @@ supervise_kms() {
     set -e
     kill "$monitor_pid" 2>/dev/null || true
     wait "$monitor_pid" 2>/dev/null || true
+    rm -f "$KMS_OUTPUT_WAIT_FILE" 2>/dev/null || true
     if [ "$stopping" -ne 0 ] || [ -e "$KMS_STOP_FILE" ]; then
       rm -f "$groups_file" "$reason_file" 2>/dev/null || true
       lifecycle_event "kms" "supervisor-stopping" "$$" "child=${child}"
@@ -705,9 +718,18 @@ start_kms() {
       sleep 1
       waited=$((waited + 1))
     done
-    if is_kms_running && kms_render_healthy; then
+    local health=1
+    if is_kms_running; then
+      health=0
+      kms_render_healthy || health=$?
+    fi
+    if [ "$health" -eq 0 ]; then
       lifecycle_event "kms" "startup-healthy" "$(kms_pid_from_system)" "attempt=${attempt}"
       schedule_boot_settle_restart
+      return 0
+    fi
+    if [ "$health" -eq 2 ]; then
+      lifecycle_event "kms" "startup-waiting-for-output" "$(kms_pid_from_system)" "attempt=${attempt}"
       return 0
     fi
     lifecycle_event "kms" "startup-unhealthy" "$(kms_pid_from_system)" "attempt=${attempt}"

@@ -103,6 +103,9 @@ Examples:
 # Portrait display
 ./kms_mosaic --video /path/to/video.mp4 --connector HDMI-A-1 --mode 1080x1920@60 --rotate 90
 
+# Follow a monitor by its EDID name, whichever port it is on
+./kms_mosaic --video /path/to/video.mp4 --connector monitor:ingnok
+
 # A separate media queue in pane 2
 ./kms_mosaic --pane-media 2 --pane-playlist 2 /path/to/playlist.m3u
 

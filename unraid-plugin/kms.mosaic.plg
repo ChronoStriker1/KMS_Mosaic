@@ -2,13 +2,18 @@
 <PLUGIN
   name="kms.mosaic"
   author="OpenAI / chronostriker1"
-  version="2026.11.03"
+  version="2026.11.16"
   launch="Settings/KMSMosaic"
   pluginURL="https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/unraid-plugin/kms.mosaic.plg"
   icon="desktop"
   description="Direct-rendered DRM video wall and terminal compositor with pane layout editing, mpv-backed media panes, and live preview management from Unraid.">
 
 <CHANGES>
+###2026.11.16
+- Select the display by its EDID monitor name with `--connector monitor:NAME`, so the wall stays on that monitor whichever port it is on.
+- List each output's monitor name in the Display menu and offer it as a selection that follows the monitor.
+- Wait for the selected output when it is not connected, such as when a monitor misses its EDID read at boot, and start on it once it appears instead of using another screen.
+
 ###2026.11.03
 - Stop sending DDC/CI commands to the monitor. The Monitor Control plugin owns monitor settings.
 - Remove the startup DDC write, its settings, and the Monitor Controls panel and API.
@@ -55,12 +60,12 @@
 - Host the full configuration UI directly inside the Unraid Settings page.
 </CHANGES>
 
-<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.11.03.tgz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.11.03.tgz</URL>
+<FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.11.16.tgz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.11.16.tgz</URL>
 </FILE>
 
-<FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.11.03-x86_64-1.txz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.11.03-x86_64-1.txz</URL>
+<FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.11.16-x86_64-1.txz">
+<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.11.16-x86_64-1.txz</URL>
 </FILE>
 
 <FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic.cfg">
@@ -85,14 +90,14 @@ mkdir -p /usr/local/emhttp/plugins/kms.mosaic
 rm -rf /usr/local/emhttp/plugins/usr
 rm -rf /usr/local/emhttp/plugins/kms.mosaic.backup
 # Remove any older versioned artifacts from prior installs so only the current version remains.
-find /boot/config/plugins/kms.mosaic -maxdepth 1 -type f \( -name 'kms.mosaic-*.tgz' -o -name 'kms_mosaic-*-x86_64-1.txz' \) ! -name 'kms.mosaic-2026.11.03.tgz' ! -name 'kms_mosaic-2026.11.03-x86_64-1.txz' -delete 2>/dev/null || true
-tar --no-overwrite-dir --no-same-owner -xzf /boot/config/plugins/kms.mosaic/kms.mosaic-2026.11.03.tgz -C /
+find /boot/config/plugins/kms.mosaic -maxdepth 1 -type f \( -name 'kms.mosaic-*.tgz' -o -name 'kms_mosaic-*-x86_64-1.txz' \) ! -name 'kms.mosaic-2026.11.16.tgz' ! -name 'kms_mosaic-2026.11.16-x86_64-1.txz' -delete 2>/dev/null || true
+tar --no-overwrite-dir --no-same-owner -xzf /boot/config/plugins/kms.mosaic/kms.mosaic-2026.11.16.tgz -C /
 chown root:root /usr/local /usr/local/bin /usr/local/emhttp /usr/local/emhttp/plugins
 chown -R root:root /usr/local/emhttp/plugins/kms.mosaic
 chown root:root /usr/local/bin/kms_mosaic_web /usr/local/bin/kms_mosaic_web.py
 find /usr/local/emhttp/plugins/kms.mosaic -type d -exec chmod 0755 {} +
 find /usr/local/emhttp/plugins/kms.mosaic -type f -exec chmod 0644 {} +
-upgradepkg --install-new --reinstall /boot/config/plugins/kms.mosaic/kms_mosaic-2026.11.03-x86_64-1.txz
+upgradepkg --install-new --reinstall /boot/config/plugins/kms.mosaic/kms_mosaic-2026.11.16-x86_64-1.txz
 rm -f /usr/local/lib/kms_mosaic/libdrm*.so* \
       /usr/local/lib/kms_mosaic/libgbm.so* \
       /usr/local/lib/kms_mosaic/libEGL*.so* \
@@ -139,7 +144,7 @@ rm -f /tmp/start_kms_mosaic.log /tmp/kms_mosaic_web.log 2>/dev/null || true
 echo ""
 echo "-----------------------------------------------------------"
 echo " Plugin kms.mosaic is installed."
-echo " Version: 2026.11.03"
+echo " Version: 2026.11.16"
 echo "-----------------------------------------------------------"
 echo ""
 ]]>

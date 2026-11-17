@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 
 #include <drm_fourcc.h>
@@ -160,6 +161,40 @@ static bool str_is_digits(const char *s) {
     if (!s || !*s) return false;
     for (const char *p = s; *p; ++p) if (*p < '0' || *p > '9') return false;
     return true;
+}
+
+bool display_connector_monitor_name(int fd, uint32_t conn_id, char out[EDID_MONITOR_NAME_MAX]) {
+    out[0] = '\0';
+    drmModeObjectProperties *props = drmModeObjectGetProperties(fd, conn_id, DRM_MODE_OBJECT_CONNECTOR);
+    if (!props) return false;
+    bool found = false;
+    for (uint32_t i = 0; i < props->count_props && !found; ++i) {
+        drmModePropertyRes *pr = drmModeGetProperty(fd, props->props[i]);
+        if (!pr) continue;
+        if (strcmp(pr->name, "EDID") == 0 && props->prop_values[i]) {
+            drmModePropertyBlobRes *blob = drmModeGetPropertyBlob(fd, (uint32_t)props->prop_values[i]);
+            if (blob) {
+                found = edid_monitor_name(blob->data, blob->length, out);
+                drmModeFreePropertyBlob(blob);
+            }
+        }
+        drmModeFreeProperty(pr);
+    }
+    drmModeFreeObjectProperties(props);
+    return found;
+}
+
+static bool connector_matches(int fd, const drmModeConnector *conn, const char *selector) {
+    if (!selector) return true;
+    if (strncmp(selector, DISPLAY_MONITOR_SELECTOR_PREFIX, strlen(DISPLAY_MONITOR_SELECTOR_PREFIX)) == 0) {
+        char name[EDID_MONITOR_NAME_MAX];
+        return display_connector_monitor_name(fd, conn->connector_id, name) &&
+               strcasecmp(name, selector + strlen(DISPLAY_MONITOR_SELECTOR_PREFIX)) == 0;
+    }
+    if (str_is_digits(selector)) return conn->connector_id == (uint32_t)atoi(selector);
+    char port[32];
+    snprintf(port, sizeof(port), "%s-%u", display_conn_type_str(conn->connector_type), conn->connector_type_id);
+    return strcmp(port, selector) == 0;
 }
 
 static EGLConfig find_config_for_format(EGLDisplay dpy, EGLint renderable_type, EGLBoolean want_alpha, uint32_t fourcc) {
@@ -331,34 +366,74 @@ const char *display_conn_type_str(uint32_t type) {
     }
 }
 
-void display_pick_connector_mode(drm_ctx *d, const options_t *opt, bool debug) {
-    d->res = drmModeGetResources(d->fd);
-    if (!d->res) display_die("drmModeGetResources");
-    drmModeConnector *best_conn = NULL;
-    drmModeModeInfo best_mode = {0};
+typedef enum { PICK_FOUND, PICK_NO_OUTPUT, PICK_NO_MODE } pick_result;
+
+static pick_result pick_connector_once(drm_ctx *d, const options_t *opt, drmModeConnector **out_conn, drmModeModeInfo *out_mode) {
+    pick_result result = PICK_NO_OUTPUT;
     for (int i = 0; i < d->res->count_connectors; i++) {
         drmModeConnector *conn = drmModeGetConnector(d->fd, d->res->connectors[i]);
         if (!conn) continue;
-        if (conn->connection != DRM_MODE_CONNECTED || conn->count_modes == 0) { drmModeFreeConnector(conn); continue; }
-        bool chosen = false;
-        if (opt->connector_opt) {
-            if (str_is_digits(opt->connector_opt)) chosen = conn->connector_id == (uint32_t)atoi(opt->connector_opt);
-            else {
-                char namebuf[32];
-                snprintf(namebuf, sizeof(namebuf), "%s-%u", display_conn_type_str(conn->connector_type), conn->connector_type_id);
-                chosen = strcmp(namebuf, opt->connector_opt) == 0;
+        if (conn->connection != DRM_MODE_CONNECTED || conn->count_modes == 0 ||
+            !connector_matches(d->fd, conn, opt->connector_opt)) { drmModeFreeConnector(conn); continue; }
+        result = PICK_NO_MODE;
+        for (int mi = 0; mi < conn->count_modes; mi++) {
+            if (!(opt->mode_w || opt->mode_h || opt->mode_hz) ||
+                mode_matches(&conn->modes[mi], opt->mode_w, opt->mode_h, opt->mode_hz)) {
+                *out_conn = conn;
+                *out_mode = conn->modes[mi];
+                return PICK_FOUND;
             }
-        } else chosen = true;
-        if (!chosen) { drmModeFreeConnector(conn); continue; }
-        drmModeModeInfo chosen_mode = conn->modes[0];
-        if (opt->mode_w || opt->mode_h || opt->mode_hz) {
-            bool found = false;
-            for (int mi = 0; mi < conn->count_modes; mi++) if (mode_matches(&conn->modes[mi], opt->mode_w, opt->mode_h, opt->mode_hz)) { chosen_mode = conn->modes[mi]; found = true; break; }
-            if (!found) { drmModeFreeConnector(conn); continue; }
         }
-        best_conn = conn; best_mode = chosen_mode; break;
+        drmModeFreeConnector(conn);
     }
-    if (!best_conn) display_die("no suitable connector/mode");
+    return result;
+}
+
+static void set_output_wait_marker(const char *path, const char *selector, bool waiting) {
+    if (!path || !*path) return;
+    if (!waiting) { unlink(path); return; }
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fprintf(f, "%s\n", selector);
+    fclose(f);
+}
+
+void display_pick_connector_mode(drm_ctx *d, const options_t *opt, bool debug, const volatile sig_atomic_t *stop_flag) {
+    const char *wait_marker = getenv("KMS_MOSAIC_OUTPUT_WAIT_FILE");
+    bool waiting = false;
+    drmModeConnector *best_conn = NULL;
+    drmModeModeInfo best_mode = {0};
+    for (;;) {
+        d->res = drmModeGetResources(d->fd);
+        if (!d->res) display_die("drmModeGetResources");
+        pick_result result = pick_connector_once(d, opt, &best_conn, &best_mode);
+        if (result == PICK_FOUND) break;
+        if (result == PICK_NO_MODE || !opt->connector_opt || opt->list_connectors) {
+            set_output_wait_marker(wait_marker, opt->connector_opt, false);
+            if (result == PICK_NO_MODE) fprintf(stderr, "Output for --connector '%s' has no mode matching --mode.\n", opt->connector_opt ? opt->connector_opt : "auto");
+            else if (opt->connector_opt) fprintf(stderr, "No connected output matches --connector '%s'.\n", opt->connector_opt);
+            else fprintf(stderr, "No connected output with a usable mode.\n");
+            exit(1);
+        }
+        if (!waiting) {
+            fprintf(stderr, "Waiting for an output matching --connector '%s'.\n", opt->connector_opt);
+            set_output_wait_marker(wait_marker, opt->connector_opt, true);
+            waiting = true;
+        }
+        drmModeFreeResources(d->res);
+        d->res = NULL;
+        for (int tick = 0; tick < 20; ++tick) {
+            if (stop_flag && *stop_flag) {
+                set_output_wait_marker(wait_marker, opt->connector_opt, false);
+                exit(0);
+            }
+            usleep(100000);
+        }
+    }
+    if (waiting) {
+        fprintf(stderr, "Output matching --connector '%s' is now connected.\n", opt->connector_opt);
+        set_output_wait_marker(wait_marker, opt->connector_opt, false);
+    }
     d->conn = best_conn;
     d->conn_id = best_conn->connector_id;
     drmModeEncoder *enc = best_conn->encoder_id ? drmModeGetEncoder(d->fd, best_conn->encoder_id) : NULL;

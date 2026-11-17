@@ -79,7 +79,7 @@ class UnraidServiceScriptTests(unittest.TestCase):
         start_kms = text[text.index("start_kms() {") : text.index("stop_kms() {")]
 
         self.assertIn("for attempt in 1 2; do", start_kms)
-        self.assertIn("if is_kms_running && kms_render_healthy; then", start_kms)
+        self.assertIn("kms_render_healthy || health=$?", start_kms)
         self.assertIn('launch_detached "$SELF" supervise-kms', start_kms)
         self.assertIn('write_pidfile "$KMS_SUPERVISOR_PIDFILE" "$!"', start_kms)
         self.assertIn("sleep 5", start_kms)
@@ -91,8 +91,7 @@ class UnraidServiceScriptTests(unittest.TestCase):
 
         self.assertIn("wait_for_runtime_dependencies", start_kms)
         self.assertIn("kms_render_healthy", start_kms)
-        self.assertIn("request_fresh_render || return 1", text)
-        self.assertEqual(text.count("request_fresh_render || return 1"), 2)
+        self.assertEqual(text.count("request_fresh_render || return $?"), 2)
         self.assertIn('touch "$SNAPSHOT_REQUEST"', text)
         self.assertIn('[ -s "$SNAPSHOT_OUTPUT" ]', text)
 
@@ -321,6 +320,86 @@ class UnraidServiceScriptTests(unittest.TestCase):
                         pass
                 if proc.poll() is None:
                     proc.wait(timeout=6)
+
+    def test_start_keeps_supervisor_running_while_selected_output_is_absent(self) -> None:
+        text = SERVICE_SCRIPT.read_text(encoding="utf-8")
+        start_kms = text[text.index("start_kms() {") : text.index("stop_kms() {")]
+
+        self.assertIn('[ -e "$KMS_OUTPUT_WAIT_FILE" ] && return 2', text)
+        self.assertIn('if [ "$health" -eq 2 ]; then', start_kms)
+        self.assertIn('"startup-waiting-for-output"', start_kms)
+
+    def test_kms_supervisor_pauses_frame_watchdog_while_waiting_for_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = pathlib.Path(tmp_dir)
+            wrapper = tmp / "wrapper"
+            count_file = tmp / "count"
+            pid_file = tmp / "kms.pid"
+            stop_file = tmp / "stop"
+            release = tmp / "release"
+            wait_file = tmp / "waiting-output"
+            wrapper.write_text(
+                "#!/bin/bash\n"
+                f"printf 'run\\n' >> {count_file!s}\n"
+                "trap 'rm -f \"$KMS_MOSAIC_OUTPUT_WAIT_FILE\"; exit 0' TERM INT HUP\n"
+                "printf 'monitor:ingnok\\n' > \"$KMS_MOSAIC_OUTPUT_WAIT_FILE\"\n"
+                f"while [ ! -e {release!s} ]; do sleep 0.05; done\n"
+                "rm -f \"$KMS_MOSAIC_OUTPUT_WAIT_FILE\"\n"
+                "while :; do sleep 0.1; done\n",
+                encoding="utf-8",
+            )
+            wrapper.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "KMS_MOSAIC_CFG": str(tmp / "missing.cfg"),
+                    "KMS_WRAPPER": str(wrapper),
+                    "KMS_PIDFILE": str(pid_file),
+                    "KMS_SUPERVISOR_PIDFILE": str(tmp / "supervisor.pid"),
+                    "KMS_STOP_FILE": str(stop_file),
+                    "KMS_OUTPUT_WAIT_FILE": str(wait_file),
+                    "KMS_LOG": str(tmp / "kms.log"),
+                    "LIFECYCLE_LOG": str(tmp / "lifecycle.log"),
+                    "SNAPSHOT_REQUEST": str(tmp / "snapshot.request"),
+                    "SNAPSHOT_OUTPUT": str(tmp / "snapshot.rgba"),
+                    "RUNTIME_HEALTH_INTERVAL": "1",
+                    "RUNTIME_HEALTH_TIMEOUT": "1",
+                    "HEALTH_RESTART_DELAY": "0.05",
+                    "SUPERVISOR_POLL_INTERVAL": "0.05",
+                }
+            )
+            proc = subprocess.Popen(
+                ["bash", str(SERVICE_SCRIPT), "supervise-kms"],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            lifecycle_log = tmp / "lifecycle.log"
+            try:
+                time.sleep(3)
+                lifecycle = lifecycle_log.read_text(encoding="utf-8")
+                self.assertIn("event=waiting-for-output", lifecycle)
+                self.assertIn("connector=monitor:ingnok", lifecycle)
+                self.assertNotIn("event=render-timeout", lifecycle)
+                self.assertEqual(count_file.read_text(encoding="utf-8").count("run"), 1)
+
+                release.touch()
+                deadline = time.monotonic() + 8
+                while time.monotonic() < deadline and "event=render-timeout" not in lifecycle_log.read_text(encoding="utf-8"):
+                    time.sleep(0.05)
+                self.assertIn("event=render-timeout", lifecycle_log.read_text(encoding="utf-8"))
+            finally:
+                stop_file.touch()
+                if pid_file.exists():
+                    child_pid = int(pid_file.read_text(encoding="utf-8").strip())
+                    try:
+                        os.kill(child_pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                if proc.poll() is None:
+                    proc.wait(timeout=6)
+            self.assertFalse(wait_file.exists())
 
     def test_unraid_defaults_to_event_driven_atomic_presentation(self) -> None:
         text = SERVICE_SCRIPT.read_text(encoding="utf-8")

@@ -37,7 +37,7 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
             """
             Using DRM atomic modesetting (plane 58).
             Connectors:
-              93: HDMI-A-1 (connected) modes:11 [use --mode WxH@Hz]
+              93: HDMI-A-1 (connected) modes:11 monitor="ingnok" [use --mode WxH@Hz]
                   1920x1080@60
               102: HDMI-A-2 (connected) modes:32 [use --mode WxH@Hz]
                   1920x1080@60 (preferred)
@@ -50,10 +50,27 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertEqual(
             parsed,
             [
-                {"id": "93", "name": "HDMI-A-1", "connected": True},
-                {"id": "102", "name": "HDMI-A-2", "connected": True},
+                {"id": "93", "name": "HDMI-A-1", "connected": True, "monitor": "ingnok"},
+                {"id": "102", "name": "HDMI-A-2", "connected": True, "monitor": ""},
             ],
         )
+
+    def test_parse_connector_listing_keeps_spaces_in_monitor_names(self) -> None:
+        parsed = kms_mosaic_web.parse_connector_listing(
+            '  110: DP-1 (connected) modes:20 monitor="DELL U2720Q" [use --mode WxH@Hz]'
+        )
+
+        self.assertEqual(parsed, [{"id": "110", "name": "DP-1", "connected": True, "monitor": "DELL U2720Q"}])
+
+    def test_monitor_selector_round_trips_through_config_state(self) -> None:
+        state = kms_mosaic_web.empty_state()
+        state["connector"] = "monitor:DELL U2720Q"
+
+        text = kms_mosaic_web.serialize_config(state)
+        parsed = kms_mosaic_web.parse_config_text(text)
+
+        self.assertIn("--connector 'monitor:DELL U2720Q'", text)
+        self.assertEqual(parsed["connector"], "monitor:DELL U2720Q")
 
     def test_integration_harness_exercises_role_zero_remove_path_and_checks_split_tree_alignment(self) -> None:
         integration_html = (ROOT / "tests" / "integration.test.html").read_text(encoding="utf-8")

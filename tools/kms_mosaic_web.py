@@ -91,10 +91,12 @@ def parse_connector_listing(text: str) -> list[dict[str, Any]]:
             continue
         if match.group(3) != "connected":
             continue
+        monitor = re.search(r'\smonitor="([^"]*)"', line)
         connectors.append({
             "id": match.group(1),
             "name": match.group(2),
             "connected": True,
+            "monitor": monitor.group(1) if monitor else "",
         })
     return connectors
 
@@ -6432,19 +6434,41 @@ HTML = r"""<!doctype html>
       autoOption.value = "";
       autoOption.textContent = "Auto";
       connectorEl.appendChild(autoOption);
+      const monitorPrefix = "monitor:";
+      const addGroup = (label, entries) => {
+        if (!entries.length) return;
+        const group = document.createElement("optgroup");
+        group.label = label;
+        entries.forEach(([value, text]) => {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = text;
+          group.appendChild(option);
+        });
+        connectorEl.appendChild(group);
+      };
+      const monitorEntries = new Map();
       connectors.forEach((connector) => {
-        const option = document.createElement("option");
-        option.value = connector.name || "";
-        option.textContent = connector.id ? `${connector.name} (${connector.id})` : (connector.name || "");
-        connectorEl.appendChild(option);
+        if (!connector.monitor) return;
+        const value = `${monitorPrefix}${connector.monitor}`;
+        if (!monitorEntries.has(value)) monitorEntries.set(value, `${connector.monitor} (now on ${connector.name})`);
       });
-      if (currentValue && !connectors.some((connector) => connector.name === currentValue)) {
+      addGroup("Monitor (follows it to any port)", [...monitorEntries]);
+      addGroup("Port", connectors.map((connector) => [
+        connector.name || "",
+        [connector.name, connector.id ? `(${connector.id})` : "", connector.monitor ? `· ${connector.monitor}` : ""].filter(Boolean).join(" "),
+      ]));
+      const saved = [...connectorEl.options].find((option) => option.value === currentValue
+        || (currentValue.startsWith(monitorPrefix) && option.value.toLowerCase() === currentValue.toLowerCase()));
+      if (currentValue && !saved) {
         const option = document.createElement("option");
         option.value = currentValue;
-        option.textContent = `${currentValue} (saved)`;
+        option.textContent = currentValue.startsWith(monitorPrefix)
+          ? `${currentValue.slice(monitorPrefix.length)} (monitor not connected)`
+          : `${currentValue} (saved)`;
         connectorEl.appendChild(option);
       }
-      connectorEl.value = state.connector || "";
+      connectorEl.value = saved ? saved.value : currentValue;
     }
 
     function selectedSceneId() {

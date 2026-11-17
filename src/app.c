@@ -579,10 +579,14 @@ static int app_list_connectors(const drm_ctx *d) {
     for (int i = 0; i < d->res->count_connectors; i++) {
         drmModeConnector *c = drmModeGetConnector(d->fd, d->res->connectors[i]);
         if (!c) continue;
-        fprintf(stderr, "  %u: %s-%u (%s) modes:%d %s\n", c->connector_id,
+        char monitor[EDID_MONITOR_NAME_MAX];
+        bool has_monitor = c->connection == DRM_MODE_CONNECTED &&
+                           display_connector_monitor_name(d->fd, c->connector_id, monitor);
+        fprintf(stderr, "  %u: %s-%u (%s) modes:%d%s%s%s %s\n", c->connector_id,
                 display_conn_type_str(c->connector_type), c->connector_type_id,
                 c->connection == DRM_MODE_CONNECTED ? "connected" : "disconnected",
-                c->count_modes, (c->count_modes > 0 ? "[use --mode WxH@Hz]" : ""));
+                c->count_modes, has_monitor ? " monitor=\"" : "", has_monitor ? monitor : "",
+                has_monitor ? "\"" : "", (c->count_modes > 0 ? "[use --mode WxH@Hz]" : ""));
         for (int mi = 0; mi < c->count_modes && mi < 8; mi++) {
             drmModeModeInfo *m = &c->modes[mi];
             int hz = (int)((m->clock * 1000LL) / (m->htotal * m->vtotal));
@@ -892,7 +896,7 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     if (!panes_init_runtime(&panes, opt.pane_count)) app_die("panes_init_runtime");
 
     d.fd = display_open_drm_card();
-    display_pick_connector_mode(&d, &opt, *debug);
+    display_pick_connector_mode(&d, &opt, *debug, stop_flag);
     if (opt.list_connectors) {
         rc = app_list_connectors(&d);
         goto cleanup;

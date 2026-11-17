@@ -580,6 +580,8 @@ static void print_usage(const char *exe) {
         "  %s [options] [video...]\n\n"
         "Core options:\n"
         "  --connector ID|NAME     Select DRM output (e.g. 42, HDMI-A-1, DP-1). Default: first connected.\n"
+        "                          monitor:NAME selects the output whose EDID monitor name matches\n"
+        "                          (case-insensitive), whichever port it is on.\n"
         "  --mode WxH[@Hz]         Mode like 1920x1080@60. Default: preferred.\n"
         "  --rotate 0|90|180|270   Presentation rotation (affects layout orientation).\n"
         "  --font-size PX          Terminal font pixel size (default 18).\n"

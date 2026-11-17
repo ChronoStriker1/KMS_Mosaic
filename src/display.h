@@ -1,6 +1,7 @@
 #ifndef DISPLAY_H
 #define DISPLAY_H
 
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -11,7 +12,10 @@
 
 #include <EGL/egl.h>
 
+#include "edid.h"
 #include "options.h"
+
+#define DISPLAY_MONITOR_SELECTOR_PREFIX "monitor:"
 
 typedef struct {
     int fd;
@@ -54,7 +58,8 @@ void display_warn_if_missing_dri(void);
 void display_preflight_expect_dri_driver(void);
 void display_preflight_expect_dri_driver_diag(void);
 const char *display_conn_type_str(uint32_t type);
-void display_pick_connector_mode(drm_ctx *d, const options_t *opt, bool debug);
+void display_pick_connector_mode(drm_ctx *d, const options_t *opt, bool debug, const volatile sig_atomic_t *stop_flag);
+bool display_connector_monitor_name(int fd, uint32_t conn_id, char out[EDID_MONITOR_NAME_MAX]);
 void display_gbm_init(gbm_ctx *g, int drm_fd, int w, int h, bool debug);
 void display_egl_init(egl_ctx *e, gbm_ctx *g, bool debug);
 void display_drm_set_mode(drm_ctx *d, gbm_ctx *g);
