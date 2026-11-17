@@ -86,6 +86,13 @@ brew install gnu-tar
 PATH="$(brew --prefix gnu-tar)/libexec/gnubin:$PATH" scripts/build_unraid_plugin.sh
 ```
 
+Release packages are published as GitHub release assets, not committed. After committing a version bump, publish its packages, then push `main`:
+
+```sh
+scripts/publish_release.sh
+git push origin main
+```
+
 ## Run on Linux
 
 Start from a console session with access to the DRM device. Use a media file that exists on that machine:

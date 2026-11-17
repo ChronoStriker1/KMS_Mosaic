@@ -78,11 +78,11 @@
 </CHANGES>
 
 <FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic-2026.11.17.6.tgz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms.mosaic-2026.11.17.6.tgz</URL>
+<URL>https://github.com/ChronoStriker1/KMS_Mosaic/releases/download/2026.11.17.6/kms.mosaic-2026.11.17.6.tgz</URL>
 </FILE>
 
 <FILE Name="/boot/config/plugins/kms.mosaic/kms_mosaic-2026.11.17.6-x86_64-1.txz">
-<URL>https://raw.githubusercontent.com/chronostriker1/KMS_Mosaic/main/dist/kms_mosaic-2026.11.17.6-x86_64-1.txz</URL>
+<URL>https://github.com/ChronoStriker1/KMS_Mosaic/releases/download/2026.11.17.6/kms_mosaic-2026.11.17.6-x86_64-1.txz</URL>
 </FILE>
 
 <FILE Name="/boot/config/plugins/kms.mosaic/kms.mosaic.cfg">

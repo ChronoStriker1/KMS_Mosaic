@@ -78,6 +78,15 @@ class UnraidPluginMetadataTests(unittest.TestCase):
         plugin_version = root / "unraid-plugin/package-root/usr/local/emhttp/plugins/kms.mosaic/VERSION"
         self.assertEqual(plugin_version.read_text().strip(), (root / "VERSION").read_text().strip())
 
+    def test_plugin_downloads_packages_from_the_versions_github_release(self) -> None:
+        version = (ROOT / "VERSION").read_text().strip()
+        manifest = PLUGIN_MANIFEST.read_text()
+        release = f"https://github.com/ChronoStriker1/KMS_Mosaic/releases/download/{version}"
+        self.assertIn(f"<URL>{release}/kms.mosaic-{version}.tgz</URL>", manifest)
+        self.assertIn(f"<URL>{release}/kms_mosaic-{version}-x86_64-1.txz</URL>", manifest)
+        self.assertNotIn("/main/dist/", manifest)
+        self.assertIn(f"###{version}\n", manifest)
+
 
 if __name__ == "__main__":
     unittest.main()
