@@ -30,18 +30,23 @@ class MediaDebuggingTests(unittest.TestCase):
         self.assertIn('if (!user_set_keep_open) mpv_set_option_string(m->mpv, "keep-open", "no");', src)
         self.assertNotIn('mpv_set_option_string(m->mpv, "keep-open", "yes");', src)
 
-    def test_embedded_mpv_decodes_with_vaapi_on_the_display_gpu_by_default(self) -> None:
+    def test_embedded_mpv_decodes_with_vaapi_copy_on_the_display_gpu_by_default(self) -> None:
         src = MEDIA_C.read_text(encoding="utf-8")
         self.assertIn("bool user_set_hwdec = false;", src)
-        self.assertIn('if (!user_set_hwdec) mpv_set_option_string(m->mpv, "hwdec", "vaapi");', src)
-        self.assertIn('mpv_set_option_string(m->mpv, "gpu-hwdec-interop", "vaapi-egl");', src)
-        self.assertIn(".render_fd = decode_fd", src)
-        self.assertIn("decode_fd >= 0 ? MPV_RENDER_PARAM_DRM_DISPLAY_V2 : MPV_RENDER_PARAM_INVALID", src)
+        self.assertIn('if (!user_set_hwdec) mpv_set_option_string(m->mpv, "hwdec", "vaapi-copy");', src)
+        self.assertIn('mpv_set_option_string(m->mpv, "gpu-hwdec-interop", "no");', src)
+        self.assertIn('if (decode_device) mpv_set_option_string(m->mpv, "vaapi-device", decode_device);', src)
+        self.assertNotIn("MPV_RENDER_PARAM_DRM_DISPLAY_V2", src)
         self.assertNotIn('"auto-copy-safe"', src)
         self.assertLess(
-            src.find('mpv_set_option_string(m->mpv, "gpu-hwdec-interop", "vaapi-egl");'),
+            src.find('mpv_set_option_string(m->mpv, "gpu-hwdec-interop", "no");'),
             src.find("media_apply_option_list(m, opt->mpv_opts"),
         )
+
+    def test_legacy_vaapi_hwdec_is_normalized_to_vaapi_copy(self) -> None:
+        src = MEDIA_C.read_text(encoding="utf-8")
+        self.assertIn('if (media_key_matches(kv, "hwdec")) value = media_normalize_hwdec_value(value);', src)
+        self.assertIn('if (value && strcmp(value, "vaapi") == 0) return "vaapi-copy";', src)
 
     def test_embedded_mpv_defaults_shader_cache_on_unless_user_overrides(self) -> None:
         src = MEDIA_C.read_text(encoding="utf-8")
@@ -55,10 +60,9 @@ class MediaDebuggingTests(unittest.TestCase):
 
     def test_decode_device_is_the_display_cards_render_node(self) -> None:
         src = (ROOT / "src" / "app.c").read_text(encoding="utf-8")
-        self.assertIn("char *decode_device = drmGetRenderDeviceNameFromFd(d.fd);", src)
-        self.assertIn("decode_fd = open(decode_device, O_RDWR | O_CLOEXEC);", src)
-        self.assertIn("media_init(&m, &opt, decode_fd, *debug)", src)
-        self.assertIn("media_init_pane(&pane_media[i], &opt, &opt.pane_media[i], decode_fd, *debug)", src)
+        self.assertIn("decode_device = drmGetRenderDeviceNameFromFd(d.fd);", src)
+        self.assertIn("media_init(&m, &opt, decode_device, *debug)", src)
+        self.assertIn("media_init_pane(&pane_media[i], &opt, &opt.pane_media[i], decode_device, *debug)", src)
 
     def test_egl_display_is_created_for_the_gbm_platform(self) -> None:
         src = (ROOT / "src" / "display.c").read_text(encoding="utf-8")
