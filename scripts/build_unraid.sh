@@ -14,6 +14,8 @@ rm -rf "$PKGROOT"
 mkdir -p "$PKGROOT/usr/local/bin" "$PKGROOT/usr/local/share/doc/kms_mosaic"
 install -m 0755 "$ROOT_DIR/kms_mosaic" "$PKGROOT/usr/local/bin/"
 install -m 0644 "$ROOT_DIR/README.md" "$PKGROOT/usr/local/share/doc/kms_mosaic/"
+mkdir -p "$PKGROOT/usr/local/share/kms_mosaic/fonts"
+install -m 0644 "$ROOT_DIR/fonts/Tiny5Mono.bdf" "$ROOT_DIR/fonts/OFL.txt" "$PKGROOT/usr/local/share/kms_mosaic/fonts/"
 
 echo "[3/3] Building Slackware package (.txz)"
 VER="$(date +%Y.%m.%d)"

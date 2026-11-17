@@ -60,6 +60,7 @@ typedef struct {
     int mode_hz;
     rotation_t rotation;
     int font_px;
+    const char *font_path;
     int right_frac_pct;
     int pane_split_pct;
     int video_frac_pct;

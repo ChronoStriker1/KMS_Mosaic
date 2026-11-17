@@ -893,6 +893,7 @@ int app_run(int argc, char **argv, int *debug, volatile sig_atomic_t *stop_flag)
     char *hot_split_tree = NULL;
 
     if (options_parse_cli(&opt, argc, argv, debug)) return 0;
+    term_pane_set_font_path(opt.font_path);
     if (!panes_init_runtime(&panes, opt.pane_count)) app_die("panes_init_runtime");
 
     d.fd = display_open_drm_card();

@@ -585,6 +585,8 @@ static void print_usage(const char *exe) {
         "  --mode WxH[@Hz]         Mode like 1920x1080@60. Default: preferred.\n"
         "  --rotate 0|90|180|270   Presentation rotation (affects layout orientation).\n"
         "  --font-size PX          Terminal font pixel size (default 18).\n"
+        "  --font FILE             Terminal font file (TTF/OTF/BDF/PCF). Default: fontconfig monospace.\n"
+        "                          Bitmap fonts scale by whole multiples of their native cell height.\n"
         "  --right-frac PCT        Right column width percentage (default 33).\n"
         "  --video-frac PCT        Override: video width percentage.\n"
         "  --pane-split PCT        Top row height percentage for split layouts (default 50).\n"
@@ -728,6 +730,7 @@ int options_parse_cli(options_t *opt, int argc, char **argv, int *debug) {
         else if (!strcmp(argv[i], "--mode") && i + 1 < argc) parse_mode(argv[++i], &opt->mode_w, &opt->mode_h, &opt->mode_hz);
         else if (!strcmp(argv[i], "--rotate") && i + 1 < argc) opt->rotation = parse_rot(argv[++i]);
         else if (!strcmp(argv[i], "--font-size") && i + 1 < argc) opt->font_px = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--font") && i + 1 < argc) opt->font_path = argv[++i];
         else if (!strcmp(argv[i], "--right-frac") && i + 1 < argc) opt->right_frac_pct = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--video-frac") && i + 1 < argc) opt->video_frac_pct = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--pane-split") && i + 1 < argc) opt->pane_split_pct = atoi(argv[++i]);
@@ -1053,19 +1056,39 @@ const char *default_config_path(void) {
     return buf;
 }
 
+static void save_config_quote(FILE *f, const char *value) {
+    fputc('\'', f);
+    for (const char *p = value; *p; ++p) {
+        if (*p == '\'') fputs("'\"'\"'", f);
+        else fputc(*p, f);
+    }
+    fputs("'\n", f);
+}
+
+static void save_config_quoted(FILE *f, const char *flag, const char *value) {
+    fprintf(f, "%s ", flag);
+    save_config_quote(f, value);
+}
+
+static void save_config_quoted_indexed(FILE *f, const char *flag, int index, const char *value) {
+    fprintf(f, "%s %d ", flag, index);
+    save_config_quote(f, value);
+}
+
 void save_config(const options_t *opt, const char *path) {
     FILE *f = fopen(path, "w");
     if (!f) {
         perror("save-config");
         return;
     }
-    if (opt->connector_opt) fprintf(f, "--connector '%s'\n", opt->connector_opt);
+    if (opt->connector_opt) save_config_quoted(f, "--connector", opt->connector_opt);
     if (opt->mode_w || opt->mode_h) fprintf(f, "--mode %dx%d@%d\n", opt->mode_w, opt->mode_h, opt->mode_hz);
     if (opt->rotation) fprintf(f, "--rotate %d\n", (int)opt->rotation);
     if (opt->font_px) fprintf(f, "--font-size %d\n", opt->font_px);
+    if (opt->font_path) save_config_quoted(f, "--font", opt->font_path);
     const char *lay_str = layout_mode_name(opt->layout_mode);
     fprintf(f, "--layout %s\n", lay_str);
-    if (opt->split_tree_spec && *opt->split_tree_spec) fprintf(f, "--split-tree '%s'\n", opt->split_tree_spec);
+    if (opt->split_tree_spec && *opt->split_tree_spec) save_config_quoted(f, "--split-tree", opt->split_tree_spec);
     if (opt->video_frac_pct) fprintf(f, "--video-frac %d\n", opt->video_frac_pct);
     else if (opt->right_frac_pct) fprintf(f, "--right-frac %d\n", opt->right_frac_pct);
     if (opt->pane_split_pct) fprintf(f, "--pane-split %d\n", opt->pane_split_pct);
@@ -1084,37 +1107,37 @@ void save_config(const options_t *opt, const char *path) {
     if (opt->pane_count != KMS_MOSAIC_DEFAULT_PANE_COUNT) fprintf(f, "--pane-count %d\n", opt->pane_count);
     for (int i = 0; i < opt->pane_count; ++i) {
         if (!opt->pane_cmds[i]) continue;
-        fprintf(f, "--pane %d '%s'\n", i + 1, opt->pane_cmds[i]);
+        save_config_quoted_indexed(f, "--pane", i + 1, opt->pane_cmds[i]);
     }
     for (int i = 0; i < opt->pane_count; ++i) {
         const pane_media_config *pm = &opt->pane_media[i];
         if (!pm->enabled) continue;
         fprintf(f, "--pane-media %d\n", i + 1);
-        if (pm->playlist_path) fprintf(f, "--pane-playlist %d '%s'\n", i + 1, pm->playlist_path);
-        if (pm->playlist_ext) fprintf(f, "--pane-playlist-extended %d '%s'\n", i + 1, pm->playlist_ext);
-        if (pm->playlist_fifo) fprintf(f, "--pane-playlist-fifo %d '%s'\n", i + 1, pm->playlist_fifo);
-        if (pm->mpv_out_path) fprintf(f, "--pane-mpv-out %d '%s'\n", i + 1, pm->mpv_out_path);
+        if (pm->playlist_path) save_config_quoted_indexed(f, "--pane-playlist", i + 1, pm->playlist_path);
+        if (pm->playlist_ext) save_config_quoted_indexed(f, "--pane-playlist-extended", i + 1, pm->playlist_ext);
+        if (pm->playlist_fifo) save_config_quoted_indexed(f, "--pane-playlist-fifo", i + 1, pm->playlist_fifo);
+        if (pm->mpv_out_path) save_config_quoted_indexed(f, "--pane-mpv-out", i + 1, pm->mpv_out_path);
         if (pm->video_rotate >= 0) fprintf(f, "--pane-video-rotate %d %d\n", i + 1, pm->video_rotate);
-        if (pm->panscan) fprintf(f, "--pane-panscan %d '%s'\n", i + 1, pm->panscan);
+        if (pm->panscan) save_config_quoted_indexed(f, "--pane-panscan", i + 1, pm->panscan);
         if (pm->watchdog_sec > 0) fprintf(f, "--pane-watchdog %d %d\n", i + 1, pm->watchdog_sec);
-        if (pm->sync_group && *pm->sync_group) fprintf(f, "--pane-sync-group %d '%s'\n", i + 1, pm->sync_group);
-        for (int vi = 0; vi < pm->video_count; ++vi) fprintf(f, "--pane-video %d '%s'\n", i + 1, pm->videos[vi].path);
-        for (int oi = 0; oi < pm->n_mpv_opts; ++oi) fprintf(f, "--pane-mpv-opt %d '%s'\n", i + 1, pm->mpv_opts[oi]);
+        if (pm->sync_group && *pm->sync_group) save_config_quoted_indexed(f, "--pane-sync-group", i + 1, pm->sync_group);
+        for (int vi = 0; vi < pm->video_count; ++vi) save_config_quoted_indexed(f, "--pane-video", i + 1, pm->videos[vi].path);
+        for (int oi = 0; oi < pm->n_mpv_opts; ++oi) save_config_quoted_indexed(f, "--pane-mpv-opt", i + 1, pm->mpv_opts[oi]);
     }
     if (opt->visibility_mode != VISIBILITY_MODE_NEITHER) {
         fprintf(f, "--visibility-mode %s\n", visibility_mode_name(opt->visibility_mode));
     }
     if (opt->no_video) fprintf(f, "--no-video\n");
     if (opt->shuffle) fprintf(f, "--shuffle\n");
-    for (int i = 0; i < opt->n_mpv_opts; i++) fprintf(f, "--mpv-opt '%s'\n", opt->mpv_opts[i]);
-    if (opt->playlist_path) fprintf(f, "--playlist '%s'\n", opt->playlist_path);
-    if (opt->playlist_ext) fprintf(f, "--playlist-extended '%s'\n", opt->playlist_ext);
-    if (opt->playlist_fifo) fprintf(f, "--playlist-fifo '%s'\n", opt->playlist_fifo);
-    if (opt->mpv_out_path) fprintf(f, "--mpv-out '%s'\n", opt->mpv_out_path);
+    for (int i = 0; i < opt->n_mpv_opts; i++) save_config_quoted(f, "--mpv-opt", opt->mpv_opts[i]);
+    if (opt->playlist_path) save_config_quoted(f, "--playlist", opt->playlist_path);
+    if (opt->playlist_ext) save_config_quoted(f, "--playlist-extended", opt->playlist_ext);
+    if (opt->playlist_fifo) save_config_quoted(f, "--playlist-fifo", opt->playlist_fifo);
+    if (opt->mpv_out_path) save_config_quoted(f, "--mpv-out", opt->mpv_out_path);
     for (int i = 0; i < opt->video_count; i++) {
         const video_item *vi = &opt->videos[i];
-        fprintf(f, "--video '%s'\n", vi->path);
-        for (int k = 0; k < vi->nopts; k++) fprintf(f, "--video-opt '%s'\n", vi->opts[k]);
+        save_config_quoted(f, "--video", vi->path);
+        for (int k = 0; k < vi->nopts; k++) save_config_quoted(f, "--video-opt", vi->opts[k]);
     }
     fclose(f);
 }

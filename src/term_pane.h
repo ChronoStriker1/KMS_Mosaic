@@ -34,6 +34,8 @@ void term_pane_send_input(term_pane *tp, const char *buf, size_t len);
 // Returns true on success and sets cell_w/cell_h (pixels per character cell).
 bool term_measure_cell(int font_px, int *cell_w, int *cell_h);
 
+void term_pane_set_font_path(const char *path);
+
 // Change the font pixel size and reallocate buffers accordingly.
 void term_pane_set_font_px(term_pane *tp, int font_px);
 void term_pane_set_alpha(term_pane *tp, uint8_t alpha);

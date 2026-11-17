@@ -7,10 +7,35 @@ import unittest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 OPTIONS_C = REPO_ROOT / "src" / "options.c"
+PANE_MODEL_REPORT = r'''
+printf("pane_count=%d\n", opt.pane_count);
+printf("pane0_cmd=%s\n", opt.pane_cmds[0] ? opt.pane_cmds[0] : "(null)");
+printf("pane1_cmd=%s\n", opt.pane_cmds[1] ? opt.pane_cmds[1] : "(null)");
+printf("pane2_cmd=%s\n", opt.pane_cmds[2] ? opt.pane_cmds[2] : "(null)");
+printf("pane0_media=%d\n", opt.pane_media[0].enabled ? 1 : 0);
+printf("pane1_media=%d\n", opt.pane_media[1].enabled ? 1 : 0);
+printf("pane2_media=%d\n", opt.pane_media[2].enabled ? 1 : 0);
+printf("split_tree=%s\n", opt.split_tree_spec ? opt.split_tree_spec : "(null)");
+printf("visibility=%s\n", visibility_mode_name(opt.visibility_mode));
+'''
+SAVED_CONFIG_REPORT = r'''
+char saved_path[512];
+snprintf(saved_path, sizeof(saved_path), "%s.saved", argv[2]);
+save_config(&opt, saved_path);
+options_t saved = {0};
+char *saved_argv[] = {"options_probe", "--config", saved_path, NULL};
+if (options_parse_cli(&saved, 3, saved_argv, &debug) != 0) return 9;
+printf("font=%s\n", saved.font_path ? saved.font_path : "(null)");
+printf("connector=%s\n", saved.connector_opt ? saved.connector_opt : "(null)");
+printf("pane1_video=%s\n", saved.pane_media[1].video_count ? saved.pane_media[1].videos[0].path : "(null)");
+printf("pane1_mpv_opt=%s\n", saved.pane_media[1].n_mpv_opts ? saved.pane_media[1].mpv_opts[0] : "(null)");
+printf("pane_count=%d\n", saved.pane_count);
+options_destroy(&saved);
+'''
 
 
 class OptionsConfigModelTests(unittest.TestCase):
-    def _probe_config(self, config_text: str) -> list[str]:
+    def _probe_config(self, config_text: str, report: str = PANE_MODEL_REPORT) -> list[str]:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = pathlib.Path(tmpdir)
             (tmp / "mpv").mkdir()
@@ -83,15 +108,7 @@ class OptionsConfigModelTests(unittest.TestCase):
                             fprintf(stderr, "parse failed: %d\\n", rc);
                             return rc;
                         }}
-                        printf("pane_count=%d\\n", opt.pane_count);
-                        printf("pane0_cmd=%s\\n", opt.pane_cmds[0] ? opt.pane_cmds[0] : "(null)");
-                        printf("pane1_cmd=%s\\n", opt.pane_cmds[1] ? opt.pane_cmds[1] : "(null)");
-                        printf("pane2_cmd=%s\\n", opt.pane_cmds[2] ? opt.pane_cmds[2] : "(null)");
-                        printf("pane0_media=%d\\n", opt.pane_media[0].enabled ? 1 : 0);
-                        printf("pane1_media=%d\\n", opt.pane_media[1].enabled ? 1 : 0);
-                        printf("pane2_media=%d\\n", opt.pane_media[2].enabled ? 1 : 0);
-                        printf("split_tree=%s\\n", opt.split_tree_spec ? opt.split_tree_spec : "(null)");
-                        printf("visibility=%s\\n", visibility_mode_name(opt.visibility_mode));
+{report}
                         options_destroy(&opt);
                         return 0;
                     }}
@@ -207,6 +224,28 @@ class OptionsConfigModelTests(unittest.TestCase):
                 "pane2_media=0",
                 "split_tree=(null)",
                 "visibility=no-terminal",
+            ],
+        )
+
+    def test_saved_config_round_trips_values_containing_quotes(self):
+        self.assertEqual(
+            self._probe_config(
+                """
+                --connector 'monitor:Jeff'"'"'s TV'
+                --font "/mnt/user/Jeff's Fonts/Tiny5Mono.bdf"
+                --pane-count 2
+                --pane-media 2
+                --pane-video 2 "/media/it's here.mp4"
+                --pane-mpv-opt 2 'title="quoted"'
+                """,
+                report=SAVED_CONFIG_REPORT,
+            ),
+            [
+                "font=/mnt/user/Jeff's Fonts/Tiny5Mono.bdf",
+                "connector=monitor:Jeff's TV",
+                "pane1_video=/media/it's here.mp4",
+                'pane1_mpv_opt=title="quoted"',
+                "pane_count=2",
             ],
         )
 

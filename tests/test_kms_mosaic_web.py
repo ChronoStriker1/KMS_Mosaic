@@ -32,6 +32,17 @@ class KmsMosaicWebConfigTests(unittest.TestCase):
         self.assertIn("--connector HDMI-A-2", text)
         self.assertEqual(parsed["connector"], "HDMI-A-2")
 
+    def test_terminal_font_round_trips_through_config_state(self) -> None:
+        state = kms_mosaic_web.empty_state()
+        state["font"] = "/usr/local/share/kms_mosaic/fonts/Tiny5Mono.bdf"
+
+        text = kms_mosaic_web.serialize_config(state)
+        parsed = kms_mosaic_web.parse_config_text(text)
+
+        self.assertIn("--font /usr/local/share/kms_mosaic/fonts/Tiny5Mono.bdf", text)
+        self.assertEqual(parsed["font"], "/usr/local/share/kms_mosaic/fonts/Tiny5Mono.bdf")
+        self.assertNotIn("--font ", kms_mosaic_web.serialize_config(kms_mosaic_web.empty_state()))
+
     def test_parse_connector_listing_extracts_connected_outputs(self) -> None:
         listing = textwrap.dedent(
             """

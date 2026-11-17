@@ -142,6 +142,8 @@ Config files contain the same flags as the command line, with quoting and `#` co
 
 Starter layouts include `stack`, `row`, `2x1`, `1x2`, `2over1`, `1over2`, and `overlay`. Layout Studio saves custom split trees for more detailed arrangements.
 
+Terminal panes use fontconfig's `monospace` font unless `--font FILE` names a TTF, OTF, BDF, or PCF file. Packages ship Tiny5 Mono at `/usr/local/share/kms_mosaic/fonts/Tiny5Mono.bdf` (SIL Open Font License), selectable as Terminal Font in the web interface. Bitmap fonts render at whole multiples of their native cell, 6x9 pixels for Tiny5 Mono, so `--font-size 18` gives 12x18 cells. A pane too small for its minimum columns at the requested size drops to the next smaller multiple.
+
 Atomic modesetting is available through `--atomic` and `--atomic-nonblock`; initialization falls back to legacy KMS if atomic setup fails.
 
 ## Troubleshooting
@@ -156,4 +158,4 @@ The Unraid supervisors retain recent application output in `/tmp/start_kms_mosai
 
 ## Source layout
 
-`src/` contains the compositor's display, media, layout, terminal, and rendering modules. `tools/kms_mosaic_web.py` contains the web editor and preview service. `unraid-plugin/` contains the plugin integration, and `tests/` contains automated checks.
+`fonts/` contains the bundled Tiny5 Mono bitmap font and its license. `src/` contains the compositor's display, media, layout, terminal, and rendering modules. `tools/kms_mosaic_web.py` contains the web editor and preview service. `unraid-plugin/` contains the plugin integration, and `tests/` contains automated checks.

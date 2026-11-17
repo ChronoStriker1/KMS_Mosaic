@@ -43,6 +43,8 @@ rm -rf "$PKGROOT"
 mkdir -p "$PKGROOT/usr/local/bin" "$PKGROOT/usr/local/share/doc/kms_mosaic" "$PKGROOT/install"
 install -m0755 ./kms_mosaic "$PKGROOT/usr/local/bin/kms_mosaic.bin"
 install -m0644 ./README.md "$PKGROOT/usr/local/share/doc/kms_mosaic/"
+mkdir -p "$PKGROOT/usr/local/share/kms_mosaic/fonts"
+install -m0644 ./fonts/Tiny5Mono.bdf ./fonts/OFL.txt "$PKGROOT/usr/local/share/kms_mosaic/fonts/"
 
 # Collect and bundle non-core shared libraries next to the binary
 LIBDIR="$PKGROOT/usr/local/lib/kms_mosaic"

@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 #include "term_pane.h"
-#include "font_util.h"
+#include "term_font.h"
 #include "color.h"
 
 #include <assert.h>
@@ -24,30 +24,17 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
-#include <fontconfig/fontconfig.h>
-#include <ft2build.h>
-#include FT_FREETYPE_H
-
 #define TERM_PANE_MAX_DIRTY_RANGES 16
 
 typedef struct {
-    uint32_t codepoint;
-    int w, h, bearing_x, bearing_y, advance;
-    unsigned char *bitmap; // 8-bit alpha
-} glyph_bitmap;
-
-typedef struct {
     uint32_t cp;
-    glyph_bitmap gb;
+    term_glyph gb;
     uint64_t last_used;
     int used;
 } glyph_cache_entry;
 
 typedef struct {
-    FT_Library ftlib;
-    FT_Face face;
-    int px_size;
-    int cell_w, cell_h, baseline;
+    term_font tf;
     // Bounded glyph cache with open addressing and simple LRU eviction.
     glyph_cache_entry *cache;
     int cache_cap;
@@ -92,25 +79,22 @@ static void die(const char *msg) {
     exit(1);
 }
 
-static void glyph_bitmap_reset(glyph_bitmap *g) {
+static char *term_font_path;
+
+void term_pane_set_font_path(const char *path) {
+    free(term_font_path);
+    term_font_path = path && *path ? strdup(path) : NULL;
+}
+
+static void glyph_bitmap_reset(term_glyph *g) {
     if (!g) return;
-    free(g->bitmap);
+    free(g->alpha);
     memset(g, 0, sizeof(*g));
 }
 
 static void font_init(font_ctx *f, int px_size) {
-    if (FT_Init_FreeType(&f->ftlib)) die("FT_Init_FreeType");
-    char *path = kms_font_find_monospace();
-    if (!path) die("fontconfig monospace not found");
-    if (FT_New_Face(f->ftlib, path, 0, &f->face)) die("FT_New_Face");
-    free(path);
-    FT_Set_Pixel_Sizes(f->face, 0, px_size);
-    f->px_size = px_size;
-    // Measure cell from 'M'
-    FT_Load_Char(f->face, 'M', FT_LOAD_RENDER);
-    f->cell_w = (f->face->glyph->advance.x + 31) / 64; // 26.6 to int
-    f->cell_h = px_size + 2; // add small leading
-    f->baseline = (f->face->size->metrics.ascender + 31) / 64;
+    if (!term_font_open(&f->tf, term_font_path)) die("term_font_open");
+    if (!term_font_set_px(&f->tf, px_size)) die("term_font_set_px");
     f->cache_cap = 2048;
     f->cache = calloc((size_t)f->cache_cap, sizeof(*f->cache));
     f->cache_count = 0;
@@ -124,8 +108,7 @@ static void font_destroy(font_ctx *f) {
         }
         free(f->cache);
     }
-    if (f->face) FT_Done_Face(f->face);
-    if (f->ftlib) FT_Done_FreeType(f->ftlib);
+    term_font_close(&f->tf);
 }
 
 static uint32_t glyph_hash(uint32_t cp) {
@@ -164,15 +147,15 @@ static int find_lru_slot(font_ctx *f) {
     return lru_idx;
 }
 
-static glyph_bitmap* get_glyph(font_ctx *f, uint32_t cp) {
+static term_glyph* get_glyph(font_ctx *f, uint32_t cp) {
     int empty_idx = -1;
     glyph_cache_entry *entry = find_glyph_slot(f, cp, &empty_idx);
     if (entry) {
         entry->last_used = ++f->cache_tick;
         return &entry->gb;
     }
-    if (FT_Load_Char(f->face, cp, FT_LOAD_RENDER)) return NULL;
-    FT_GlyphSlot slot = f->face->glyph;
+    term_glyph rendered;
+    if (!term_font_render(&f->tf, cp, &rendered)) return NULL;
     int idx = empty_idx >= 0 ? empty_idx : find_lru_slot(f);
     entry = &f->cache[idx];
     if (!entry->used) f->cache_count++;
@@ -180,14 +163,8 @@ static glyph_bitmap* get_glyph(font_ctx *f, uint32_t cp) {
     entry->cp = cp;
     entry->used = 1;
     entry->last_used = ++f->cache_tick;
-    glyph_bitmap *g = &entry->gb;
-    g->codepoint = cp;
-    g->w = slot->bitmap.width; g->h = slot->bitmap.rows;
-    g->bearing_x = slot->bitmap_left; g->bearing_y = slot->bitmap_top;
-    g->advance = (slot->advance.x + 31)/64;
-    size_t sz = (size_t)g->w * g->h; g->bitmap = malloc(sz);
-    memcpy(g->bitmap, slot->bitmap.buffer, sz);
-    return g;
+    entry->gb = rendered;
+    return &entry->gb;
 }
 
 static void pane_tex_init(pane_tex *t, int w, int h) {
@@ -501,10 +478,10 @@ static void composite_cell(term_pane *tp, int cx, int cy, const VTermScreenCell 
     pane_tex *tex = &tp->surface;
     uint8_t alpha = tp->alpha;
     // Fill background
-    int x0 = cx * font->cell_w;
-    int y0 = cy * font->cell_h;
-    int x1 = x0 + font->cell_w;
-    int y1 = y0 + font->cell_h;
+    int x0 = cx * font->tf.cell_w;
+    int y0 = cy * font->tf.cell_h;
+    int x1 = x0 + font->tf.cell_w;
+    int y1 = y0 + font->tf.cell_h;
     rgb8 bgc = color_from_index(sattr_to_rgb_idx(cell, 0));
     for (int y=y0; y<y1; y++) {
         uint8_t *row = tex->pixels + (size_t)y * tex->tex_w * 4 + x0 * 4;
@@ -516,9 +493,9 @@ static void composite_cell(term_pane *tp, int cx, int cy, const VTermScreenCell 
     uint32_t cp = cell->chars[0];
     if (cp == 0) return;
     // Handle Unicode box-drawing with simple vector lines for clarity
-    if (cp >= 0x2500 && cp <= 0x257F) {
+    if (font->tf.scale == 0 && cp >= 0x2500 && cp <= 0x257F) {
         rgb8 fgc = color_from_index(sattr_to_rgb_idx(cell, 1));
-        int thickness = font->cell_h / 8; if (thickness < 1) thickness = 1; if (thickness > 2) thickness = 2;
+        int thickness = font->tf.cell_h / 8; if (thickness < 1) thickness = 1; if (thickness > 2) thickness = 2;
         int cxm = (x0 + x1) / 2; // center x
         int cym = (y0 + y1) / 2; // center y
         switch (cp) {
@@ -584,12 +561,12 @@ static void composite_cell(term_pane *tp, int cx, int cy, const VTermScreenCell 
                 draw_h_line(tex, cym, x0+1, x1-1, x0, x1, y0, y1, thickness, fgc, alpha); return;
         }
     }
-    glyph_bitmap *g = get_glyph(font, cp);
+    term_glyph *g = get_glyph(font, cp);
     if (!g) return;
     rgb8 fgc = color_from_index(sattr_to_rgb_idx(cell, 1));
-    int gx = x0 + (font->cell_w - g->w)/2 + g->bearing_x;
-    int gy = y0 + font->baseline - g->bearing_y;
-    // Clip horizontally to avoid negative pointer math when bearing_x shifts left
+    int gx = x0 + g->x;
+    int gy = y0 + g->y;
+    // Clip horizontally to avoid negative pointer math when a glyph starts left of its cell
     int clip_x0 = gx < x0 ? x0 : gx;
     int clip_x1 = (gx + g->w) > x1 ? x1 : (gx + g->w);
     if (clip_x0 < clip_x1) {
@@ -599,7 +576,7 @@ static void composite_cell(term_pane *tp, int cx, int cy, const VTermScreenCell 
             int xx1 = clip_x1 - gx; // end within glyph bitmap
             uint8_t *row = tex->pixels + (size_t)py * tex->tex_w * 4 + clip_x0 * 4;
             for (int xx=xx0; xx<xx1; xx++) {
-                uint8_t a = g->bitmap[yy*g->w + xx];
+                uint8_t a = g->alpha[yy*g->w + xx];
                 if (a) {
                     uint8_t *p = row + (xx - xx0)*4;
                     p[0] = (uint8_t)((fgc.r * a + p[0]*(255-a))/255);
@@ -652,8 +629,8 @@ term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *
     // the requested rectangle even when the dimensions are not exact multiples
     // of the cell size.  This prevents visible gaps when the pane sits next to
     // other content, such as in portrait layouts.
-    tp->layout.cols = (tp->layout.w + tp->font.cell_w - 1) / tp->font.cell_w;
-    tp->layout.rows = (tp->layout.h + tp->font.cell_h - 1) / tp->font.cell_h;
+    tp->layout.cols = (tp->layout.w + tp->font.tf.cell_w - 1) / tp->font.tf.cell_w;
+    tp->layout.rows = (tp->layout.h + tp->font.tf.cell_h - 1) / tp->font.tf.cell_h;
     if (tp->layout.cols < 10) tp->layout.cols = 10;
     if (tp->layout.rows < 5) tp->layout.rows = 5;
 
@@ -675,8 +652,8 @@ term_pane* term_pane_create(const pane_layout *layout, int font_px, const char *
     set_pty_winsize(tp->pty_master, tp->layout.cols, tp->layout.rows);
 
     // Texture surface
-    int tex_w = tp->layout.cols * tp->font.cell_w;
-    int tex_h = tp->layout.rows * tp->font.cell_h;
+    int tex_w = tp->layout.cols * tp->font.tf.cell_w;
+    int tex_h = tp->layout.rows * tp->font.tf.cell_h;
     pane_tex_init(&tp->surface, tex_w, tex_h);
 
     // Prime screen empty so blank lines render before the child emits output.
@@ -692,8 +669,8 @@ term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const ch
     tp->use_shell_cmd = 1;
     tp->shell_cmd = strdup(shell_cmd);
     tp->argv_dup = NULL;
-    tp->layout.cols = (tp->layout.w + tp->font.cell_w - 1) / tp->font.cell_w;
-    tp->layout.rows = (tp->layout.h + tp->font.cell_h - 1) / tp->font.cell_h;
+    tp->layout.cols = (tp->layout.w + tp->font.tf.cell_w - 1) / tp->font.tf.cell_w;
+    tp->layout.rows = (tp->layout.h + tp->font.tf.cell_h - 1) / tp->font.tf.cell_h;
     if (tp->layout.cols < 10) tp->layout.cols = 10;
     if (tp->layout.rows < 5) tp->layout.rows = 5;
     tp->vt = vterm_new(tp->layout.rows, tp->layout.cols);
@@ -707,8 +684,8 @@ term_pane* term_pane_create_cmd(const pane_layout *layout, int font_px, const ch
     tp->child_pid = spawn_pty_shell(shell_cmd, &tp->pty_master);
     fcntl(tp->pty_master, F_SETFL, O_NONBLOCK);
     set_pty_winsize(tp->pty_master, tp->layout.cols, tp->layout.rows);
-    int tex_w = tp->layout.cols * tp->font.cell_w;
-    int tex_h = tp->layout.rows * tp->font.cell_h;
+    int tex_w = tp->layout.cols * tp->font.tf.cell_w;
+    int tex_h = tp->layout.rows * tp->font.tf.cell_h;
     pane_tex_init(&tp->surface, tex_w, tex_h);
 
     // Prime screen empty so blank lines render before the child emits output.
@@ -735,20 +712,20 @@ void term_pane_destroy(term_pane *tp) {
 void term_pane_resize(term_pane *tp, const pane_layout *layout) {
     pane_tex old = tp->surface; tp->surface = (pane_tex){0};
     tp->layout = *layout;
-    int cols = (tp->layout.w + tp->font.cell_w - 1) / tp->font.cell_w;
-    int rows = (tp->layout.h + tp->font.cell_h - 1) / tp->font.cell_h;
+    int cols = (tp->layout.w + tp->font.tf.cell_w - 1) / tp->font.tf.cell_w;
+    int rows = (tp->layout.h + tp->font.tf.cell_h - 1) / tp->font.tf.cell_h;
     if (cols < 10) cols = 10;
     if (rows < 5) rows = 5;
     /* Update the stored layout dimensions so subsequent redraw logic knows the
      * terminal grid size.  The incoming layout only specifies x/y/w/h. */
     tp->layout.cols = cols;
     tp->layout.rows = rows;
-    tp->layout.cell_w = tp->font.cell_w;
-    tp->layout.cell_h = tp->font.cell_h;
+    tp->layout.cell_w = tp->font.tf.cell_w;
+    tp->layout.cell_h = tp->font.tf.cell_h;
     vterm_set_size(tp->vt, rows, cols);
     set_pty_winsize(tp->pty_master, cols, rows);
     if (tp->child_pid > 0) kill(tp->child_pid, SIGWINCH);
-    int new_w = cols*tp->font.cell_w, new_h = rows*tp->font.cell_h;
+    int new_w = cols*tp->font.tf.cell_w, new_h = rows*tp->font.tf.cell_h;
     pane_tex_init(&tp->surface, new_w, new_h);
     if (old.pixels) {
         int copy_w = old.tex_w < tp->surface.tex_w ? old.tex_w : tp->surface.tex_w;
@@ -775,8 +752,8 @@ static void mark_surface_dirty_rows(term_pane *tp, int start_row, int end_row) {
     if (start_row < 0) start_row = 0;
     if (end_row > tp->layout.rows) end_row = tp->layout.rows;
     if (start_row >= end_row) return;
-    int y0 = start_row * tp->font.cell_h;
-    int y1 = end_row * tp->font.cell_h;
+    int y0 = start_row * tp->font.tf.cell_h;
+    int y1 = end_row * tp->font.tf.cell_h;
     if (tp->surface.dirty_count < TERM_PANE_MAX_DIRTY_RANGES) {
         int idx = tp->surface.dirty_count++;
         tp->surface.dirty_ranges[idx].y0 = y0;
@@ -885,8 +862,8 @@ void term_pane_respawn(term_pane *tp) {
     }
     fcntl(tp->pty_master, F_SETFL, O_NONBLOCK);
     // Reapply size to PTY
-    int cols = (tp->layout.w + tp->font.cell_w - 1) / tp->font.cell_w;
-    int rows = (tp->layout.h + tp->font.cell_h - 1) / tp->font.cell_h;
+    int cols = (tp->layout.w + tp->font.tf.cell_w - 1) / tp->font.tf.cell_w;
+    int rows = (tp->layout.h + tp->font.tf.cell_h - 1) / tp->font.tf.cell_h;
     if (cols < 10) cols = 10;
     if (rows < 5) rows = 5;
     vterm_set_size(tp->vt, rows, cols);
@@ -942,8 +919,7 @@ void term_pane_send_input(term_pane *tp, const char *buf, size_t len) {
 
 bool term_measure_cell(int font_px, int *cell_w, int *cell_h) {
     enum { TERM_MEASURE_CACHE_MAX = 512 };
-    static FT_Library measure_ftlib;
-    static FT_Face measure_face;
+    static term_font measure_font;
     static bool measure_initialized;
     static bool measure_failed;
     static int cached_w[TERM_MEASURE_CACHE_MAX + 1];
@@ -956,26 +932,12 @@ bool term_measure_cell(int font_px, int *cell_w, int *cell_h) {
         return true;
     }
     if (!measure_initialized && !measure_failed) {
-        if (FT_Init_FreeType(&measure_ftlib)) {
-            measure_failed = true;
-        } else {
-            char *path = kms_font_find_monospace();
-            if (!path || FT_New_Face(measure_ftlib, path, 0, &measure_face)) {
-                measure_failed = true;
-                FT_Done_FreeType(measure_ftlib);
-                measure_ftlib = NULL;
-            } else {
-                measure_initialized = true;
-            }
-            free(path);
-        }
+        measure_initialized = term_font_open(&measure_font, term_font_path);
+        measure_failed = !measure_initialized;
     }
-    if (!measure_initialized || !measure_face) return false;
-    if (FT_Set_Pixel_Sizes(measure_face, 0, font_px) || FT_Load_Char(measure_face, 'M', FT_LOAD_DEFAULT)) {
-        return false;
-    }
-    int cw = (measure_face->glyph->advance.x + 31) / 64;
-    int ch = font_px + 2;
+    if (!measure_initialized || !term_font_set_px(&measure_font, font_px)) return false;
+    int cw = measure_font.cell_w;
+    int ch = measure_font.cell_h;
     if (font_px <= TERM_MEASURE_CACHE_MAX) {
         cached_w[font_px] = cw;
         cached_h[font_px] = ch;
@@ -992,21 +954,21 @@ void term_pane_set_font_px(term_pane *tp, int font_px) {
     font_destroy(&tp->font);
     font_init(&tp->font, font_px);
     // Update grid based on new cell size
-    int cols = (tp->layout.w + tp->font.cell_w - 1) / tp->font.cell_w;
-    int rows = (tp->layout.h + tp->font.cell_h - 1) / tp->font.cell_h;
+    int cols = (tp->layout.w + tp->font.tf.cell_w - 1) / tp->font.tf.cell_w;
+    int rows = (tp->layout.h + tp->font.tf.cell_h - 1) / tp->font.tf.cell_h;
     if (cols < 10) cols = 10;
     if (rows < 5) rows = 5;
     /* Update stored layout dimensions so subsequent logic uses the new grid */
     tp->layout.cols = cols;
     tp->layout.rows = rows;
-    tp->layout.cell_w = tp->font.cell_w;
-    tp->layout.cell_h = tp->font.cell_h;
+    tp->layout.cell_w = tp->font.tf.cell_w;
+    tp->layout.cell_h = tp->font.tf.cell_h;
     vterm_set_size(tp->vt, rows, cols);
     set_pty_winsize(tp->pty_master, cols, rows);
     if (tp->child_pid > 0) kill(tp->child_pid, SIGWINCH);
     // Recreate texture surface
     pane_tex old = tp->surface; tp->surface = (pane_tex){0};
-    pane_tex_init(&tp->surface, cols*tp->font.cell_w, rows*tp->font.cell_h);
+    pane_tex_init(&tp->surface, cols*tp->font.tf.cell_w, rows*tp->font.tf.cell_h);
     if (old.pixels) {
         int copy_w = old.tex_w < tp->surface.tex_w ? old.tex_w : tp->surface.tex_w;
         int copy_h = old.tex_h < tp->surface.tex_h ? old.tex_h : tp->surface.tex_h;

@@ -149,6 +149,7 @@ def empty_state() -> dict[str, Any]:
         "mode": "",
         "rotation": 0,
         "font_size": 18,
+        "font": "",
         "right_frac": 33,
         "video_frac": 0,
         "pane_split": 50,
@@ -571,7 +572,7 @@ def _normalize_loaded_state(state: dict[str, Any], web_state: dict[str, Any]) ->
 
     normalized = empty_state()
     for key in (
-        "connector", "mode", "rotation", "font_size", "right_frac", "video_frac",
+        "connector", "mode", "rotation", "font_size", "font", "right_frac", "video_frac",
         "pane_split", "layout", "fs_cycle_sec", "show_osd", "osd_pane",
         "fullscreen_cycle", "transition_ms", "extra_lines",
     ):
@@ -697,6 +698,9 @@ def parse_config_text(text: str) -> dict[str, Any]:
                 i += 2
             elif tok == "--font-size" and nxt is not None:
                 state["font_size"] = int(nxt)
+                i += 2
+            elif tok == "--font" and nxt is not None:
+                state["font"] = nxt
                 i += 2
             elif tok == "--right-frac" and nxt is not None:
                 state["right_frac"] = int(nxt)
@@ -926,6 +930,7 @@ def build_config_text(state: dict[str, Any]) -> str:
     add_opt("--mode", state.get("mode", ""))
     add_opt("--rotate", state.get("rotation", 0) or "")
     add_opt("--font-size", state.get("font_size", 18))
+    add_opt("--font", state.get("font", ""))
     if int(state.get("video_frac", 0) or 0) > 0:
         add_opt("--video-frac", state["video_frac"])
     else:
@@ -3247,6 +3252,12 @@ HTML = r"""<!doctype html>
                 </label>
                 <label>Font Size
                   <input id="fontSize" type="number" min="10" max="48" />
+                </label>
+                <label>Terminal Font
+                  <select id="terminalFont">
+                    <option value="">System monospace</option>
+                    <option value="/usr/local/share/kms_mosaic/fonts/Tiny5Mono.bdf">Tiny5 Mono (pixel, 9 px steps)</option>
+                  </select>
                 </label>
                 <label>Mode
                   <input id="mode" type="text" placeholder="1920x1080@60" />
@@ -6291,6 +6302,8 @@ HTML = r"""<!doctype html>
       if (modeEl) state.mode = modeEl.value.trim();
       if (rotationEl) state.rotation = readInt("rotation", 0);
       if (fontSizeEl) state.font_size = readInt("fontSize", 18);
+      const terminalFontEl = document.getElementById("terminalFont");
+      if (terminalFontEl) state.font = terminalFontEl.value;
       if (rightFracEl) state.right_frac = readInt("rightFrac", 33);
       if (paneSplitEl) state.pane_split = readInt("paneSplit", 50);
       if (videoFracEl) state.video_frac = readInt("videoFrac", 0);
@@ -6384,6 +6397,14 @@ HTML = r"""<!doctype html>
       if (connectorEl) connectorEl.value = state.connector || "";
       if (rotationEl) rotationEl.value = String(state.rotation || 0);
       if (fontSizeEl) fontSizeEl.value = String(state.font_size || 18);
+      const terminalFontEl = document.getElementById("terminalFont");
+      if (terminalFontEl) {
+        const font = state.font || "";
+        if (![...terminalFontEl.options].some(option => option.value === font)) {
+          terminalFontEl.add(new Option(font, font));
+        }
+        terminalFontEl.value = font;
+      }
       if (rightFracEl) rightFracEl.value = String(state.right_frac || 33);
       if (paneSplitEl) paneSplitEl.value = String(state.pane_split || 50);
       if (videoFracEl) videoFracEl.value = String(state.video_frac || 0);
@@ -7057,7 +7078,7 @@ HTML = r"""<!doctype html>
       scheduleHealthPolling();
     });
     [
-      "mode","connector","rotation","fontSize","rightFrac","paneSplit",
+      "mode","connector","rotation","fontSize","terminalFont","rightFrac","paneSplit",
       "videoFrac","paneCount","layout","roles","fsCycleSec","transitionMs",
       "videoList","extraLines","flagSmooth","flagShuffle","flagAtomic",
       "flagAtomicNonblock","flagGlFinish","showOsd","fullscreenCycle",
